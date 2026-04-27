@@ -14,7 +14,9 @@
  */
 
 const TTL_MS = 23 * 60 * 60 * 1000
-const store = new Map() // sessionId -> { wamid, ts }
+const MAX_PER_SESSION = 25
+// sessionId -> Array<{ wamid, ts }>. Mais recentes no fim.
+const store = new Map()
 
 function isLikelyWamid(id) {
   if (!id) return false
@@ -26,21 +28,41 @@ function isLikelyWamid(id) {
   return s.startsWith('wamid.') || s.startsWith('wamid_')
 }
 
+function pruneExpired(arr) {
+  const cutoff = Date.now() - TTL_MS
+  return arr.filter((e) => e.ts >= cutoff)
+}
+
 export function rememberWamid(sessionId, messageId) {
   if (!sessionId || !isLikelyWamid(messageId)) return false
-  store.set(sessionId, { wamid: String(messageId), ts: Date.now() })
+  const arr = pruneExpired(store.get(sessionId) || [])
+  if (!arr.some((e) => e.wamid === messageId)) {
+    arr.push({ wamid: String(messageId), ts: Date.now() })
+  }
+  while (arr.length > MAX_PER_SESSION) arr.shift()
+  store.set(sessionId, arr)
   return true
 }
 
+/** Wamid mais recente da sessão (compat com versão anterior). */
 export function getWamid(sessionId) {
-  if (!sessionId) return null
-  const entry = store.get(sessionId)
-  if (!entry) return null
-  if (Date.now() - entry.ts > TTL_MS) {
-    store.delete(sessionId)
-    return null
+  const list = getWamids(sessionId)
+  return list.length ? list[list.length - 1] : null
+}
+
+/**
+ * Lista de wamids da sessão, mais recentes primeiro.
+ * A Meta tipicamente só aceita typing+read nos wamids dos últimos minutos;
+ * ter vários permite ciclar e estender o "digitando..." via heartbeat.
+ */
+export function getWamids(sessionId) {
+  if (!sessionId) return []
+  const arr = pruneExpired(store.get(sessionId) || [])
+  if (arr.length !== (store.get(sessionId) || []).length) {
+    if (arr.length === 0) store.delete(sessionId)
+    else store.set(sessionId, arr)
   }
-  return entry.wamid
+  return arr.slice().reverse().map((e) => e.wamid)
 }
 
 export function forgetWamid(sessionId) {

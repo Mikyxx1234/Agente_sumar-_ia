@@ -22,10 +22,11 @@ import { saveConversation } from '../historyStore.js'
 import { getLeadIdByTelefone } from '../dadosClienteStore.js'
 import { seenMessage, withSessionLock } from './concurrency.js'
 import { findLeadByPhone } from '../kommoClient.js'
-import { sendMessageWithNote, sendCloudTypingRead } from '../whatsappSender.js'
+import { sendMessageWithNote } from '../whatsappSender.js'
 import { generateExecutionId, saveExecution } from '../ai/executionTelemetry.js'
 import { fireTyping } from './typingIndicator.js'
-import { rememberWamid, getWamid } from './sessionWamid.js'
+import { rememberWamid, getWamids } from './sessionWamid.js'
+import { startTypingHeartbeat } from '../whatsappTypingHeartbeat.js'
 
 function getBody(req) {
   const body = req.body || {}
@@ -145,19 +146,20 @@ async function flushSessionInner(env, sessionId) {
   const startedAt = new Date().toISOString()
   console.log(`[${executionId}] flush ${sessionId} → "${mensagemCompleta}"`)
 
-  // "Digitando..." começa AQUI, depois do debounce: enquanto a IA pensa
-  // e envia, o cliente vê o indicador. Caminho preferido = Cloud API
-  // (typing + read receipt num único request, dura ~25s ou até a próxima
-  // mensagem chegar). Fallback = Evolution presence (só funciona em
-  // instâncias Baileys; em integrações Cloud API a Evolution rejeita).
-  const wamid = getWamid(sessionId)
-  if (wamid) {
-    sendCloudTypingRead(env, { messageId: wamid })
-      .then((r) => {
-        if (r.ok) console.log(`[${executionId}] typing (cloud) ok p/ ${wamid}`)
-        else if (r.code !== 'WHATSAPP_NOT_CONFIGURED') console.warn(`[${executionId}] typing (cloud) falhou: ${r.error || r.status}`)
-      })
-      .catch((err) => console.warn(`[${executionId}] typing (cloud) exception: ${err.message}`))
+  // "Digitando..." começa AQUI, depois do debounce. Caminho preferido =
+  // Cloud API (read receipt + typing_indicator) com heartbeat: a gente
+  // pinga read+typing a cada ~4s ciclando entre os wamids recentes da
+  // sessão pra manter a animação visível enquanto a IA processa. Quando
+  // o sendMessageWithNote começa, paramos o heartbeat.
+  // Fallback = Evolution presence (só funciona em instâncias Baileys).
+  const wamids = getWamids(sessionId)
+  let typingHb = null
+  if (wamids.length > 0) {
+    typingHb = startTypingHeartbeat(env, wamids, {
+      intervalMs: 4000,
+      maxDurationMs: 90000,
+      log: (line) => console.log(`[${executionId}] ${line}`),
+    })
   } else {
     fireTyping(env, { jid: sessionId, delayMs: 8000 }, executionId)
   }
@@ -194,6 +196,14 @@ async function flushSessionInner(env, sessionId) {
         try { idLead = await getLeadIdByTelefone(env, telefone) } catch {}
       }
 
+      // Para o "digitando..." imediatamente antes do envio: o próprio envio
+      // dispensaria, mas parar antes evita pings desnecessários e race
+      // entre typing e a entrega da primeira parte.
+      if (typingHb) {
+        try { await typingHb.stop() } catch {}
+        typingHb = null
+      }
+
       try {
         sendResult = await sendMessageWithNote(env, {
           telefone,
@@ -228,6 +238,11 @@ async function flushSessionInner(env, sessionId) {
     }
   } catch (err) {
     console.error(`[${executionId}] agent exception:`, err.message)
+  } finally {
+    if (typingHb) {
+      try { await typingHb.stop() } catch {}
+      typingHb = null
+    }
   }
 
   saveExecution(env, {
