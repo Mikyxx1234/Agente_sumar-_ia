@@ -19,6 +19,59 @@
 import { createLeadNote } from './kommoClient.js'
 import { generateExecutionId } from './ai/executionTelemetry.js'
 
+/**
+ * Marca a mensagem do cliente como "lida" e mostra o "digitando..." pro
+ * cliente, em uma única chamada. É o jeito oficial da Cloud API:
+ *
+ *   POST /{phone-number-id}/messages
+ *   {
+ *     messaging_product: "whatsapp",
+ *     status: "read",
+ *     message_id: "<wamid recebido do cliente>",
+ *     typing_indicator: { type: "text" }
+ *   }
+ *
+ * O indicador some sozinho em ~25s ou quando a gente envia a próxima
+ * mensagem pro mesmo wpp — o que vier primeiro. Por isso a gente chama
+ * isso ANTES do runAgent: enquanto a IA pensa + envia, o cliente vê o
+ * "digitando...".
+ *
+ * @returns { ok, status?, code?, error?, data? }
+ */
+export async function sendCloudTypingRead(env, { messageId } = {}) {
+  const cfg = getConfig(env)
+  if (!cfg.phoneNumberId || !cfg.accessToken) {
+    return { ok: false, code: 'WHATSAPP_NOT_CONFIGURED', error: 'Configure WHATSAPP_PHONE_NUMBER_ID e WHATSAPP_ACCESS_TOKEN.' }
+  }
+  if (!messageId) {
+    return { ok: false, code: 'MISSING_MESSAGE_ID', error: 'wamid ausente — Cloud API exige o id da mensagem recebida' }
+  }
+  try {
+    const res = await fetch(`https://graph.facebook.com/${cfg.apiVersion}/${cfg.phoneNumberId}/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${cfg.accessToken}`,
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        status: 'read',
+        message_id: messageId,
+        typing_indicator: { type: 'text' },
+      }),
+    })
+    const raw = await res.text()
+    let data = null
+    try { data = raw ? JSON.parse(raw) : null } catch { data = raw }
+    if (!res.ok) {
+      return { ok: false, status: res.status, code: 'WHATSAPP_TYPING_FAILED', error: typeof raw === 'string' ? raw.slice(0, 400) : '', data }
+    }
+    return { ok: true, status: res.status, data }
+  } catch (e) {
+    return { ok: false, code: 'WHATSAPP_FETCH_FAILED', error: e.message }
+  }
+}
+
 function getConfig(env) {
   const maxChars = Number(env.WHATSAPP_MAX_CHARS)
   const chunkDelay = Number(env.WHATSAPP_CHUNK_DELAY_MS)

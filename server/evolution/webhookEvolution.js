@@ -22,9 +22,10 @@ import { saveConversation } from '../historyStore.js'
 import { getLeadIdByTelefone } from '../dadosClienteStore.js'
 import { seenMessage, withSessionLock } from './concurrency.js'
 import { findLeadByPhone } from '../kommoClient.js'
-import { sendMessageWithNote } from '../whatsappSender.js'
+import { sendMessageWithNote, sendCloudTypingRead } from '../whatsappSender.js'
 import { generateExecutionId, saveExecution } from '../ai/executionTelemetry.js'
 import { fireTyping } from './typingIndicator.js'
+import { rememberWamid, getWamid } from './sessionWamid.js'
 
 function getBody(req) {
   const body = req.body || {}
@@ -144,7 +145,22 @@ async function flushSessionInner(env, sessionId) {
   const startedAt = new Date().toISOString()
   console.log(`[${executionId}] flush ${sessionId} → "${mensagemCompleta}"`)
 
-  fireTyping(env, { jid: sessionId, delayMs: 5000 }, executionId)
+  // "Digitando..." começa AQUI, depois do debounce: enquanto a IA pensa
+  // e envia, o cliente vê o indicador. Caminho preferido = Cloud API
+  // (typing + read receipt num único request, dura ~25s ou até a próxima
+  // mensagem chegar). Fallback = Evolution presence (só funciona em
+  // instâncias Baileys; em integrações Cloud API a Evolution rejeita).
+  const wamid = getWamid(sessionId)
+  if (wamid) {
+    sendCloudTypingRead(env, { messageId: wamid })
+      .then((r) => {
+        if (r.ok) console.log(`[${executionId}] typing (cloud) ok p/ ${wamid}`)
+        else if (r.code !== 'WHATSAPP_NOT_CONFIGURED') console.warn(`[${executionId}] typing (cloud) falhou: ${r.error || r.status}`)
+      })
+      .catch((err) => console.warn(`[${executionId}] typing (cloud) exception: ${err.message}`))
+  } else {
+    fireTyping(env, { jid: sessionId, delayMs: 8000 }, executionId)
+  }
 
   let out = null
   let idLead = null
@@ -298,6 +314,11 @@ export function makeEvolutionWebhookHandler(env) {
       return
     }
 
+    // Guarda o wamid (em modo Cloud API). Vai ser usado no flush pra mostrar
+    // "digitando..." enquanto a IA processa. Em modo Baileys o id não tem
+    // formato wamid e o cache descarta automaticamente.
+    rememberWamid(sessionId, messageId)
+
     res.status(200).json({ ok: true, accepted: true, messageType, sessionId, messageId })
 
     setImmediate(async () => {
@@ -309,7 +330,6 @@ export function makeEvolutionWebhookHandler(env) {
           return
         }
         console.log(`[Evolution] ${messageType} ← ${sessionId} (${pushName}): "${clean.slice(0, 140)}"`)
-        fireTyping(env, { jid: sessionId, delayMs: 4000 }, sessionId)
         await pushMessage(env, sessionId, clean)
         scheduleFlush(sessionId, (sid) => flushSession(env, sid), env)
       } catch (err) {

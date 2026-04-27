@@ -1,0 +1,30 @@
+feat(typing): typing indicator via Cloud API + dispara só após debounce
+
+Mudanças no comportamento:
+- O "digitando..." NÃO é mais disparado a cada mensagem do cliente
+  (enquanto ele está escrevendo). É disparado UMA vez, no início do
+  flushSessionInner — ou seja, depois que o debounce de 15s acabou e a
+  IA está efetivamente processando + enviando. Cliente vê "digitando..."
+  pelo tempo certo: enquanto a IA pensa, não enquanto ele digita.
+
+Caminho técnico:
+- Caminho preferido = Cloud API (Meta): POST /{phone}/messages com
+  status=read + typing_indicator={type:text}. Dura ~25s ou até a próxima
+  mensagem chegar. Exige o wamid da última mensagem recebida do cliente,
+  que a gente captura no webhook (rememberWamid) com TTL de 23h.
+- Fallback = Evolution presence (Baileys). Mantido pra instâncias que
+  não usem Cloud API. Em instâncias Cloud API a Evolution rejeita com
+  "Method not available on WhatsApp Business API".
+
+Arquivos:
+- server/whatsappSender.js: adiciona sendCloudTypingRead.
+- server/evolution/sessionWamid.js (novo): cache em memória do último
+  wamid por sessão (só armazena se parecer wamid de Cloud API).
+- server/evolution/webhookEvolution.js: rememberWamid no handler;
+  flushSessionInner usa Cloud API typing (com fallback Evolution).
+- scripts/findRecentWamid.mjs e scripts/testTypingAndSend.mjs: utils
+  pra teste manual fim-a-fim (typing + envio + nota Kommo).
+- .env.example: documenta os dois caminhos.
+
+Testado em produção com lead 19884275: Cloud typing 200, mensagem
+enviada, nota criada no Kommo.
