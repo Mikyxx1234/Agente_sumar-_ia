@@ -12,6 +12,7 @@ import { withSessionLock } from './server/evolution/concurrency.js'
 import { findLeadByPhone, createLeadNote } from './server/kommoClient.js'
 import { sendMessageWithNote, sendText, splitMessage } from './server/whatsappSender.js'
 import { generateExecutionId, saveExecution } from './server/ai/executionTelemetry.js'
+import { sendTyping } from './server/evolution/typingIndicator.js'
 import { makeEvolutionWebhookHandler } from './server/evolution/webhookEvolution.js'
 import { pingBackend, pushMessage, getMessages, clearMessages } from './server/evolution/messageBuffer.js'
 import { getDebounceMs } from './server/evolution/debouncer.js'
@@ -343,6 +344,23 @@ app.post('/api/whatsapp/split-preview', (req, res) => {
     const n = Number(maxChars || process.env.WHATSAPP_MAX_CHARS || 1000)
     const parts = splitMessage(body, n)
     res.json({ ok: true, total: parts.length, maxChars: n, parts })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// ── Evolution: typing/presence indicator ──
+
+app.post('/api/evolution/typing', async (req, res) => {
+  try {
+    const { jid, telefone, presence, delayMs } = req.body || {}
+    const target = jid || telefone
+    if (!target) {
+      res.status(400).json({ ok: false, error: 'jid (ou telefone) é obrigatório' })
+      return
+    }
+    const out = await sendTyping(process.env, { jid: target, presence, delayMs })
+    res.status(out.ok ? 200 : 500).json(out)
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })
   }

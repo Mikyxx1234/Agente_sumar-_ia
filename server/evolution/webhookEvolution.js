@@ -24,6 +24,7 @@ import { seenMessage, withSessionLock } from './concurrency.js'
 import { findLeadByPhone } from '../kommoClient.js'
 import { sendMessageWithNote } from '../whatsappSender.js'
 import { generateExecutionId, saveExecution } from '../ai/executionTelemetry.js'
+import { fireTyping } from './typingIndicator.js'
 
 function getBody(req) {
   const body = req.body || {}
@@ -142,6 +143,8 @@ async function flushSessionInner(env, sessionId) {
   const executionId = generateExecutionId()
   const startedAt = new Date().toISOString()
   console.log(`[${executionId}] flush ${sessionId} → "${mensagemCompleta}"`)
+
+  fireTyping(env, { jid: sessionId, delayMs: 5000 }, executionId)
 
   let out = null
   let idLead = null
@@ -306,6 +309,7 @@ export function makeEvolutionWebhookHandler(env) {
           return
         }
         console.log(`[Evolution] ${messageType} ← ${sessionId} (${pushName}): "${clean.slice(0, 140)}"`)
+        fireTyping(env, { jid: sessionId, delayMs: 4000 }, sessionId)
         await pushMessage(env, sessionId, clean)
         scheduleFlush(sessionId, (sid) => flushSession(env, sid), env)
       } catch (err) {
