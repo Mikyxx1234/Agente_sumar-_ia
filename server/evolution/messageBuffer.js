@@ -51,7 +51,16 @@ function buildRedisClient(env) {
     lazyConnect: true,
     enableAutoPipelining: true,
     maxRetriesPerRequest: 2,
-    retryStrategy: (times) => Math.min(times * 200, 2000),
+    retryStrategy: (times) => {
+      // Para de tentar reconectar depois de 3 falhas — se o host
+      // está inalcançável (rede Docker errada, etc.), não adianta
+      // ficar batendo. Quem chamar uma operação no buffer vai pegar
+      // erro e o auto-fallback do pickBackend cai pra Supabase.
+      if (times > 3) return null
+      return Math.min(times * 200, 2000)
+    },
+    connectTimeout: 3000,
+    enableOfflineQueue: false,
   }
   if (env.REDIS_URL) return new Redis(env.REDIS_URL, commonOpts)
   return new Redis({
@@ -79,8 +88,15 @@ function makeRedisBackend(env) {
   return {
     label: 'redis',
     async init() {
-      await client.connect()
-      await client.ping()
+      // connectTimeout cobre o connect, mas blindamos com Promise.race
+      // pra garantir que nunca pendure o boot por mais de ~3.5s mesmo
+      // com retry + DNS lento.
+      await Promise.race([
+        (async () => { await client.connect(); await client.ping() })(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Redis init timeout (3500ms)')), 3500),
+        ),
+      ])
     },
     async push(sid, text) {
       const now = Date.now()
