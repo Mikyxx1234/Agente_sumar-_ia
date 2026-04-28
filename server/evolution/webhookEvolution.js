@@ -317,7 +317,15 @@ export function flushSession(env, sessionId, opts = {}) {
 
 export function makeEvolutionWebhookHandler(env) {
   return async function handler(req, res) {
+    // Log de entrada — sempre dispara, mesmo nos casos que cairíamos
+    // num "skipped". É útil pra diferenciar "Evolution não está nos
+    // chamando" de "está chamando mas a gente filtra cedo".
+    const evtName = req.body?.event || req.body?.body?.event || 'unknown'
+    const fromMe = Boolean(req.body?.data?.key?.fromMe ?? req.body?.body?.data?.key?.fromMe)
+    console.log(`[Evolution][hit] event=${evtName} fromMe=${fromMe}`)
+
     if (!authOk(env, req)) {
+      console.warn('[Evolution] auth FAIL — webhook chegou mas X-Webhook-Token/Authorization inválido')
       res.status(401).json({ ok: false, error: 'invalid token' })
       return
     }
@@ -327,10 +335,12 @@ export function makeEvolutionWebhookHandler(env) {
     const pushName = getPushName(payload)
 
     if (!messageType || !sessionId) {
+      console.log(`[Evolution] skip missing_type_or_session (event=${evtName})`)
       res.status(200).json({ ok: true, skipped: 'missing_type_or_session' })
       return
     }
     if (payload?.data?.key?.fromMe) {
+      console.log(`[Evolution] skip fromMe ${sessionId}`)
       res.status(200).json({ ok: true, skipped: 'fromMe' })
       return
     }
