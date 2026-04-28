@@ -92,11 +92,16 @@ export function formatPollDiagLine(leadId) {
   const filtered = `filtradas: tipo=${s.filteredByType} vazias=${s.filteredEmpty} saída=${s.filteredOutbound} outroTel=${s.filteredOtherPhone}`
   let hint = ''
   const types2 = s.typeCounts || {}
+  const onlyCommon =
+    Object.keys(types2).length === 1 && Object.keys(types2)[0] === 'common'
   if (s.notesTotal === 0) {
     hint =
-      ' | dica: lead sem notas; mensagens do WhatsApp via Chats API NÃO viram notas — use mode=amojo + KOMMO_CHANNEL_SECRET/SCOPE_ID/LEAD_CHAT_MAP'
+      ' | dica: lead sem notas; se sua integração WhatsApp vai pelo Chats API, use mode=amojo + KOMMO_CHANNEL_SECRET/SCOPE_ID/LEAD_CHAT_MAP'
+  } else if (s.pushedCount === 0 && s.filteredByType > 0 && onlyCommon) {
+    hint =
+      ' | dica: todas as notas são "common" (WhatsApp deste setup grava mensagens como common). Ative KOMMO_INBOUND_POLL_INCLUDE_COMMON=true e adicione common em KOMMO_INBOUND_POLL_NOTE_TYPES.'
   } else if (s.pushedCount === 0 && s.filteredByType > 0) {
-    hint = ` | dica: notas presentes mas tipo não cobre; veja types acima e ajuste KOMMO_INBOUND_POLL_NOTE_TYPES`
+    hint = ` | dica: notas presentes mas tipo não cobre; ajuste KOMMO_INBOUND_POLL_NOTE_TYPES com os tipos vistos acima.`
   } else if (s.pushedCount === 0 && s.notesTotal > 0 && s.freshCount === 0) {
     hint = ` | nada novo desde lastNoteId=${s.lastNoteId} (há ${ago}s)`
   }

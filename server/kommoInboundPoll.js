@@ -78,6 +78,30 @@ function isOutboundNoteType(noteType) {
   return t === 'sms_out' || t === 'call_out'
 }
 
+/**
+ * Notas que o próprio agente cria têm sufixo ` - EX-YYMMDD-HHMM-NNN` (ver
+ * generateExecutionId + sendMessageWithNote). Não tratar como inbound, senão
+ * a resposta da IA volta como pergunta no próximo tick.
+ */
+const AGENT_OUTBOUND_SUFFIX = /\s-\sEX-\d{6}-\d{4}-\d{3}\s*$/
+
+function isAgentOutboundEcho(text) {
+  return AGENT_OUTBOUND_SUFFIX.test(String(text || ''))
+}
+
+const SUFFIX_PATTERNS = [
+  /-\s+EX-\d{6}-\d{4}-\d{3}\s*$/,
+  /-\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/,
+]
+
+function stripExecutionSuffix(text) {
+  let s = String(text || '')
+  for (const re of SUFFIX_PATTERNS) {
+    s = s.replace(re, '')
+  }
+  return s.trim()
+}
+
 async function resolveChatId(env, leadId) {
   const mapRaw = String(env.KOMMO_LEAD_CHAT_MAP || '').trim()
   if (mapRaw) {
@@ -196,7 +220,18 @@ async function pollNotes(env, leadId, sessionId, contactDigits) {
       maxApplied = Math.max(maxApplied, nid)
       continue
     }
-    const text = extractNoteText(n, env)
+    const rawText = extractNoteText(n, env)
+    if (!rawText) {
+      filteredEmpty += 1
+      maxApplied = Math.max(maxApplied, nid)
+      continue
+    }
+    if (String(n.note_type || '').toLowerCase() === 'common' && isAgentOutboundEcho(rawText)) {
+      filteredOutbound += 1
+      maxApplied = Math.max(maxApplied, nid)
+      continue
+    }
+    const text = stripExecutionSuffix(rawText)
     if (!text) {
       filteredEmpty += 1
       maxApplied = Math.max(maxApplied, nid)
