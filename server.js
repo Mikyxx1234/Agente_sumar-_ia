@@ -437,7 +437,7 @@ app.post('/api/playground/push', async (req, res) => {
       res.status(400).json({ ok: false, error: 'sessionId e message são obrigatórios' })
       return
     }
-    await pushMessage(process.env, sessionId, message)
+    await pushMessage(process.env, sessionId, message, { skipDedupe: true })
     res.json({ ok: true, sessionId })
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })

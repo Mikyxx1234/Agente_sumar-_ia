@@ -27,6 +27,12 @@
  */
 
 import Redis from 'ioredis'
+import {
+  ingestDedupeEnabled,
+  ingestDedupeTtlMs,
+  shouldSkipDuplicateIngest,
+  recordIngestDedupe,
+} from '../ingestDedupe.js'
 
 const DEFAULT_KEY_PREFIX = 'wa:msg:'
 const DEFAULT_LAST_TS_PREFIX = 'wa:msgts:'
@@ -318,10 +324,25 @@ async function getBackend(env) {
 
 // ── API pública ──────────────────────────────────────────────────────────
 
-export async function pushMessage(env, sessionId, text) {
+/**
+ * @param {Record<string,string>} env
+ * @param {string} sessionId
+ * @param {string} text
+ * @param {{ skipDedupe?: boolean }} [opts] — Playground / testes: skipDedupe=true
+ */
+export async function pushMessage(env, sessionId, text, opts = {}) {
   if (!sessionId || !text) return
+  const skipDedupe = opts.skipDedupe === true
+  if (!skipDedupe && ingestDedupeEnabled(env)) {
+    const ttlMs = ingestDedupeTtlMs(env)
+    if (ttlMs > 0 && shouldSkipDuplicateIngest(sessionId, text, ttlMs)) return
+  }
   const backend = await getBackend(env)
   await backend.push(sessionId, text)
+  if (!skipDedupe && ingestDedupeEnabled(env)) {
+    const ttlMs = ingestDedupeTtlMs(env)
+    if (ttlMs > 0) recordIngestDedupe(sessionId, text, ttlMs)
+  }
 }
 
 export async function getMessages(env, sessionId) {
