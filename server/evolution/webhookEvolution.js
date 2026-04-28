@@ -70,6 +70,8 @@ function resolveBufferSessionId(payload) {
     key.remote_jid_alt,
     d.remoteJidAlt,
     d.remote_jid_alt,
+    key.participant,
+    d.participant,
     key.remoteJid,
     d.remoteJid,
     d.sessionId,
@@ -89,7 +91,9 @@ function resolveBufferSessionId(payload) {
 /** Meta Cloud via Evolution: remoteJid do cliente não vem no messages.upsert — usa ponte contacts.* */
 function isCloudBusinessInbound(env, payload, rawBody) {
   const d = payload?.data || payload
-  if (d?.key?.fromMe !== false) return false
+  // Só tratar como "saída" se fromMe for explicitamente true. Se vier undefined,
+  // algumas versões da Evolution omitem o campo e a mensagem seria bufferizada no JID do negócio.
+  if (d?.key?.fromMe === true) return false
   const keyJid = canonicalWhatsAppSessionId(d?.key?.remoteJid)
   if (!keyJid) return false
   const senderJid = canonicalWhatsAppSessionId(rawBody?.sender)
@@ -100,6 +104,18 @@ function isCloudBusinessInbound(env, payload, rawBody) {
     if (c && keyJid === c) return true
   }
   return false
+}
+
+/** Já temos @s.whatsapp.net do lead (participant/remoteJidAlt) → não enfileirar ponte Cloud. */
+function clientSessionAlreadyResolved(sessionId, payload) {
+  const d = payload?.data || payload
+  const remoteKeyJid = canonicalWhatsAppSessionId(d?.key?.remoteJid)
+  return Boolean(
+    sessionId &&
+      remoteKeyJid &&
+      sessionId !== remoteKeyJid &&
+      sessionId.endsWith('@s.whatsapp.net'),
+  )
 }
 
 function inferMessageType(payload) {
@@ -486,7 +502,7 @@ export function makeEvolutionWebhookHandler(env) {
 
     const instance = rawBody.instance
 
-    if (isCloudBusinessInbound(env, payload, rawBody)) {
+    if (isCloudBusinessInbound(env, payload, rawBody) && !clientSessionAlreadyResolved(sessionId, payload)) {
       console.log(
         `[Evolution][cloud] messages.upsert com JID do negócio — aguardando contacts.* p/ gravar no ${instance || '?'}`,
       )
@@ -512,6 +528,12 @@ export function makeEvolutionWebhookHandler(env) {
         })
       }
       return
+    }
+
+    if (isCloudBusinessInbound(env, payload, rawBody) && clientSessionAlreadyResolved(sessionId, payload)) {
+      console.log(
+        `[Evolution][cloud] bridge ignorada — cliente resolvido no payload (${sessionRaw || 'n/a'} → ${sessionId})`,
+      )
     }
 
     if (messageId) rememberWamid(sessionId, messageId)

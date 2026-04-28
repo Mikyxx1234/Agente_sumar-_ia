@@ -31,7 +31,7 @@ function pruneOrphans(arr) {
 
 /** @type {Map<string, number>} epoch ms — instância acabou de receber inbound Cloud aguardando contacts.* */
 const cloudExpectsContactUntil = new Map()
-const CONTACT_WINDOW_MS = 20000
+const CONTACT_WINDOW_MS = 60000
 
 export function markCloudBridgeExpectsContact(instance) {
   if (!instance) return
