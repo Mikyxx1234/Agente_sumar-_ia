@@ -185,3 +185,71 @@ export async function createLeadNote(env, leadId, text) {
   }
   return { ok: true, status: r.status, data: r.data }
 }
+
+/**
+ * Lista notas de um lead (timeline). Usado pelo poll de inbound sem webhook Evolution.
+ *
+ * @returns { ok, notes, status?, error? }
+ */
+export async function listLeadNotes(env, leadId, { limit = 50, order = 'desc' } = {}) {
+  const lid = Number(leadId)
+  if (!Number.isFinite(lid) || lid <= 0) {
+    return { ok: false, code: 'MISSING_LEAD_ID', error: 'leadId inválido', notes: [] }
+  }
+  const lim = Math.min(250, Math.max(1, Number(limit) || 50))
+  const ord = order === 'asc' ? 'asc' : 'desc'
+  const q = `limit=${lim}&order[id]=${ord}`
+  const r = await kommoFetch(env, `/api/v4/leads/${lid}/notes?${q}`)
+  if (!r.ok) {
+    return {
+      ok: false,
+      code: r.code || 'KOMMO_ERROR',
+      status: r.status,
+      error: summarizeError(r),
+      notes: [],
+    }
+  }
+  const notes = r.data?._embedded?.notes || []
+  return { ok: true, notes, status: r.status }
+}
+
+/**
+ * Tenta listar talks vinculados ao lead (para obter chat_id → histórico Amojo).
+ *
+ * @returns { ok, talks: object[], error? }
+ */
+export async function tryListTalksForLead(env, leadId) {
+  const lid = Number(leadId)
+  if (!Number.isFinite(lid) || lid <= 0) {
+    return { ok: false, error: 'leadId inválido', talks: [] }
+  }
+  const attempts = [
+    `/api/v4/talks?limit=20&filter[entity_id][0]=${lid}&filter[entity_type][0]=lead`,
+    `/api/v4/talks?limit=20&filter[entity_id][0]=${lid}`,
+    `/api/v4/talks?limit=20&filter[entity_id]=${lid}`,
+  ]
+  for (const path of attempts) {
+    const r = await kommoFetch(env, path)
+    if (!r.ok) continue
+    const talks = r.data?._embedded?.talks || []
+    if (Array.isArray(talks) && talks.length > 0) return { ok: true, talks }
+  }
+  return { ok: true, talks: [] }
+}
+
+/**
+ * Detalhe de uma conversa (inclui chat_id).
+ *
+ * @returns { ok, talk?, error? }
+ */
+export async function getTalkById(env, talkId) {
+  const tid = Number(talkId)
+  if (!Number.isFinite(tid) || tid <= 0) {
+    return { ok: false, error: 'talkId inválido' }
+  }
+  const r = await kommoFetch(env, `/api/v4/talks/${tid}`)
+  if (!r.ok) {
+    return { ok: false, status: r.status, error: summarizeError(r) }
+  }
+  return { ok: true, talk: r.data }
+}

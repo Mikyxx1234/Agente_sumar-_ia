@@ -26,18 +26,19 @@
  *   KOMMO_SCHEDULER_INTERVAL_SEC=30    intervalo entre ticks
  *   KOMMO_SCHEDULER_DEBOUNCE_SEC=15    silêncio mínimo após última mensagem
  *   KOMMO_SCHEDULER_ENABLED=true       chave geral pra ligar/desligar
- *   KOMMO_AGENT_TEST_LEAD_IDS          (opcional) lista CSV de lead ids p/
- *                                      whitelist em modo teste. Se setado,
- *                                      a IA SÓ responde leads desta lista
- *                                      (e que estejam no funil acima).
- *                                      Ex.: "19884275" ou "19884275,12345".
- */
+ *   KOMMO_INBOUND_POLL_ENABLED=true     opcional: preenche buffer a partir de notas
+ *                                       ou histórico Amojo (sem Evolution webhook).
+ *   KOMMO_INBOUND_POLL_MODE=notes       notes | amojo | both (default notes)
+ *   KOMMO_INBOUND_POLL_NOTE_TYPES=…     tipos de nota considerados inbound
+ *   KOMMO_CHANNEL_SECRET / SCOPE_ID    só p/ mode amojo ou both
+ *   KOMMO_LEAD_CHAT_MAP={"19884275":"uuid-chat"}  opcional — chat_id por lead
 
 import { listLeadsByStatus, bulkGetContactsByIds, extractContactPhone } from './kommoClient.js'
 import { phoneToWhatsAppSessionId } from './phoneWhatsApp.js'
 import { getMessages, getLastTouchedAt } from './evolution/messageBuffer.js'
 import { flushSession } from './evolution/webhookEvolution.js'
 import { formatSchedulerDiagnosticLine } from './evolution/webhookDiagnostics.js'
+import { syncKommoInboundToBuffer, isKommoInboundPollEnabled } from './kommoInboundPoll.js'
 
 const DEFAULT_INTERVAL_SEC = 30
 const DEFAULT_DEBOUNCE_SEC = 15
@@ -149,12 +150,17 @@ export async function runSchedulerTick(env) {
       const sessionId = buildSessionId(phone)
       if (!sessionId) return
 
+      await syncKommoInboundToBuffer(env, { leadId: Number(lead.id), sessionId, phone })
+
       const messages = await getMessages(env, sessionId)
       if (!messages || messages.length === 0) {
         stats.skippedNoMessages += 1
         if (whitelist) {
+          const pollHint = isKommoInboundPollEnabled(env)
+              ? ' (KOMMO_INBOUND_POLL ativo — se continuar vazio, confira tipos de nota no Kommo ou use mode=amojo.)'
+              : ''
           console.log(
-            `[scheduler] buffer vazio session=${sessionId} lead=${lead.id} — confira webhook Evolution e se o telefone no Kommo bate com o JID (55+DDD+número).`,
+            `[scheduler] buffer vazio session=${sessionId} lead=${lead.id} — webhook Evolution, poll Kommo, ou telefone/KOMMO_INBOUND_POLL.${pollHint}`,
           )
           console.log(formatSchedulerDiagnosticLine())
         }
