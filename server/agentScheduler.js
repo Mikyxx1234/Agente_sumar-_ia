@@ -34,6 +34,7 @@
  */
 
 import { listLeadsByStatus, bulkGetContactsByIds, extractContactPhone } from './kommoClient.js'
+import { phoneToWhatsAppSessionId } from './phoneWhatsApp.js'
 import { getMessages, getLastTouchedAt } from './evolution/messageBuffer.js'
 import { flushSession } from './evolution/webhookEvolution.js'
 
@@ -65,9 +66,7 @@ function isEnabled(env) {
 }
 
 function buildSessionId(phone) {
-  const digits = String(phone || '').replace(/[^0-9]/g, '')
-  if (!digits) return null
-  return `${digits}@s.whatsapp.net`
+  return phoneToWhatsAppSessionId(phone)
 }
 
 function getTestLeadWhitelist(env) {
@@ -152,6 +151,11 @@ export async function runSchedulerTick(env) {
       const messages = await getMessages(env, sessionId)
       if (!messages || messages.length === 0) {
         stats.skippedNoMessages += 1
+        if (whitelist) {
+          console.log(
+            `[scheduler] buffer vazio session=${sessionId} lead=${lead.id} — confira webhook Evolution e se o telefone no Kommo bate com o JID (55+DDD+número).`,
+          )
+        }
         return
       }
       const last = await getLastTouchedAt(env, sessionId)

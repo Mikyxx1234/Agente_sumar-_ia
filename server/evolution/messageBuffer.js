@@ -87,6 +87,15 @@ function makeRedisBackend(env) {
 
   return {
     label: 'redis',
+    _client: client,
+    async dispose() {
+      try {
+        client.removeAllListeners()
+        await client.quit()
+      } catch {
+        try { client.disconnect() } catch { /* ignore */ }
+      }
+    },
     async init() {
       // connectTimeout cobre o connect, mas blindamos com Promise.race
       // pra garantir que nunca pendure o boot por mais de ~3.5s mesmo
@@ -272,11 +281,13 @@ async function pickBackend(env) {
   }
 
   if (hasRedisConfig(env)) {
+    const redisBackend = makeRedisBackend(env)
     try {
-      const b = await tryInit(makeRedisBackend(env))
+      const b = await tryInit(redisBackend)
       console.log('[MessageBuffer] backend=redis (auto)')
       return b
     } catch (err) {
+      await redisBackend.dispose?.().catch(() => {})
       console.warn(`[MessageBuffer] Redis indisponível (${err.message}) → tentando Supabase`)
     }
   }
