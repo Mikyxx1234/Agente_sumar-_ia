@@ -32,7 +32,8 @@ import { generateExecutionId, saveExecution } from '../ai/executionTelemetry.js'
 import { fireTyping } from './typingIndicator.js'
 import { rememberWamid, getWamids } from './sessionWamid.js'
 import { startTypingHeartbeat } from '../whatsappTypingHeartbeat.js'
-import { canonicalWhatsAppSessionId } from '../phoneWhatsApp.js'
+import { canonicalWhatsAppSessionId, phoneToWhatsAppSessionId } from '../phoneWhatsApp.js'
+import { enqueueCloudInboundPending, matchContactToPending, markCloudBridgeExpectsContact, shouldBufferOrphanContact, clearCloudBridgeContactWindow, bufferOrphanContact } from './cloudInboundPending.js'
 
 function getBody(req) {
   const body = req.body || {}
@@ -83,6 +84,53 @@ function resolveBufferSessionId(payload) {
     if (c) return c
   }
   return null
+}
+
+/** Meta Cloud via Evolution: remoteJid do cliente não vem no messages.upsert — usa ponte contacts.* */
+function isCloudBusinessInbound(env, payload, rawBody) {
+  const d = payload?.data || payload
+  if (d?.key?.fromMe !== false) return false
+  const keyJid = canonicalWhatsAppSessionId(d?.key?.remoteJid)
+  if (!keyJid) return false
+  const senderJid = canonicalWhatsAppSessionId(rawBody?.sender)
+  if (senderJid && keyJid === senderJid) return true
+  const cfg = String(env.WHATSAPP_BUSINESS_JID || env.EVOLUTION_CLOUD_BUSINESS_JID || '').trim()
+  if (cfg) {
+    const c = canonicalWhatsAppSessionId(cfg)
+    if (c && keyJid === c) return true
+  }
+  return false
+}
+
+function inferMessageType(payload) {
+  const t = getMessageType(payload)
+  if (t) return t
+  const d = payload?.data || payload
+  const m = d?.message || {}
+  if (m.conversation) return 'conversation'
+  if (m.extendedTextMessage) return 'extendedTextMessage'
+  if (m.imageMessage) return 'imageMessage'
+  if (m.videoMessage) return 'videoMessage'
+  if (m.audioMessage) return 'audioMessage'
+  if (m.documentMessage) return 'documentMessage'
+  if (m.stickerMessage) return 'stickerMessage'
+  if (m.buttonsResponseMessage || m.templateButtonReplyMessage || m.listResponseMessage) {
+    return 'buttonsResponseMessage'
+  }
+  if (m.buttonMessage) return 'buttonMessage'
+  if (m.interactiveMessage) return 'interactiveMessage'
+  if (m.locationMessage) return 'locationMessage'
+  if (m.contactMessage || m.contactsArrayMessage) return 'contactMessage'
+  if (m.reactionMessage) return 'reactionMessage'
+  return null
+}
+
+function normalizeContactPhoneToSessionId(phone) {
+  if (phone == null) return null
+  const s = String(phone).trim()
+  if (!s) return null
+  if (s.includes('@')) return canonicalWhatsAppSessionId(s)
+  return phoneToWhatsAppSessionId(s)
 }
 
 function normalizeTelefone(sessionId) {
@@ -346,11 +394,9 @@ export function flushSession(env, sessionId, opts = {}) {
 
 export function makeEvolutionWebhookHandler(env) {
   return async function handler(req, res) {
-    // Log de entrada — sempre dispara, mesmo nos casos que cairíamos
-    // num "skipped". É útil pra diferenciar "Evolution não está nos
-    // chamando" de "está chamando mas a gente filtra cedo".
-    const evtName = req.body?.event || req.body?.body?.event || 'unknown'
-    const fromMe = Boolean(req.body?.data?.key?.fromMe ?? req.body?.body?.data?.key?.fromMe)
+    const rawBody = req.body || {}
+    const evtName = rawBody.event || rawBody.body?.event || 'unknown'
+    const fromMe = Boolean(rawBody?.data?.key?.fromMe ?? rawBody?.body?.data?.key?.fromMe)
     console.log(`[Evolution][hit] event=${evtName} fromMe=${fromMe}`)
 
     if (!authOk(env, req)) {
@@ -358,8 +404,56 @@ export function makeEvolutionWebhookHandler(env) {
       res.status(401).json({ ok: false, error: 'invalid token' })
       return
     }
+
+    // WhatsApp Business (Meta): telefone do lead vem em contacts.* depois do messages.upsert
+    if (evtName === 'contacts.upsert' || evtName === 'contacts.update') {
+      const data = rawBody.data || rawBody.body?.data || {}
+      const instance = rawBody.instance
+      const customerSession = normalizeContactPhoneToSessionId(data.remoteJid)
+      if (!customerSession) {
+        console.log(`[Evolution][contact] skip sem remoteJid instance=${instance}`)
+        res.status(200).json({ ok: true, skipped: 'contact_no_phone' })
+        return
+      }
+      const matched = matchContactToPending(instance, customerSession)
+      if (!matched) {
+        if (shouldBufferOrphanContact(instance)) {
+          bufferOrphanContact(instance, customerSession)
+          console.log(`[Evolution][contact] contato órfão (Cloud) ${customerSession} instance=${instance}`)
+        } else {
+          console.log(
+            `[Evolution][contact] ${evtName} ignorado (sem fila Cloud) instance=${instance}`,
+          )
+        }
+        res.status(200).json({ ok: true, queued: 'contact_no_pending' })
+        return
+      }
+      try {
+        const { pending, sessionId } = matched
+        const text = await extractMessageText(env, pending.payload, pending.messageType)
+        const clean = String(text || '').trim()
+        if (!clean) {
+          console.warn(`[Evolution][contact] extract vazio session=${sessionId} type=${pending.messageType}`)
+        } else {
+          if (pending.messageId) rememberWamid(sessionId, pending.messageId)
+          await pushMessage(env, sessionId, clean)
+          clearCloudBridgeContactWindow(instance)
+          console.log('[Evolution][cloud] buffer', sessionId, String(clean).slice(0, 120), evtName)
+        }
+      } catch (err) {
+        console.error('[Evolution][contact] erro ao bufferizar:', err.message)
+      }
+      res.status(200).json({ ok: true, buffered: true })
+      return
+    }
+
+    if (evtName !== 'messages.upsert') {
+      res.status(200).json({ ok: true, ignored: evtName })
+      return
+    }
+
     const payload = getBody(req)
-    const messageType = getMessageType(payload)
+    const messageType = inferMessageType(payload)
     const sessionRaw = getSessionId(payload)
     const sessionId = resolveBufferSessionId(payload)
     const pushName = getPushName(payload)
@@ -390,11 +484,37 @@ export function makeEvolutionWebhookHandler(env) {
       return
     }
 
-    // Guarda o wamid (em modo Cloud API). Vai ser usado no flush pra mostrar
-    // "digitando..." enquanto a IA processa. Em modo Baileys o id não tem
-    // formato wamid e o cache descarta automaticamente.
-    rememberWamid(sessionId, messageId)
+    const instance = rawBody.instance
 
+    if (isCloudBusinessInbound(env, payload, rawBody)) {
+      console.log(
+        `[Evolution][cloud] messages.upsert com JID do negócio — aguardando contacts.* p/ gravar no ${instance || '?'}`,
+      )
+      res.status(200).json({ ok: true, accepted: true, cloudBridge: true, messageType, messageId })
+      markCloudBridgeExpectsContact(instance)
+      const hit = enqueueCloudInboundPending(instance, { messageId, messageType, payload })
+      if (hit?.mode === 'immediate') {
+        setImmediate(async () => {
+          try {
+            const text = await extractMessageText(env, payload, messageType)
+            const clean = String(text || '').trim()
+            if (!clean) {
+              console.warn(`[Evolution][cloud] sem conteúdo (immediate) ${hit.sessionId}`)
+              return
+            }
+            if (messageId) rememberWamid(hit.sessionId, messageId)
+            await pushMessage(env, hit.sessionId, clean)
+            console.log('[Evolution][cloud] buffer orphan resolved', hit.sessionId, String(clean).slice(0, 120))
+            clearCloudBridgeContactWindow(instance)
+          } catch (err) {
+            console.error('[Evolution][cloud] processing error:', err.message)
+          }
+        })
+      }
+      return
+    }
+
+    if (messageId) rememberWamid(sessionId, messageId)
     res.status(200).json({ ok: true, accepted: true, messageType, sessionId, messageId })
 
     setImmediate(async () => {
@@ -407,9 +527,6 @@ export function makeEvolutionWebhookHandler(env) {
         }
         console.log(`[Evolution] ${messageType} ← ${sessionId} (${pushName}): "${clean.slice(0, 140)}"`)
         await pushMessage(env, sessionId, clean)
-        // O scheduler decide quando processar (poll a cada
-        // KOMMO_SCHEDULER_INTERVAL_SEC). Aqui não chamamos mais Kommo
-        // nem disparamos flush — só bufferizamos.
       } catch (err) {
         console.error('[Evolution] processing error:', err.message)
       }
