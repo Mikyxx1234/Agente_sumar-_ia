@@ -14,6 +14,7 @@ import { sendMessageWithNote, sendText, splitMessage } from './server/whatsappSe
 import { generateExecutionId, saveExecution } from './server/ai/executionTelemetry.js'
 import { sendTyping } from './server/evolution/typingIndicator.js'
 import { makeEvolutionWebhookHandler } from './server/evolution/webhookEvolution.js'
+import { recordWebhookIngress, getWebhookDiagnosticsSnapshot } from './server/evolution/webhookDiagnostics.js'
 import { pingBackend, pushMessage, getMessages, clearMessages } from './server/evolution/messageBuffer.js'
 import { getDebounceMs } from './server/evolution/debouncer.js'
 import { runAgent } from './server/ai/agentRunner.js'
@@ -369,7 +370,15 @@ app.post('/api/evolution/typing', async (req, res) => {
 
 // ── Webhook Evolution (classifica, transcreve, analisa, debounce, chama IA) ──
 
-app.post('/api/evolution/webhook', makeEvolutionWebhookHandler(process.env))
+function evolutionWebhookIngress(req, res, next) {
+  const b = req.body
+  const n = b && typeof b === 'object' && !Array.isArray(b) ? Object.keys(b).length : 0
+  recordWebhookIngress({ bodyKeyCount: n, contentType: req.headers['content-type'] || '' })
+  console.log(`[Evolution][ingress] POST bodyKeys=${n} content-type=${req.headers['content-type'] || ''}`)
+  next()
+}
+
+app.post('/api/evolution/webhook', evolutionWebhookIngress, makeEvolutionWebhookHandler(process.env))
 
 app.get('/api/evolution/health', async (_req, res) => {
   try {
@@ -377,6 +386,7 @@ app.get('/api/evolution/health', async (_req, res) => {
     res.json({
       ok: true,
       buffer: ping,
+      webhookDiagnostics: getWebhookDiagnosticsSnapshot(),
       debounceMs: getDebounceMs(process.env),
       scheduler: {
         running: isSchedulerRunning(),

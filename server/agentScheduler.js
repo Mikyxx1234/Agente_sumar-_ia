@@ -37,6 +37,7 @@ import { listLeadsByStatus, bulkGetContactsByIds, extractContactPhone } from './
 import { phoneToWhatsAppSessionId } from './phoneWhatsApp.js'
 import { getMessages, getLastTouchedAt } from './evolution/messageBuffer.js'
 import { flushSession } from './evolution/webhookEvolution.js'
+import { formatSchedulerDiagnosticLine } from './evolution/webhookDiagnostics.js'
 
 const DEFAULT_INTERVAL_SEC = 30
 const DEFAULT_DEBOUNCE_SEC = 15
@@ -155,6 +156,7 @@ export async function runSchedulerTick(env) {
           console.log(
             `[scheduler] buffer vazio session=${sessionId} lead=${lead.id} — confira webhook Evolution e se o telefone no Kommo bate com o JID (55+DDD+número).`,
           )
+          console.log(formatSchedulerDiagnosticLine())
         }
         return
       }

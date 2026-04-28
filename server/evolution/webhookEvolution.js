@@ -34,6 +34,7 @@ import { rememberWamid, getWamids } from './sessionWamid.js'
 import { startTypingHeartbeat } from '../whatsappTypingHeartbeat.js'
 import { canonicalWhatsAppSessionId, phoneToWhatsAppSessionId } from '../phoneWhatsApp.js'
 import { enqueueCloudInboundPending, matchContactToPending, markCloudBridgeExpectsContact, shouldBufferOrphanContact, clearCloudBridgeContactWindow, bufferOrphanContact } from './cloudInboundPending.js'
+import { recordSyncOutcome, recordBufferWrite, recordAsyncError } from './webhookDiagnostics.js'
 
 function getBody(req) {
   const body = req.body || {}
@@ -413,10 +414,14 @@ export function makeEvolutionWebhookHandler(env) {
     const rawBody = req.body || {}
     const evtName = rawBody.event || rawBody.body?.event || 'unknown'
     const fromMe = Boolean(rawBody?.data?.key?.fromMe ?? rawBody?.body?.data?.key?.fromMe)
-    console.log(`[Evolution][hit] event=${evtName} fromMe=${fromMe}`)
+    const instanceName = rawBody.instance != null ? String(rawBody.instance) : null
+    const sync = (outcome, detail = null) =>
+      recordSyncOutcome({ event: evtName, instance: instanceName, outcome, detail })
+    console.log(`[Evolution][hit] event=${evtName} fromMe=${fromMe} instance=${instanceName || 'n/a'}`)
 
     if (!authOk(env, req)) {
       console.warn('[Evolution] auth FAIL — webhook chegou mas X-Webhook-Token/Authorization inválido')
+      sync('auth_failed', 'X-Webhook-Token ou Bearer inválido versus EVOLUTION_WEBHOOK_TOKEN')
       res.status(401).json({ ok: false, error: 'invalid token' })
       return
     }
@@ -428,6 +433,7 @@ export function makeEvolutionWebhookHandler(env) {
       const customerSession = normalizeContactPhoneToSessionId(data.remoteJid)
       if (!customerSession) {
         console.log(`[Evolution][contact] skip sem remoteJid instance=${instance}`)
+        sync('contact_skip_no_remote_jid', `instance=${instance || 'n/a'}`)
         res.status(200).json({ ok: true, skipped: 'contact_no_phone' })
         return
       }
@@ -436,9 +442,14 @@ export function makeEvolutionWebhookHandler(env) {
         if (shouldBufferOrphanContact(instance)) {
           bufferOrphanContact(instance, customerSession)
           console.log(`[Evolution][contact] contato órfão (Cloud) ${customerSession} instance=${instance}`)
+          sync('contact_orphan_in_window', customerSession)
         } else {
           console.log(
             `[Evolution][contact] ${evtName} ignorado (sem fila Cloud) instance=${instance}`,
+          )
+          sync(
+            'contact_no_pending_cloud_queue',
+            `${customerSession} — ligue CONTACTS_UPSERT/UPDATE e envie msg de novo, ou veja se messages.upsert Cloud foi antes`,
           )
         }
         res.status(200).json({ ok: true, queued: 'contact_no_pending' })
@@ -450,20 +461,25 @@ export function makeEvolutionWebhookHandler(env) {
         const clean = String(text || '').trim()
         if (!clean) {
           console.warn(`[Evolution][contact] extract vazio session=${sessionId} type=${pending.messageType}`)
+          sync('contact_extract_empty', `${sessionId} type=${pending.messageType}`)
         } else {
           if (pending.messageId) rememberWamid(sessionId, pending.messageId)
           await pushMessage(env, sessionId, clean)
+          recordBufferWrite(sessionId)
           clearCloudBridgeContactWindow(instance)
           console.log('[Evolution][cloud] buffer', sessionId, String(clean).slice(0, 120), evtName)
+          sync('contact_matched_buffer_ok', sessionId)
         }
       } catch (err) {
         console.error('[Evolution][contact] erro ao bufferizar:', err.message)
+        sync('contact_buffer_exception', err.message)
       }
       res.status(200).json({ ok: true, buffered: true })
       return
     }
 
     if (evtName !== 'messages.upsert') {
+      sync('ignored_event', evtName)
       res.status(200).json({ ok: true, ignored: evtName })
       return
     }
@@ -476,6 +492,7 @@ export function makeEvolutionWebhookHandler(env) {
 
     if (!messageType || !sessionId) {
       console.log(`[Evolution] skip missing_type_or_session (event=${evtName}) rawJid=${sessionRaw || 'n/a'}`)
+      sync('msg_missing_type_or_session', `type=${messageType || ''} sessionId=${sessionId || ''} rawJid=${sessionRaw || 'n/a'}`)
       res.status(200).json({ ok: true, skipped: 'missing_type_or_session' })
       return
     }
@@ -489,6 +506,7 @@ export function makeEvolutionWebhookHandler(env) {
     }
     if (payload?.data?.key?.fromMe) {
       console.log(`[Evolution] skip fromMe ${sessionId}`)
+      sync('msg_skipped_from_me', sessionId)
       res.status(200).json({ ok: true, skipped: 'fromMe' })
       return
     }
@@ -496,6 +514,7 @@ export function makeEvolutionWebhookHandler(env) {
     const messageId = getMessageId(payload)
     if (seenMessage(messageId)) {
       console.log(`[Evolution] duplicado ignorado (${messageId}) ${sessionId}`)
+      sync('msg_duplicate', String(messageId))
       res.status(200).json({ ok: true, skipped: 'duplicate', messageId })
       return
     }
@@ -505,6 +524,10 @@ export function makeEvolutionWebhookHandler(env) {
     if (isCloudBusinessInbound(env, payload, rawBody) && !clientSessionAlreadyResolved(sessionId, payload)) {
       console.log(
         `[Evolution][cloud] messages.upsert com JID do negócio — aguardando contacts.* p/ gravar no ${instance || '?'}`,
+      )
+      sync(
+        'cloud_bridge_queued_await_contact',
+        `Próximo passo: webhook deve receber contacts.upsert/update com remoteJid do lead. instance=${instance || 'n/a'}`,
       )
       res.status(200).json({ ok: true, accepted: true, cloudBridge: true, messageType, messageId })
       markCloudBridgeExpectsContact(instance)
@@ -516,13 +539,16 @@ export function makeEvolutionWebhookHandler(env) {
             const clean = String(text || '').trim()
             if (!clean) {
               console.warn(`[Evolution][cloud] sem conteúdo (immediate) ${hit.sessionId}`)
+              recordAsyncError('cloud_immediate_empty', hit.sessionId)
               return
             }
             if (messageId) rememberWamid(hit.sessionId, messageId)
             await pushMessage(env, hit.sessionId, clean)
+            recordBufferWrite(hit.sessionId)
             console.log('[Evolution][cloud] buffer orphan resolved', hit.sessionId, String(clean).slice(0, 120))
             clearCloudBridgeContactWindow(instance)
           } catch (err) {
+            recordAsyncError('cloud_immediate', err.message)
             console.error('[Evolution][cloud] processing error:', err.message)
           }
         })
@@ -537,6 +563,7 @@ export function makeEvolutionWebhookHandler(env) {
     }
 
     if (messageId) rememberWamid(sessionId, messageId)
+    sync('msg_buffer_async_scheduled', `vai gravar em ${sessionId} após extrair texto`)
     res.status(200).json({ ok: true, accepted: true, messageType, sessionId, messageId })
 
     setImmediate(async () => {
@@ -545,11 +572,14 @@ export function makeEvolutionWebhookHandler(env) {
         const clean = String(text || '').trim()
         if (!clean) {
           console.warn(`[Evolution] ${messageType} sem conteúdo utilizável (${sessionId})`)
+          recordAsyncError('msg_async_empty', `${messageType} ${sessionId}`)
           return
         }
         console.log(`[Evolution] ${messageType} ← ${sessionId} (${pushName}): "${clean.slice(0, 140)}"`)
         await pushMessage(env, sessionId, clean)
+        recordBufferWrite(sessionId)
       } catch (err) {
+        recordAsyncError('msg_async_buffer', err.message)
         console.error('[Evolution] processing error:', err.message)
       }
     })
