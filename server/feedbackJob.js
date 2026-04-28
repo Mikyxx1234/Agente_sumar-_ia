@@ -4,9 +4,7 @@
 // env esperado:
 //   SUPABASE_URL_FEEDBACK    - URL do Supabase das tabelas de atendimento/feedback
 //   SUPABASE_KEY_FEEDBACK    - secret key (server-side apenas)
-//   GEMINI_API_KEY           - chave da Google AI / Gemini (fallback: GOOGLE_MAPS_API_KEY,
-//                              se a sua key do Google Cloud também tiver a Generative
-//                              Language API habilitada)
+//   GEMINI_API_KEY           - chave da Google AI / Gemini (obrigatório)
 //   GEMINI_MODEL             - default: gemini-2.5-flash
 //   FEEDBACK_JOB_WINDOW_MINUTES (default 90) — janela deslizante até “agora”
 //   FEEDBACK_JOB_EXPECTED_INTERVAL_MINUTES (default 60) — intervalo esperado entre runs com sucesso
@@ -31,7 +29,12 @@ import {
 const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash'
 
 function getAIConfig(env) {
-  const key = env.GEMINI_API_KEY || env.GOOGLE_GENAI_API_KEY || env.GOOGLE_MAPS_API_KEY || ''
+  // SÓ aceita chaves explicitamente dedicadas ao Gemini. Antes a gente
+  // caía pra GOOGLE_MAPS_API_KEY como conveniência, mas isso mascarou
+  // setups onde o usuário esquecia de configurar GEMINI_API_KEY e o
+  // job tentava usar a chave do Maps (que normalmente não tem a
+  // Generative Language API habilitada → 403).
+  const key = env.GEMINI_API_KEY || env.GOOGLE_GENAI_API_KEY || ''
   const model = env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
   return { key, model }
 }
@@ -1003,7 +1006,7 @@ Retorne somente JSON válido:
  */
 async function callGemini(env, base) {
   const { key, model } = getAIConfig(env)
-  if (!key) throw new Error('GEMINI_API_KEY (ou GOOGLE_MAPS_API_KEY com Generative Language habilitado) não configurado')
+  if (!key) throw new Error('GEMINI_API_KEY não configurado (pegue uma chave em https://aistudio.google.com/apikey)')
 
   const prompt = buildPrompt(base)
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`
@@ -1139,7 +1142,7 @@ export async function runFeedbackJob(env, trigger = 'cron') {
   }
   const { key: aiKey, model: aiModel } = getAIConfig(env)
   if (!aiKey) {
-    throw new Error('GEMINI_API_KEY (ou GOOGLE_MAPS_API_KEY com Generative Language habilitado) não configurado')
+    throw new Error('GEMINI_API_KEY não configurado (pegue uma chave em https://aistudio.google.com/apikey)')
   }
 
   const sb = makeSupabaseClient(SUPABASE_URL_FEEDBACK, SUPABASE_KEY_FEEDBACK)
