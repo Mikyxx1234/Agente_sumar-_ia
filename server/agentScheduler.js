@@ -32,6 +32,8 @@
  *   KOMMO_INBOUND_POLL_NOTE_TYPES=…     tipos de nota considerados inbound
  *   KOMMO_CHANNEL_SECRET / SCOPE_ID    só p/ mode amojo ou both
  *   KOMMO_LEAD_CHAT_MAP={"19884275":"uuid-chat"}  opcional — chat_id por lead
+ *   KOMMO_AGENT_TEST_LEAD_IDS          (opcional) whitelist CSV de lead ids em teste
+ */
 
 import { listLeadsByStatus, bulkGetContactsByIds, extractContactPhone } from './kommoClient.js'
 import { phoneToWhatsAppSessionId } from './phoneWhatsApp.js'
