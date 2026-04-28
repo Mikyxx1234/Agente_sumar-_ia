@@ -1,4 +1,4 @@
-// Smoke test do Gemini para o feedback job.
+// Smoke test opcional da API Gemini (o job de feedback comercial voltou a usar OpenAI).
 // Uso (PowerShell):
 //   $env:GEMINI_API_KEY='...'; node scripts/testGemini.mjs
 

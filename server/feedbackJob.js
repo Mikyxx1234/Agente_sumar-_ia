@@ -4,17 +4,14 @@
 // env esperado:
 //   SUPABASE_URL_FEEDBACK    - URL do Supabase das tabelas de atendimento/feedback
 //   SUPABASE_KEY_FEEDBACK    - secret key (server-side apenas)
-//   GEMINI_API_KEY           - chave da Google AI / Gemini (obrigatório)
-//   GEMINI_MODEL             - default: gemini-2.5-flash
+//   OPENAI_API_KEY           - obrigatório para este job (ou VITE_OPENAI_API_KEY em dev)
+//   FEEDBACK_JOB_OPENAI_MODEL — opcional, default gpt-4o-mini
 //   FEEDBACK_JOB_WINDOW_MINUTES (default 90) — janela deslizante até “agora”
+//   Mensagens na janela: sent_at >= since OU (sent_at nulo E created_at >= since), sempre com contact_id ou lead_id.
 //   FEEDBACK_JOB_EXPECTED_INTERVAL_MINUTES (default 60) — intervalo esperado entre runs com sucesso
 //   FEEDBACK_JOB_MAX_LOOKBACK_EXTENSION_MINUTES (default 120) — amplia lookback se run atrasou / faltou
 //   FEEDBACK_JOB_USE_HOUR_SLOT_LOCK (default true) — 1 execução cron/catchup por hora UTC (id FB-HOURUTC-…)
 //   FEEDBACK_JOB_STARTUP_CATCHUP — ver feedbackJobRunner.js (default desligado)
-//
-// Por que Gemini aqui? A OpenAI é usada em N cenários (agente, Whisper,
-// Vision, embeddings) e o feedback é o maior consumidor batch. Tirando ele
-// da OpenAI, evitamos 429 nos cenários reativos (agente/voz/imagem).
 
 import {
   normalizeConsultor, parseDate, toIso, numericOrNull, average, maxOrNull,
@@ -26,16 +23,38 @@ import {
   makeCronHourSlotExecId,
 } from './feedbackHelpers.js'
 
-const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash'
+const DEFAULT_FEEDBACK_OPENAI_MODEL = 'gpt-4o-mini'
+
+/** Janela temporal na busca: sent_at >= since OU (sent_at nulo E created_at >= since). Inclui linhas antigas só com created_at. */
+function buildMensagensWindowAndEntityFilter(sinceIso) {
+  const enc = encodeURIComponent(sinceIso)
+  return (
+    'and=(' +
+    'or(contact_id.not.is.null,lead_id.not.is.null),' +
+    `or(sent_at.gte.${enc},and(sent_at.is.null,created_at.gte.${enc}))` +
+    ')'
+  )
+}
+
+function formatInstantBrasilia(iso) {
+  try {
+    const d = new Date(iso)
+    return d.toLocaleString('pt-BR', {
+      timeZone: 'America/Sao_Paulo',
+      dateStyle: 'short',
+      timeStyle: 'medium',
+    })
+  } catch {
+    return iso
+  }
+}
 
 function getAIConfig(env) {
-  // SÓ aceita chaves explicitamente dedicadas ao Gemini. Antes a gente
-  // caía pra GOOGLE_MAPS_API_KEY como conveniência, mas isso mascarou
-  // setups onde o usuário esquecia de configurar GEMINI_API_KEY e o
-  // job tentava usar a chave do Maps (que normalmente não tem a
-  // Generative Language API habilitada → 403).
-  const key = env.GEMINI_API_KEY || env.GOOGLE_GENAI_API_KEY || ''
-  const model = env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
+  const key = env.OPENAI_API_KEY || env.VITE_OPENAI_API_KEY || ''
+  const model =
+    env.FEEDBACK_JOB_OPENAI_MODEL ||
+    env.OPENAI_FEEDBACK_MODEL ||
+    DEFAULT_FEEDBACK_OPENAI_MODEL
   return { key, model }
 }
 
@@ -100,10 +119,10 @@ export async function getFeedbackJobPreview(env) {
   let pendingCount = null
   try {
     // Count-only via header Prefer: count=exact (usa HEAD pra não baixar rows)
+    const filter = buildMensagensWindowAndEntityFilter(windowInfo.sinceIso)
     const res = await fetch(
       `${SUPABASE_URL_FEEDBACK}/rest/v1/mensagens_atendimento_comercial` +
-      `?select=id&sent_at=gte.${encodeURIComponent(windowInfo.sinceIso)}` +
-      `&or=(contact_id.not.is.null,lead_id.not.is.null)`,
+      `?select=id&${filter}`,
       {
         method: 'HEAD',
         headers: {
@@ -157,8 +176,7 @@ async function fetchRecentMessages(sb, sinceIso) {
   while (offset < HARD_CAP) {
     const query = [
       'select=*',
-      `sent_at=gte.${sinceIso}`,
-      'or=(contact_id.not.is.null,lead_id.not.is.null)',
+      buildMensagensWindowAndEntityFilter(sinceIso),
       'order=sent_at.asc.nullslast,created_at.asc.nullslast,id.asc',
       `limit=${PAGE_SIZE}`,
       `offset=${offset}`,
@@ -937,7 +955,7 @@ async function computeCommercialRules(sb, base) {
   }
 }
 
-/* ───────────── Step 7: Chamar Gemini ───────────── */
+/* ───────────── Step 7: Chamar OpenAI ───────────── */
 
 function buildPrompt(base) {
   return `Você avalia a qualidade de um atendimento comercial humano via WhatsApp.
@@ -998,61 +1016,67 @@ Retorne somente JSON válido:
 }
 
 /**
- * Chama a Gemini API (Generative Language) e retorna { content, usage }.
- * Normaliza o usage pra compatibilidade com o schema antigo da OpenAI
- * (prompt_tokens / completion_tokens / total_tokens).
- *
- * Faz 1 retry curto em 429/5xx pra absorver o rate-limit do free tier.
+ * Chat Completions (JSON) — avaliação do feedback comercial.
+ * Retry curto em 429 / 5xx.
  */
-async function callGemini(env, base) {
+async function callOpenAIFeedback(env, base) {
   const { key, model } = getAIConfig(env)
-  if (!key) throw new Error('GEMINI_API_KEY não configurado (pegue uma chave em https://aistudio.google.com/apikey)')
+  if (!key) {
+    throw new Error(
+      'OPENAI_API_KEY não configurada (necessária para o job de feedback comercial)',
+    )
+  }
 
   const prompt = buildPrompt(base)
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`
+  const url = 'https://api.openai.com/v1/chat/completions'
   const body = {
-    contents: [{ parts: [{ text: prompt }] }],
-    generationConfig: {
-      temperature: 0.3,
-      maxOutputTokens: 1500,
-      responseMimeType: 'application/json',
-      // Gemini 2.5 vem com "thinking" ligado por default, que consome
-      // tokens do orçamento sem aparecer no output. Pra avaliação de
-      // atendimento (regra + texto direto) thinking é desperdício e
-      // ainda corre o risco de truncar a resposta. Zero desliga.
-      thinkingConfig: { thinkingBudget: 0 },
-    },
+    model,
+    temperature: 0.3,
+    max_tokens: 1500,
+    response_format: { type: 'json_object' },
+    messages: [
+      {
+        role: 'system',
+        content:
+          'Você é um avaliador de atendimento. Responda somente com um único objeto JSON válido, sem texto fora do JSON.',
+      },
+      { role: 'user', content: prompt },
+    ],
   }
 
   let lastErr = null
   for (let attempt = 0; attempt < 2; attempt++) {
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${key}`,
+      },
       body: JSON.stringify(body),
     })
     if (res.ok) {
       const data = await res.json()
-      const parts = data?.candidates?.[0]?.content?.parts || []
-      const content = parts.map((p) => p?.text || '').join('').trim()
-      const um = data?.usageMetadata || {}
+      const content = String(data?.choices?.[0]?.message?.content || '').trim()
+      const u = data?.usage || {}
       const usage = {
-        prompt_tokens: Number(um.promptTokenCount || 0),
-        completion_tokens: Number(um.candidatesTokenCount || 0),
-        total_tokens: Number(um.totalTokenCount || ((um.promptTokenCount || 0) + (um.candidatesTokenCount || 0))),
+        prompt_tokens: Number(u.prompt_tokens || 0),
+        completion_tokens: Number(u.completion_tokens || 0),
+        total_tokens: Number(
+          u.total_tokens || (u.prompt_tokens || 0) + (u.completion_tokens || 0),
+        ),
       }
       return { content, usage }
     }
     const errText = await res.text().catch(() => '')
-    lastErr = new Error(`Gemini ${res.status}: ${errText.slice(0, 300)}`)
-    // Retry só em 429 / 5xx
     if (res.status === 429 || res.status >= 500) {
+      lastErr = new Error(`OpenAI ${res.status}: ${errText.slice(0, 400)}`)
       await new Promise((r) => setTimeout(r, 1500 + attempt * 2000))
       continue
     }
+    lastErr = new Error(`OpenAI ${res.status}: ${errText.slice(0, 400)}`)
     break
   }
-  throw lastErr || new Error('Gemini: erro desconhecido')
+  throw lastErr || new Error('OpenAI: erro desconhecido')
 }
 
 function parseAIJson(text) {
@@ -1142,7 +1166,9 @@ export async function runFeedbackJob(env, trigger = 'cron') {
   }
   const { key: aiKey, model: aiModel } = getAIConfig(env)
   if (!aiKey) {
-    throw new Error('GEMINI_API_KEY não configurado (pegue uma chave em https://aistudio.google.com/apikey)')
+    throw new Error(
+      'OPENAI_API_KEY não configurada (necessária para o job de feedback comercial)',
+    )
   }
 
   const sb = makeSupabaseClient(SUPABASE_URL_FEEDBACK, SUPABASE_KEY_FEEDBACK)
@@ -1207,17 +1233,29 @@ export async function runFeedbackJob(env, trigger = 'cron') {
   let totalTokens = 0
   let errorMessage = null
   let status = 'success'
+  let segmentErrorCount = 0
 
   try {
     addStep('fetch_messages', {
       window_minutes: windowInfo.window_minutes,
       since: windowInfo.sinceIso,
+      since_sp: formatInstantBrasilia(windowInfo.sinceIso),
+      until: windowInfo.untilIso,
+      until_sp: formatInstantBrasilia(windowInfo.untilIso),
       based_on: windowInfo.based_on,
       extra_minutes_over_hour: windowInfo.extra_minutes_over_hour,
     })
     const rawRows = await fetchRecentMessages(sb, windowInfo.sinceIso)
     totalMessagesFetched = rawRows.length
     addStep('fetch_messages_done', { count: totalMessagesFetched })
+    if (totalMessagesFetched === 0) {
+      console.warn(
+        '[FeedbackJob] 0 mensagens na janela. Intervalo (UTC): ' +
+        `${windowInfo.sinceIso} → ${windowInfo.untilIso} | ` +
+        `(America/Sao_Paulo: ${formatInstantBrasilia(windowInfo.sinceIso)} → ${formatInstantBrasilia(windowInfo.untilIso)}). ` +
+        'Incluímos linhas com sent_at vazio se created_at cair na janela. Verifique contact_id/lead_id.',
+      )
+    }
 
     const segments = groupIntoSegments(rawRows)
     totalSegments = segments.length
@@ -1241,7 +1279,7 @@ export async function runFeedbackJob(env, trigger = 'cron') {
         base = await computeCommercialRules(sb, base)
 
         aiCalls++
-        const { content, usage } = await callGemini(env, base)
+        const { content, usage } = await callOpenAIFeedback(env, base)
         if (usage) {
           promptTokens += usage.prompt_tokens || 0
           completionTokens += usage.completion_tokens || 0
@@ -1264,12 +1302,24 @@ export async function runFeedbackJob(env, trigger = 'cron') {
           nota: base.nota_avaliacao,
         })
       } catch (e) {
+        segmentErrorCount++
         addStep('segment_error', { segment: segLabel, error: e.message })
         console.error(`[FeedbackJob] Erro no segmento ${segLabel}:`, e.message)
       }
     }
 
     addStep('done', {})
+    if (
+      status === 'success' &&
+      segmentErrorCount > 0 &&
+      feedbacksInserted === 0 &&
+      feedbacksUpdated === 0 &&
+      pendentesSaved === 0
+    ) {
+      status = 'error'
+      errorMessage =
+        'Nenhum feedback gravado: todos os segmentos falharam (confira erros da OpenAI nos logs e em segment_error).'
+    }
   } catch (e) {
     status = 'error'
     errorMessage = e.message

@@ -15,7 +15,7 @@ const TOKEN_COSTS_USD_PER_1M = {
   'gpt-4.1':          { input: 2.00, output: 8.00 },
   'gpt-4o':           { input: 2.50, output: 10.00 },
 }
-const DEFAULT_MODEL = 'gemini-2.5-flash'
+const DEFAULT_MODEL = 'gpt-4o-mini'
 const USD_TO_BRL = 5.70
 
 function calcRunCostBRL(run) {

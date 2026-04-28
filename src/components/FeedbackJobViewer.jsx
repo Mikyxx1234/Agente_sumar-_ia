@@ -113,6 +113,7 @@ function RunDetail({ run, onCopy }) {
 
   const steps = Array.isArray(run.steps) ? run.steps : []
   const fetchStep = steps.find((s) => s.type === 'fetch_messages_done')
+  const fetchWindowStep = steps.find((s) => s.type === 'fetch_messages')
   const groupStep = steps.find((s) => s.type === 'group_segments')
   const segmentFeedbackSteps = steps.filter((s) => s.type === 'segment_feedback')
   const segmentPendenteSteps = steps.filter((s) => s.type === 'segment_pendente')
@@ -158,7 +159,13 @@ function RunDetail({ run, onCopy }) {
 
         <FlowStep icon={MessageSquare} iconKind="info" title={`Buscou ${run.total_messages_fetched || 0} mensagens da janela`}>
           <div className="flow-content-text">
-            Query em <code>mensagens_atendimento_comercial</code> para a janela configurada.
+            Query em <code>mensagens_atendimento_comercial</code>: mensagens com <code>sent_at</code> na janela ou <code>sent_at</code> vazio e <code>created_at</code> na janela; exige <code>contact_id</code> ou <code>lead_id</code>.
+            {fetchWindowStep?.since_sp && fetchWindowStep?.until_sp && (
+              <>
+                <br />
+                <strong>Janela (America/São Paulo):</strong> {fetchWindowStep.since_sp} → {fetchWindowStep.until_sp}
+              </>
+            )}
             {fetchStep && <><br />Rows retornadas: {fetchStep.count}</>}
           </div>
         </FlowStep>
