@@ -1,21 +1,26 @@
 /**
- * Webhook Evolution API — equivalente ao fluxo "Reddis IA.txt" do n8n.
+ * Webhook Evolution API — só BUFFERIZA mensagens.
  *
- * 1) Classifica o messageType (extendedTextMessage, conversation, audioMessage,
- *    imageMessage, buttonMessage).
- * 2) Áudio  → transcrição (Whisper).
- * 3) Imagem → análise (gpt-4o-mini Vision). Se tiver caption, concatena.
- * 4) Botão  → usa o texto do botão.
- * 5) Empurra a string resultante no buffer Redis (chave = telefone/JID).
- * 6) Reagenda debounce (default 20s). Quando o tempo acaba sem novidades,
- *    lê a lista, junta com ", ", limpa o Redis e chama o runAgent.
+ * Quem decide se / quando responder é o agentScheduler, que roda em loop
+ * (default 30s) listando os leads no funil/status configurados e
+ * processando o buffer dos que estão dentro.
  *
- * Respostas reais para o lead (Evolution /message/sendText) ficam fora desse
- * módulo — você liga depois. Aqui a gente só loga + retorna a reply.
+ * Aqui a gente:
+ *   1) Classifica messageType.
+ *   2) Dedup por message.key.id (TTL em memória).
+ *   3) Áudio  → transcrição (Whisper).
+ *      Imagem → análise (gpt-4o-mini Vision). Botão → texto do botão.
+ *   4) Lembra o wamid (Cloud API) pra o "digitando..." conseguir usar.
+ *   5) Empurra no buffer (TTL automático no Redis).
+ *
+ * NÃO chama Kommo, NÃO dispara IA, NÃO agenda flush. Tudo isso é
+ * responsabilidade do agentScheduler.
+ *
+ * Mantemos `flushSession` exportado pq o playground (área de teste) usa
+ * o fluxo direto sem passar pelo scheduler.
  */
 
 import { pushMessage, getMessages, clearMessages } from './messageBuffer.js'
-import { scheduleFlush } from './debouncer.js'
 import { transcribeAudioBase64, analyzeImageBase64 } from './openaiMedia.js'
 import { runAgent } from '../ai/agentRunner.js'
 import { saveConversation } from '../historyStore.js'
@@ -133,7 +138,7 @@ async function extractMessageText(env, payload, messageType) {
   }
 }
 
-async function flushSessionInner(env, sessionId) {
+async function flushSessionInner(env, sessionId, opts = {}) {
   const itens = await getMessages(env, sessionId)
   if (!itens.length) {
     console.log(`[Evolution][flush] ${sessionId} sem mensagens pendentes`)
@@ -142,8 +147,9 @@ async function flushSessionInner(env, sessionId) {
   await clearMessages(env, sessionId)
   const mensagemCompleta = itens.join(', ')
   const telefone = normalizeTelefone(sessionId)
-  const executionId = generateExecutionId()
+  const executionId = opts.executionId || generateExecutionId()
   const startedAt = new Date().toISOString()
+  const leadIdHint = opts.leadIdHint != null ? Number(opts.leadIdHint) : null
   console.log(`[${executionId}] flush ${sessionId} → "${mensagemCompleta}"`)
 
   // "Digitando..." começa AQUI, depois do debounce. Caminho preferido =
@@ -179,18 +185,25 @@ async function flushSessionInner(env, sessionId) {
     }
 
     if (out?.ok && out.reply) {
-      try {
-        const lookup = await findLeadByPhone(env, telefone)
-        if (lookup.ok && lookup.lead) {
-          idLead = lookup.lead.id
-          console.log(`[${executionId}] kommo lead ${idLead} encontrado p/ ${telefone}`)
-        } else if (!lookup.ok) {
-          console.warn(`[${executionId}] kommo falha: ${lookup.error || lookup.status}`)
-        } else {
-          console.log(`[${executionId}] kommo nenhum lead p/ ${telefone}`)
+      // 1ª prioridade: leadId vindo do scheduler (já achou no Kommo p/
+      // listar quem tá no funil). Evita chamar findLeadByPhone de novo.
+      if (Number.isFinite(leadIdHint) && leadIdHint > 0) {
+        idLead = leadIdHint
+        console.log(`[${executionId}] kommo lead ${idLead} (hint do scheduler) p/ ${telefone}`)
+      } else {
+        try {
+          const lookup = await findLeadByPhone(env, telefone)
+          if (lookup.ok && lookup.lead) {
+            idLead = lookup.lead.id
+            console.log(`[${executionId}] kommo lead ${idLead} encontrado p/ ${telefone}`)
+          } else if (!lookup.ok) {
+            console.warn(`[${executionId}] kommo falha: ${lookup.error || lookup.status}`)
+          } else {
+            console.log(`[${executionId}] kommo nenhum lead p/ ${telefone}`)
+          }
+        } catch (err) {
+          console.error(`[${executionId}] kommo exception:`, err.message)
         }
-      } catch (err) {
-        console.error(`[${executionId}] kommo exception:`, err.message)
       }
       if (idLead == null) {
         try { idLead = await getLeadIdByTelefone(env, telefone) } catch {}
@@ -298,8 +311,8 @@ function buildSteps({ sendResult, histResult, idLead }) {
   return steps
 }
 
-function flushSession(env, sessionId) {
-  return withSessionLock(sessionId, () => flushSessionInner(env, sessionId))
+export function flushSession(env, sessionId, opts = {}) {
+  return withSessionLock(sessionId, () => flushSessionInner(env, sessionId, opts))
 }
 
 export function makeEvolutionWebhookHandler(env) {
@@ -346,7 +359,9 @@ export function makeEvolutionWebhookHandler(env) {
         }
         console.log(`[Evolution] ${messageType} ← ${sessionId} (${pushName}): "${clean.slice(0, 140)}"`)
         await pushMessage(env, sessionId, clean)
-        scheduleFlush(sessionId, (sid) => flushSession(env, sid), env)
+        // O scheduler decide quando processar (poll a cada
+        // KOMMO_SCHEDULER_INTERVAL_SEC). Aqui não chamamos mais Kommo
+        // nem disparamos flush — só bufferizamos.
       } catch (err) {
         console.error('[Evolution] processing error:', err.message)
       }

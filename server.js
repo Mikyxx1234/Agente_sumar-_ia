@@ -17,6 +17,7 @@ import { makeEvolutionWebhookHandler } from './server/evolution/webhookEvolution
 import { pingBackend, pushMessage, getMessages, clearMessages } from './server/evolution/messageBuffer.js'
 import { getDebounceMs } from './server/evolution/debouncer.js'
 import { runAgent } from './server/ai/agentRunner.js'
+import { startAgentScheduler, runSchedulerTick, isSchedulerRunning } from './server/agentScheduler.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -377,7 +378,24 @@ app.get('/api/evolution/health', async (_req, res) => {
       ok: true,
       buffer: ping,
       debounceMs: getDebounceMs(process.env),
+      scheduler: {
+        running: isSchedulerRunning(),
+        intervalSec: Number(process.env.KOMMO_SCHEDULER_INTERVAL_SEC) || 30,
+        debounceSec: Number(process.env.KOMMO_SCHEDULER_DEBOUNCE_SEC) || 15,
+        pipelineId: process.env.KOMMO_AGENT_PIPELINE_ID || null,
+        statusId: process.env.KOMMO_AGENT_STATUS_ID || null,
+      },
     })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// Dispara um tick do scheduler imediatamente (útil para teste).
+app.post('/api/scheduler/tick', async (_req, res) => {
+  try {
+    const stats = await runSchedulerTick(process.env)
+    res.json({ ok: true, stats })
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })
   }
@@ -505,6 +523,11 @@ app.listen(PORT, () => {
     if (poloHost) poloHostLabel = new URL(poloHost).host
   } catch { /* ignore */ }
   console.log(`[Server] Polos: table=${poloTable} host=${poloHostLabel}`)
+
+  const sched = startAgentScheduler(process.env)
+  if (!sched.started) {
+    console.log(`[Server] Agent scheduler: ${sched.reason}`)
+  }
 }).on('error', (err) => {
   console.error('[Server] Listen error:', err.message)
 })

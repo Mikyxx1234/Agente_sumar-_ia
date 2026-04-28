@@ -4,12 +4,19 @@
 // env esperado:
 //   SUPABASE_URL_FEEDBACK    - URL do Supabase das tabelas de atendimento/feedback
 //   SUPABASE_KEY_FEEDBACK    - secret key (server-side apenas)
-//   OPENAI_API_KEY           - para chamar gpt-4.1-mini
+//   GEMINI_API_KEY           - chave da Google AI / Gemini (fallback: GOOGLE_MAPS_API_KEY,
+//                              se a sua key do Google Cloud também tiver a Generative
+//                              Language API habilitada)
+//   GEMINI_MODEL             - default: gemini-2.5-flash
 //   FEEDBACK_JOB_WINDOW_MINUTES (default 90) — janela deslizante até “agora”
 //   FEEDBACK_JOB_EXPECTED_INTERVAL_MINUTES (default 60) — intervalo esperado entre runs com sucesso
 //   FEEDBACK_JOB_MAX_LOOKBACK_EXTENSION_MINUTES (default 120) — amplia lookback se run atrasou / faltou
 //   FEEDBACK_JOB_USE_HOUR_SLOT_LOCK (default true) — 1 execução cron/catchup por hora UTC (id FB-HOURUTC-…)
 //   FEEDBACK_JOB_STARTUP_CATCHUP — ver feedbackJobRunner.js (default desligado)
+//
+// Por que Gemini aqui? A OpenAI é usada em N cenários (agente, Whisper,
+// Vision, embeddings) e o feedback é o maior consumidor batch. Tirando ele
+// da OpenAI, evitamos 429 nos cenários reativos (agente/voz/imagem).
 
 import {
   normalizeConsultor, parseDate, toIso, numericOrNull, average, maxOrNull,
@@ -21,7 +28,13 @@ import {
   makeCronHourSlotExecId,
 } from './feedbackHelpers.js'
 
-const OPENAI_MODEL = 'gpt-4.1-mini'
+const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash'
+
+function getAIConfig(env) {
+  const key = env.GEMINI_API_KEY || env.GOOGLE_GENAI_API_KEY || env.GOOGLE_MAPS_API_KEY || ''
+  const model = env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL
+  return { key, model }
+}
 
 /* ───────────── Supabase REST wrapper ───────────── */
 
@@ -921,10 +934,10 @@ async function computeCommercialRules(sb, base) {
   }
 }
 
-/* ───────────── Step 7: Chamar OpenAI ───────────── */
+/* ───────────── Step 7: Chamar Gemini ───────────── */
 
-async function callOpenAI(openaiKey, base) {
-  const prompt = `Você avalia a qualidade de um atendimento comercial humano via WhatsApp.
+function buildPrompt(base) {
+  return `Você avalia a qualidade de um atendimento comercial humano via WhatsApp.
 
 Consultor: ${base.consultor}
 
@@ -979,24 +992,64 @@ Retorne somente JSON válido:
   "ponto_positivo": "texto curto",
   "ponto_negativo": "texto curto"
 }`
+}
 
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openaiKey}` },
-    body: JSON.stringify({
-      model: OPENAI_MODEL,
-      messages: [{ role: 'user', content: prompt }],
+/**
+ * Chama a Gemini API (Generative Language) e retorna { content, usage }.
+ * Normaliza o usage pra compatibilidade com o schema antigo da OpenAI
+ * (prompt_tokens / completion_tokens / total_tokens).
+ *
+ * Faz 1 retry curto em 429/5xx pra absorver o rate-limit do free tier.
+ */
+async function callGemini(env, base) {
+  const { key, model } = getAIConfig(env)
+  if (!key) throw new Error('GEMINI_API_KEY (ou GOOGLE_MAPS_API_KEY com Generative Language habilitado) não configurado')
+
+  const prompt = buildPrompt(base)
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`
+  const body = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
       temperature: 0.3,
-      max_tokens: 1500,
-    }),
-  })
-  if (!res.ok) {
-    const err = await res.text().catch(() => '')
-    throw new Error(`OpenAI ${res.status}: ${err.slice(0, 200)}`)
+      maxOutputTokens: 1500,
+      responseMimeType: 'application/json',
+      // Gemini 2.5 vem com "thinking" ligado por default, que consome
+      // tokens do orçamento sem aparecer no output. Pra avaliação de
+      // atendimento (regra + texto direto) thinking é desperdício e
+      // ainda corre o risco de truncar a resposta. Zero desliga.
+      thinkingConfig: { thinkingBudget: 0 },
+    },
   }
-  const data = await res.json()
-  const content = data.choices?.[0]?.message?.content || ''
-  return { content, usage: data.usage }
+
+  let lastErr = null
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    if (res.ok) {
+      const data = await res.json()
+      const parts = data?.candidates?.[0]?.content?.parts || []
+      const content = parts.map((p) => p?.text || '').join('').trim()
+      const um = data?.usageMetadata || {}
+      const usage = {
+        prompt_tokens: Number(um.promptTokenCount || 0),
+        completion_tokens: Number(um.candidatesTokenCount || 0),
+        total_tokens: Number(um.totalTokenCount || ((um.promptTokenCount || 0) + (um.candidatesTokenCount || 0))),
+      }
+      return { content, usage }
+    }
+    const errText = await res.text().catch(() => '')
+    lastErr = new Error(`Gemini ${res.status}: ${errText.slice(0, 300)}`)
+    // Retry só em 429 / 5xx
+    if (res.status === 429 || res.status >= 500) {
+      await new Promise((r) => setTimeout(r, 1500 + attempt * 2000))
+      continue
+    }
+    break
+  }
+  throw lastErr || new Error('Gemini: erro desconhecido')
 }
 
 function parseAIJson(text) {
@@ -1075,7 +1128,7 @@ async function deletePendente(sb, base) {
 
 export async function runFeedbackJob(env, trigger = 'cron') {
   const {
-    SUPABASE_URL_FEEDBACK, SUPABASE_KEY_FEEDBACK, OPENAI_API_KEY,
+    SUPABASE_URL_FEEDBACK, SUPABASE_KEY_FEEDBACK,
     FEEDBACK_JOB_WINDOW_MINUTES = '90',
     FEEDBACK_JOB_BUFFER_MINUTES = '30',
     FEEDBACK_JOB_MAX_WINDOW_MINUTES = '0',
@@ -1084,7 +1137,10 @@ export async function runFeedbackJob(env, trigger = 'cron') {
   if (!SUPABASE_URL_FEEDBACK || !SUPABASE_KEY_FEEDBACK) {
     throw new Error('SUPABASE_URL_FEEDBACK / SUPABASE_KEY_FEEDBACK não configurados')
   }
-  if (!OPENAI_API_KEY) throw new Error('OPENAI_API_KEY não configurado')
+  const { key: aiKey, model: aiModel } = getAIConfig(env)
+  if (!aiKey) {
+    throw new Error('GEMINI_API_KEY (ou GOOGLE_MAPS_API_KEY com Generative Language habilitado) não configurado')
+  }
 
   const sb = makeSupabaseClient(SUPABASE_URL_FEEDBACK, SUPABASE_KEY_FEEDBACK)
   const startedAt = new Date()
@@ -1182,7 +1238,7 @@ export async function runFeedbackJob(env, trigger = 'cron') {
         base = await computeCommercialRules(sb, base)
 
         aiCalls++
-        const { content, usage } = await callOpenAI(OPENAI_API_KEY, base)
+        const { content, usage } = await callGemini(env, base)
         if (usage) {
           promptTokens += usage.prompt_tokens || 0
           completionTokens += usage.completion_tokens || 0
@@ -1246,7 +1302,7 @@ export async function runFeedbackJob(env, trigger = 'cron') {
     prompt_tokens: promptTokens,
     completion_tokens: completionTokens,
     total_tokens: totalTokens,
-    model: OPENAI_MODEL,
+    model: aiModel,
     duration_ms: durationMs,
     error_message: errorMessage,
     steps,

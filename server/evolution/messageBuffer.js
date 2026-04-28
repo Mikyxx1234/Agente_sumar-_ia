@@ -29,9 +29,16 @@
 import Redis from 'ioredis'
 
 const DEFAULT_KEY_PREFIX = 'wa:msg:'
+const DEFAULT_LAST_TS_PREFIX = 'wa:msgts:'
 const DEFAULT_TABLE = 'message_buffer'
+const DEFAULT_TTL_SEC = 600 // 10 min — mensagens de leads que nunca entram no funil expiram sozinhas
 
 let backendPromise = null
+
+function getTtlSec(env) {
+  const v = Number(env.MESSAGE_BUFFER_TTL_SEC)
+  return Number.isFinite(v) && v > 0 ? Math.floor(v) : DEFAULT_TTL_SEC
+}
 
 // ── Redis ────────────────────────────────────────────────────────────────
 
@@ -60,7 +67,10 @@ function buildRedisClient(env) {
 function makeRedisBackend(env) {
   const client = buildRedisClient(env)
   const prefix = env.REDIS_KEY_PREFIX || DEFAULT_KEY_PREFIX
+  const tsPrefix = (env.REDIS_KEY_PREFIX || '') + DEFAULT_LAST_TS_PREFIX
   const keyFor = (sid) => `${prefix}${sid}`
+  const tsKeyFor = (sid) => `${tsPrefix}${sid}`
+  const ttl = getTtlSec(env)
 
   client.on('error', (err) => {
     console.error('[MessageBuffer][Redis] error:', err.message)
@@ -73,14 +83,28 @@ function makeRedisBackend(env) {
       await client.ping()
     },
     async push(sid, text) {
-      await client.rpush(keyFor(sid), String(text))
+      const now = Date.now()
+      const pipe = client.pipeline()
+      pipe.rpush(keyFor(sid), String(text))
+      pipe.expire(keyFor(sid), ttl)
+      pipe.set(tsKeyFor(sid), String(now), 'EX', ttl)
+      await pipe.exec()
     },
     async get(sid) {
       const items = await client.lrange(keyFor(sid), 0, -1)
       return Array.isArray(items) ? items : []
     },
+    async lastTouchedAt(sid) {
+      const v = await client.get(tsKeyFor(sid))
+      const n = v != null ? Number(v) : NaN
+      return Number.isFinite(n) ? new Date(n) : null
+    },
     async clear(sid) {
-      return client.del(keyFor(sid))
+      const pipe = client.pipeline()
+      pipe.del(keyFor(sid))
+      pipe.del(tsKeyFor(sid))
+      const res = await pipe.exec()
+      return Array.isArray(res) ? (res[0]?.[1] || 0) : 0
     },
     async ping() {
       return client.ping()
@@ -138,6 +162,14 @@ function makeSupabaseBackend(env) {
       if (!Array.isArray(rows)) return []
       return rows.map((r) => r.content).filter((c) => typeof c === 'string')
     },
+    async lastTouchedAt(sid) {
+      const q = `?session_id=eq.${encodeURIComponent(sid)}&order=created_at.desc&select=created_at&limit=1`
+      const rows = await request('GET', q)
+      if (!Array.isArray(rows) || !rows.length) return null
+      const v = rows[0]?.created_at
+      const d = v ? new Date(v) : null
+      return d && !Number.isNaN(d.getTime()) ? d : null
+    },
     async clear(sid) {
       const q = `?session_id=eq.${encodeURIComponent(sid)}`
       await request('DELETE', q, { prefer: 'return=minimal' })
@@ -152,21 +184,40 @@ function makeSupabaseBackend(env) {
 
 // ── Memory ───────────────────────────────────────────────────────────────
 
-function makeMemoryBackend() {
-  const store = new Map()
+function makeMemoryBackend(env) {
+  const store = new Map() // sid -> string[]
+  const tsStore = new Map() // sid -> Date
+  const ttlMs = getTtlSec(env) * 1000
+
+  function pruneIfExpired(sid) {
+    const ts = tsStore.get(sid)
+    if (ts && Date.now() - ts.getTime() > ttlMs) {
+      store.delete(sid)
+      tsStore.delete(sid)
+    }
+  }
+
   return {
     label: 'memory',
     async init() {},
     async push(sid, text) {
+      pruneIfExpired(sid)
       const list = store.get(sid) || []
       list.push(String(text))
       store.set(sid, list)
+      tsStore.set(sid, new Date())
     },
     async get(sid) {
+      pruneIfExpired(sid)
       return (store.get(sid) || []).slice()
+    },
+    async lastTouchedAt(sid) {
+      pruneIfExpired(sid)
+      return tsStore.get(sid) || null
     },
     async clear(sid) {
       store.delete(sid)
+      tsStore.delete(sid)
       return 1
     },
     async ping() {
@@ -187,7 +238,7 @@ async function pickBackend(env) {
 
   if (forced === 'memory') {
     console.warn('[MessageBuffer] forçado memory → buffer em memória (não persistente)')
-    return makeMemoryBackend()
+    return makeMemoryBackend(env)
   }
 
   if (forced === 'redis') {
@@ -225,7 +276,7 @@ async function pickBackend(env) {
   }
 
   console.warn('[MessageBuffer] nenhum backend externo disponível → usando buffer em memória (não persistente)')
-  return makeMemoryBackend()
+  return makeMemoryBackend(env)
 }
 
 async function getBackend(env) {
@@ -256,6 +307,20 @@ export async function clearMessages(env, sessionId) {
   if (!sessionId) return 0
   const backend = await getBackend(env)
   return backend.clear(sessionId)
+}
+
+/**
+ * Timestamp da última mensagem inserida no buffer dessa sessão.
+ * Usado pelo agentScheduler pra aplicar o debounce: só processa quem ficou
+ * silencioso por X segundos após a última mensagem.
+ *
+ * @returns {Promise<Date|null>}
+ */
+export async function getLastTouchedAt(env, sessionId) {
+  if (!sessionId) return null
+  const backend = await getBackend(env)
+  if (typeof backend.lastTouchedAt !== 'function') return null
+  return backend.lastTouchedAt(sessionId)
 }
 
 export async function pingBackend(env) {

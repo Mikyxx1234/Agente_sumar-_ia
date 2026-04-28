@@ -1,0 +1,42 @@
+feat: scheduler Kommo p/ filtrar IA por funil + feedback no Gemini
+
+Duas mudanças principais:
+
+1) Scheduler periódico p/ ativar a IA só pra leads no funil/status
+   configurados (KOMMO_AGENT_PIPELINE_ID + KOMMO_AGENT_STATUS_ID), em
+   vez de checar Kommo a cada mensagem que chega no webhook:
+
+   - Webhook só BUFFERIZA mensagens (sem chamar Kommo, sem disparar IA).
+   - server/agentScheduler.js: roda a cada 30s (KOMMO_SCHEDULER_INTERVAL_SEC),
+     lista leads no funil (1 call), bulk-fetch dos contatos (1 call),
+     processa quem tem mensagem com silêncio >= 15s
+     (KOMMO_SCHEDULER_DEBOUNCE_SEC) via flushSession, passando leadIdHint
+     pra evitar re-chamada Kommo.
+   - Buffer (messageBuffer.js) ganhou TTL automático (10 min,
+     MESSAGE_BUFFER_TTL_SEC) e getLastTouchedAt p/ aplicar o debounce.
+   - kommoClient.js: listLeadsByStatus, bulkGetContactsByIds e
+     extractContactPhone.
+   - Endpoint POST /api/scheduler/tick p/ rodar tick manual (debug).
+   - GET /api/evolution/health agora reporta status do scheduler.
+   - kommoLeadGate.js removido (substituído pelo scheduler).
+   - Whitelist temporária KOMMO_AGENT_TEST_LEAD_IDS p/ testar em produção
+     com 1 lead específico antes de liberar geral.
+
+   Vantagens:
+   - 1 chamada Kommo a cada 30s (independente do volume de mensagens),
+     evitando rate limit.
+   - Tolerante a delay do Kommo na movimentação de leads: msg fica no
+     buffer e o próximo tick pega quando o lead entrar no funil.
+
+2) Job de feedback comercial migrado de OpenAI p/ Gemini, pra reduzir
+   429 na OpenAI (usada também pelo agente, Whisper, Vision, embeddings):
+
+   - server/feedbackJob.js: callOpenAI -> callGemini (gemini-2.5-flash
+     por padrão, override via GEMINI_MODEL). thinkingConfig.thinkingBudget
+     desligado pra não consumir tokens à toa. responseMimeType=json p/
+     output limpo. Retry curto em 429/5xx.
+   - GEMINI_API_KEY (fallback p/ GOOGLE_MAPS_API_KEY se a Generative
+     Language API estiver habilitada lá).
+   - FeedbackDashboard.jsx: tabela de preço atualizada com Gemini 2.0/2.5
+     (flash e pro). Default vira gemini-2.5-flash.
+   - scripts/testGemini.mjs: smoke test rápido pra validar a chave.

@@ -82,6 +82,93 @@ export async function findLeadByPhone(env, telefone) {
 }
 
 /**
+ * Lista todos os leads que estão num pipeline + status específicos.
+ * Pagina automaticamente até esgotar (`_links.next`).
+ *
+ * Inclui contacts no embed (apenas {id, is_main}). Para pegar o telefone
+ * use bulkGetContactsByIds com os contact ids retornados.
+ *
+ * @returns { ok, leads, status?, error? }
+ */
+export async function listLeadsByStatus(env, { pipelineId, statusId, limit = 250, maxPages = 10 } = {}) {
+  const sid = Number(statusId)
+  if (!Number.isFinite(sid) || sid <= 0) {
+    return { ok: false, code: 'MISSING_STATUS_ID', error: 'statusId inválido', leads: [] }
+  }
+  const all = []
+  let page = 1
+  while (page <= maxPages) {
+    const params = [
+      `filter[statuses][0][status_id]=${sid}`,
+      `with=contacts`,
+      `limit=${Math.min(250, Math.max(1, Number(limit) || 250))}`,
+      `page=${page}`,
+    ]
+    if (Number.isFinite(Number(pipelineId)) && Number(pipelineId) > 0) {
+      params.unshift(`filter[statuses][0][pipeline_id]=${Number(pipelineId)}`)
+    }
+    const r = await kommoFetch(env, `/api/v4/leads?${params.join('&')}`)
+    if (!r.ok) {
+      // 204 vira ok=false em alguns ambientes — tratar 204/sem corpo como vazio
+      if (r.status === 204) return { ok: true, leads: all }
+      return { ok: false, code: r.code || 'KOMMO_ERROR', status: r.status, error: summarizeError(r), leads: all }
+    }
+    const leads = r.data?._embedded?.leads || []
+    all.push(...leads)
+    if (!r.data?._links?.next) break
+    page += 1
+  }
+  return { ok: true, leads: all }
+}
+
+/**
+ * Busca múltiplos contatos numa única chamada (até ~50 por request, paginando
+ * se passar disso). Retorna o array com todos os contatos completos, incluindo
+ * custom_fields_values.
+ *
+ * @returns { ok, contacts, error? }
+ */
+export async function bulkGetContactsByIds(env, ids) {
+  const list = Array.from(new Set((ids || []).map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0)))
+  if (!list.length) return { ok: true, contacts: [] }
+
+  const all = []
+  const chunkSize = 40 // Kommo aceita filter[id][n] múltiplos; mantemos baixo p/ não estourar URL
+  for (let i = 0; i < list.length; i += chunkSize) {
+    const chunk = list.slice(i, i + chunkSize)
+    const params = chunk.map((id, idx) => `filter[id][${idx}]=${id}`).join('&')
+    const r = await kommoFetch(env, `/api/v4/contacts?${params}&limit=250`)
+    if (!r.ok) {
+      if (r.status === 204) continue
+      return { ok: false, code: r.code || 'KOMMO_ERROR', status: r.status, error: summarizeError(r), contacts: all }
+    }
+    const contacts = r.data?._embedded?.contacts || []
+    all.push(...contacts)
+  }
+  return { ok: true, contacts: all }
+}
+
+/**
+ * Extrai o telefone de um contato Kommo (procura no custom_fields_values).
+ * Retorna o primeiro telefone encontrado (string, com ou sem '+'), ou null.
+ */
+export function extractContactPhone(contact) {
+  const fields = contact?.custom_fields_values
+  if (!Array.isArray(fields)) return null
+  for (const f of fields) {
+    const code = String(f?.field_code || '').toUpperCase()
+    if (code !== 'PHONE') continue
+    const values = f?.values
+    if (!Array.isArray(values) || values.length === 0) continue
+    for (const v of values) {
+      const phone = v?.value
+      if (phone && typeof phone === 'string') return phone
+    }
+  }
+  return null
+}
+
+/**
  * Cria uma nota comum no lead indicado.
  * @returns { ok, status?, data?, error? }
  */
