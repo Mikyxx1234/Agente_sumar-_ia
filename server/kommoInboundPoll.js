@@ -14,6 +14,7 @@ import { pushMessage } from './evolution/messageBuffer.js'
 import { listLeadNotes, tryListTalksForLead, getTalkById } from './kommoClient.js'
 import { fetchAmojoChatHistory } from './kommoAmojoHistory.js'
 import { digitsToWhatsAppLocalPart } from './phoneWhatsApp.js'
+import { recordNotesTick, recordAmojoTick } from './kommoInboundDiagnostics.js'
 
 /** @type {Map<number, { warmed: boolean, lastNoteId: number }>} */
 const noteState = new Map()
@@ -116,6 +117,15 @@ function isAmojoInboundRow(row, contactDigits) {
   return phoneDigitsMatch(d, contactDigits)
 }
 
+function countTypes(notes) {
+  const out = {}
+  for (const n of notes) {
+    const t = String(n?.note_type || 'unknown').toLowerCase()
+    out[t] = (out[t] || 0) + 1
+  }
+  return out
+}
+
 async function pollNotes(env, leadId, sessionId, contactDigits) {
   const lid = Number(leadId)
   let st = noteState.get(lid) || { warmed: false, lastNoteId: 0 }
@@ -123,37 +133,81 @@ async function pollNotes(env, leadId, sessionId, contactDigits) {
   const list = await listLeadNotes(env, lid, { limit: 80, order: 'desc' })
   if (!list.ok) {
     console.warn(`[kommo-poll][notes] lead=${lid}:`, list.error || list.status)
+    recordNotesTick({
+      leadId: lid,
+      sessionId,
+      warmedUp: st.warmed,
+      notesTotal: 0,
+      typeCounts: {},
+      freshCount: 0,
+      pushedCount: 0,
+      filteredByType: 0,
+      filteredEmpty: 0,
+      filteredOutbound: 0,
+      filteredOtherPhone: 0,
+      lastNoteId: st.lastNoteId,
+      pollMode: 'notes',
+      error: String(list.error || list.status || 'unknown'),
+    })
     return 0
   }
   const notes = list.notes || []
+  const typeCounts = countTypes(notes)
   if (!st.warmed) {
     const maxId = notes.reduce((m, n) => Math.max(m, Number(n.id) || 0), 0)
     noteState.set(lid, { warmed: true, lastNoteId: maxId })
-    console.log(`[kommo-poll][notes] warmup lead=${lid} lastNoteId=${maxId}`)
+    console.log(
+      `[kommo-poll][notes] warmup lead=${lid} lastNoteId=${maxId} notas=${notes.length} tipos=${JSON.stringify(typeCounts)}`,
+    )
+    recordNotesTick({
+      leadId: lid,
+      sessionId,
+      warmedUp: false,
+      notesTotal: notes.length,
+      typeCounts,
+      freshCount: 0,
+      pushedCount: 0,
+      filteredByType: 0,
+      filteredEmpty: 0,
+      filteredOutbound: 0,
+      filteredOtherPhone: 0,
+      lastNoteId: maxId,
+      pollMode: 'notes',
+    })
     return 0
   }
   const fresh = notes.filter((n) => Number(n.id) > st.lastNoteId)
   const asc = [...fresh].sort((a, b) => Number(a.id) - Number(b.id))
   let pushed = 0
   let maxApplied = st.lastNoteId
+  let filteredByType = 0
+  let filteredEmpty = 0
+  let filteredOutbound = 0
+  let filteredOtherPhone = 0
   for (const n of asc) {
     const nid = Number(n.id)
     if (isOutboundNoteType(n.note_type)) {
+      filteredOutbound += 1
       maxApplied = Math.max(maxApplied, nid)
       continue
     }
     if (!types.includes(String(n.note_type || '').toLowerCase())) {
+      filteredByType += 1
       maxApplied = Math.max(maxApplied, nid)
       continue
     }
     const text = extractNoteText(n, env)
     if (!text) {
+      filteredEmpty += 1
       maxApplied = Math.max(maxApplied, nid)
       continue
     }
     if (String(n.note_type || '').toLowerCase() === 'sms_in' && contactDigits) {
       const np = normalizeDigits(n.params?.phone || '')
-      if (np && !phoneDigitsMatch(np, contactDigits)) continue
+      if (np && !phoneDigitsMatch(np, contactDigits)) {
+        filteredOtherPhone += 1
+        continue
+      }
     }
     await pushMessage(env, sessionId, text)
     maxApplied = Math.max(maxApplied, nid)
@@ -162,7 +216,26 @@ async function pollNotes(env, leadId, sessionId, contactDigits) {
   noteState.set(lid, { warmed: true, lastNoteId: Math.max(st.lastNoteId, maxApplied) })
   if (pushed > 0) {
     console.log(`[kommo-poll][notes] buffer +${pushed} lead=${lid} session=${sessionId}`)
+  } else if (fresh.length > 0) {
+    console.log(
+      `[kommo-poll][notes] sem inbound novo lead=${lid} fresh=${fresh.length} tipos=${JSON.stringify(typeCounts)} filtroAtivo=${types.join('|')}`,
+    )
   }
+  recordNotesTick({
+    leadId: lid,
+    sessionId,
+    warmedUp: true,
+    notesTotal: notes.length,
+    typeCounts,
+    freshCount: fresh.length,
+    pushedCount: pushed,
+    filteredByType,
+    filteredEmpty,
+    filteredOutbound,
+    filteredOtherPhone,
+    lastNoteId: Math.max(st.lastNoteId, maxApplied),
+    pollMode: 'notes',
+  })
   return pushed
 }
 
@@ -177,6 +250,7 @@ async function pollAmojo(env, leadId, sessionId, contactDigits) {
         `[kommo-poll][amojo] sem chat_id p/ lead=${lid} — KOMMO_LEAD_CHAT_MAP ou talks`,
       )
     }
+    recordAmojoTick({ leadId: lid, sessionId, ok: false, messages: 0, error: 'sem_chat_id' })
     return 0
   }
   const scopeId = String(env.KOMMO_CHANNEL_SCOPE_ID || '').trim()
@@ -188,6 +262,13 @@ async function pollAmojo(env, leadId, sessionId, contactDigits) {
   })
   if (!hist.ok) {
     console.warn(`[kommo-poll][amojo] lead=${lid}:`, hist.error || hist.status)
+    recordAmojoTick({
+      leadId: lid,
+      sessionId,
+      ok: false,
+      messages: 0,
+      error: String(hist.error || hist.status || 'erro'),
+    })
     return 0
   }
   const rows = hist.messages || []
@@ -224,6 +305,7 @@ async function pollAmojo(env, leadId, sessionId, contactDigits) {
   if (pushed > 0) {
     console.log(`[kommo-poll][amojo] buffer +${pushed} lead=${lid} session=${sessionId}`)
   }
+  recordAmojoTick({ leadId: lid, sessionId, ok: true, messages: rows.length })
   return pushed
 }
 

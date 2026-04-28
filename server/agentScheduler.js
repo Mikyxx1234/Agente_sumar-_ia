@@ -41,6 +41,7 @@ import { getMessages, getLastTouchedAt } from './evolution/messageBuffer.js'
 import { flushSession } from './evolution/webhookEvolution.js'
 import { formatSchedulerDiagnosticLine } from './evolution/webhookDiagnostics.js'
 import { syncKommoInboundToBuffer, isKommoInboundPollEnabled } from './kommoInboundPoll.js'
+import { formatPollDiagLine } from './kommoInboundDiagnostics.js'
 
 const DEFAULT_INTERVAL_SEC = 30
 const DEFAULT_DEBOUNCE_SEC = 15
@@ -158,13 +159,15 @@ export async function runSchedulerTick(env) {
       if (!messages || messages.length === 0) {
         stats.skippedNoMessages += 1
         if (whitelist) {
-          const pollHint = isKommoInboundPollEnabled(env)
-              ? ' (KOMMO_INBOUND_POLL ativo — se continuar vazio, confira tipos de nota no Kommo ou use mode=amojo.)'
-              : ''
+          const pollOn = isKommoInboundPollEnabled(env)
           console.log(
-            `[scheduler] buffer vazio session=${sessionId} lead=${lead.id} — webhook Evolution, poll Kommo, ou telefone/KOMMO_INBOUND_POLL.${pollHint}`,
+            `[scheduler] buffer vazio session=${sessionId} lead=${lead.id} — sem inbound novo neste tick.`,
           )
-          console.log(formatSchedulerDiagnosticLine())
+          if (pollOn) {
+            console.log(formatPollDiagLine(lead.id))
+          } else {
+            console.log(formatSchedulerDiagnosticLine())
+          }
         }
         return
       }

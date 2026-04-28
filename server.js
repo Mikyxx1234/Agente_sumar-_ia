@@ -15,6 +15,8 @@ import { generateExecutionId, saveExecution } from './server/ai/executionTelemet
 import { sendTyping } from './server/evolution/typingIndicator.js'
 import { makeEvolutionWebhookHandler } from './server/evolution/webhookEvolution.js'
 import { recordWebhookIngress, getWebhookDiagnosticsSnapshot } from './server/evolution/webhookDiagnostics.js'
+import { getKommoPollSnapshot } from './server/kommoInboundDiagnostics.js'
+import { listLeadNotes } from './server/kommoClient.js'
 import { pingBackend, pushMessage, getMessages, clearMessages } from './server/evolution/messageBuffer.js'
 import { getDebounceMs } from './server/evolution/debouncer.js'
 import { runAgent } from './server/ai/agentRunner.js'
@@ -387,6 +389,7 @@ app.get('/api/evolution/health', async (_req, res) => {
       ok: true,
       buffer: ping,
       webhookDiagnostics: getWebhookDiagnosticsSnapshot(),
+      kommoPoll: getKommoPollSnapshot(),
       debounceMs: getDebounceMs(process.env),
       scheduler: {
         running: isSchedulerRunning(),
@@ -396,6 +399,33 @@ app.get('/api/evolution/health', async (_req, res) => {
         statusId: process.env.KOMMO_AGENT_STATUS_ID || null,
       },
     })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// Inspeção do poll Kommo: lista notas brutas (note_type, params.text) para um lead.
+app.get('/api/kommo/poll/notes', async (req, res) => {
+  try {
+    const leadId = Number(req.query.leadId)
+    if (!Number.isFinite(leadId) || leadId <= 0) {
+      res.status(400).json({ ok: false, error: 'leadId é obrigatório (?leadId=...)' })
+      return
+    }
+    const limit = Math.min(80, Math.max(1, Number(req.query.limit) || 30))
+    const out = await listLeadNotes(process.env, leadId, { limit, order: 'desc' })
+    if (!out.ok) {
+      res.status(500).json({ ok: false, error: out.error || out.status })
+      return
+    }
+    const slim = (out.notes || []).map((n) => ({
+      id: n.id,
+      created_at: n.created_at,
+      updated_at: n.updated_at,
+      note_type: n.note_type,
+      params: n.params,
+    }))
+    res.json({ ok: true, leadId, total: slim.length, notes: slim })
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })
   }

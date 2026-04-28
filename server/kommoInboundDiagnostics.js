@@ -1,0 +1,104 @@
+/**
+ * Estado em memória do poll Kommo → buffer.
+ *
+ * Permite explicar para o operador: o poll RODOU, viu N notas, esses tipos,
+ * filtrou esses, gravou tantas no buffer. Isso separa "código do poll não rodou"
+ * de "rodou e o Kommo não tem notas inbound novas".
+ */
+
+const bootAt = Date.now()
+
+/**
+ * @typedef {{
+ *   at: number,
+ *   leadId: number,
+ *   sessionId: string,
+ *   warmedUp: boolean,
+ *   notesTotal: number,
+ *   typeCounts: Record<string, number>,
+ *   freshCount: number,
+ *   pushedCount: number,
+ *   filteredByType: number,
+ *   filteredEmpty: number,
+ *   filteredOutbound: number,
+ *   filteredOtherPhone: number,
+ *   lastNoteId: number,
+ *   pollMode: string,
+ *   error?: string|null,
+ * }} NotesTickSummary
+ */
+
+/** @type {Map<number, NotesTickSummary>} */
+const lastNotesByLead = new Map()
+
+/** @type {{ at: number, leadId: number, sessionId: string, ok: boolean, messages: number, error?: string }|null} */
+let lastAmojoTick = null
+
+let totalNotesTicks = 0
+let totalAmojoTicks = 0
+
+export function recordNotesTick(summary) {
+  totalNotesTicks += 1
+  const safe = {
+    ...summary,
+    at: Date.now(),
+    typeCounts: { ...(summary.typeCounts || {}) },
+  }
+  lastNotesByLead.set(Number(summary.leadId), safe)
+}
+
+export function recordAmojoTick(info) {
+  totalAmojoTicks += 1
+  lastAmojoTick = { ...info, at: Date.now() }
+}
+
+export function getKommoPollSnapshot() {
+  const now = Date.now()
+  const notesByLead = {}
+  for (const [lid, s] of lastNotesByLead) {
+    notesByLead[lid] = { ...s, ageSec: Math.round((now - s.at) / 1000) }
+  }
+  return {
+    uptimeSec: Math.round((now - bootAt) / 1000),
+    totalNotesTicks,
+    totalAmojoTicks,
+    lastAmojoTick: lastAmojoTick
+      ? { ...lastAmojoTick, ageSec: Math.round((now - lastAmojoTick.at) / 1000) }
+      : null,
+    notesByLead,
+  }
+}
+
+/**
+ * Linha curta para combinar com o log de "buffer vazio" do scheduler.
+ * Foca no lead atual, se houver dados.
+ */
+export function formatPollDiagLine(leadId) {
+  const lid = Number(leadId)
+  const s = lastNotesByLead.get(lid)
+  if (!s) {
+    return `[poll-kommo][diag] lead=${lid} ainda_não_executou_poll_de_notas (aguarde 1 tick) totalTicks=${totalNotesTicks}`
+  }
+  const types = Object.entries(s.typeCounts || {})
+    .map(([k, v]) => `${k}:${v}`)
+    .join(',') || '(nenhum)'
+  const ago = Math.round((Date.now() - s.at) / 1000)
+  if (s.error) {
+    return `[poll-kommo][diag] lead=${lid} ÚLTIMO ERRO: ${s.error} (há ${ago}s)`
+  }
+  if (!s.warmedUp) {
+    return `[poll-kommo][diag] lead=${lid} warmup há ${ago}s — só mensagens NOVAS depois disso entram no buffer | notas existentes=${s.notesTotal} tipos=${types}`
+  }
+  const filtered = `filtradas: tipo=${s.filteredByType} vazias=${s.filteredEmpty} saída=${s.filteredOutbound} outroTel=${s.filteredOtherPhone}`
+  let hint = ''
+  const types2 = s.typeCounts || {}
+  if (s.notesTotal === 0) {
+    hint =
+      ' | dica: lead sem notas; mensagens do WhatsApp via Chats API NÃO viram notas — use mode=amojo + KOMMO_CHANNEL_SECRET/SCOPE_ID/LEAD_CHAT_MAP'
+  } else if (s.pushedCount === 0 && s.filteredByType > 0) {
+    hint = ` | dica: notas presentes mas tipo não cobre; veja types acima e ajuste KOMMO_INBOUND_POLL_NOTE_TYPES`
+  } else if (s.pushedCount === 0 && s.notesTotal > 0 && s.freshCount === 0) {
+    hint = ` | nada novo desde lastNoteId=${s.lastNoteId} (há ${ago}s)`
+  }
+  return `[poll-kommo][diag] lead=${lid} mode=${s.pollMode} notas=${s.notesTotal} tipos=${types} fresh=${s.freshCount} pushed=${s.pushedCount} ${filtered} lastNoteId=${s.lastNoteId} (há ${ago}s)${hint}`
+}
