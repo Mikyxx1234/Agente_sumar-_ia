@@ -27,3 +27,34 @@ export function phoneToWhatsAppSessionId(phone) {
   if (!local) return null
   return `${local}@s.whatsapp.net`
 }
+
+/**
+ * Converte qualquer remoteJid da Evolution/Baileys para a chave única do buffer.
+ * - @c.us (legado) → mesmo número em @s.whatsapp.net
+ * - Grupos @g.us etc. → devolve sem alterar (não usamos no scheduler por telefone)
+ * - @lid sem telefone → devolve como está (scheduler por Kommo não achará; log no webhook)
+ */
+export function canonicalWhatsAppSessionId(jid) {
+  if (!jid || typeof jid !== 'string') return null
+  const s = jid.trim()
+  const at = s.indexOf('@')
+  if (at < 0) {
+    const local = digitsToWhatsAppLocalPart(s)
+    return local ? `${local}@s.whatsapp.net` : null
+  }
+  const rawLocal = s.slice(0, at)
+  const domain = s.slice(at + 1).toLowerCase()
+
+  if (domain === 'g.us' || domain === 'broadcast' || domain === 'newsletter') return s
+
+  if (domain === 'lid') return s
+
+  if (domain === 's.whatsapp.net' || domain === 'c.us') {
+    const digitsOnly = rawLocal.replace(/[^0-9]/g, '')
+    if (!digitsOnly) return s
+    const local = digitsToWhatsAppLocalPart(digitsOnly)
+    if (local) return `${local}@s.whatsapp.net`
+  }
+
+  return s
+}

@@ -32,6 +32,7 @@ import { generateExecutionId, saveExecution } from '../ai/executionTelemetry.js'
 import { fireTyping } from './typingIndicator.js'
 import { rememberWamid, getWamids } from './sessionWamid.js'
 import { startTypingHeartbeat } from '../whatsappTypingHeartbeat.js'
+import { canonicalWhatsAppSessionId } from '../phoneWhatsApp.js'
 
 function getBody(req) {
   const body = req.body || {}
@@ -54,6 +55,34 @@ function getSessionId(payload) {
     d?.sessionId ||
     null
   )
+}
+
+/**
+ * JID usado no buffer = sempre que possível o número em @s.whatsapp.net.
+ * Ordem: remoteJidAlt (telefone real quando remoteJid veio como @lid), depois remoteJid.
+ */
+function resolveBufferSessionId(payload) {
+  const d = payload?.data || payload
+  const key = d?.key || {}
+  const candidates = [
+    key.remoteJidAlt,
+    key.remote_jid_alt,
+    d.remoteJidAlt,
+    d.remote_jid_alt,
+    key.remoteJid,
+    d.remoteJid,
+    d.sessionId,
+  ].filter((x) => typeof x === 'string' && x.length > 0)
+
+  for (const jid of candidates) {
+    const c = canonicalWhatsAppSessionId(jid)
+    if (c && c.endsWith('@s.whatsapp.net')) return c
+  }
+  for (const jid of candidates) {
+    const c = canonicalWhatsAppSessionId(jid)
+    if (c) return c
+  }
+  return null
 }
 
 function normalizeTelefone(sessionId) {
@@ -331,13 +360,22 @@ export function makeEvolutionWebhookHandler(env) {
     }
     const payload = getBody(req)
     const messageType = getMessageType(payload)
-    const sessionId = getSessionId(payload)
+    const sessionRaw = getSessionId(payload)
+    const sessionId = resolveBufferSessionId(payload)
     const pushName = getPushName(payload)
 
     if (!messageType || !sessionId) {
-      console.log(`[Evolution] skip missing_type_or_session (event=${evtName})`)
+      console.log(`[Evolution] skip missing_type_or_session (event=${evtName}) rawJid=${sessionRaw || 'n/a'}`)
       res.status(200).json({ ok: true, skipped: 'missing_type_or_session' })
       return
+    }
+    if (sessionRaw && sessionRaw !== sessionId) {
+      console.log(`[Evolution] jid buffer ${sessionRaw} → ${sessionId}`)
+    }
+    if (sessionId.endsWith('@lid')) {
+      console.warn(
+        `[Evolution] remoteJid caiu em @lid sem telefone resolvido — o scheduler (Kommo) não achará o buffer. Verifique Evolution/remoteJidAlt ou atualize a API.`,
+      )
     }
     if (payload?.data?.key?.fromMe) {
       console.log(`[Evolution] skip fromMe ${sessionId}`)
