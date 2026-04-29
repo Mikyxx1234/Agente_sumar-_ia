@@ -17,6 +17,7 @@ import { makeEvolutionWebhookHandler } from './server/evolution/webhookEvolution
 import { recordWebhookIngress, getWebhookDiagnosticsSnapshot } from './server/evolution/webhookDiagnostics.js'
 import { getKommoPollSnapshot } from './server/kommoInboundDiagnostics.js'
 import { listLeadNotes, listLeadEvents } from './server/kommoClient.js'
+import { getMessagesByLead as dispatcherGetMessagesByLead } from './server/kommoDispatcherClient.js'
 import { pingBackend, pushMessage, getMessages, clearMessages } from './server/evolution/messageBuffer.js'
 import { getDebounceMs } from './server/evolution/debouncer.js'
 import { runAgent } from './server/ai/agentRunner.js'
@@ -678,6 +679,69 @@ app.get('/api/kommo/poll/events', async (req, res) => {
       typeCounts: counts,
       requestUrl: out.requestUrl || null,
       events: slim,
+    })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// Inspeção do poll Kommo (dispatcher): lista mensagens cruas que o
+// banco-kommo-dispatcher tem cacheadas para um lead. Útil para validar a
+// integração antes de ligar mode=dispatcher no scheduler.
+//   GET /api/kommo/poll/dispatcher?leadId=19884275&limit=20&order=desc
+app.get('/api/kommo/poll/dispatcher', async (req, res) => {
+  try {
+    const leadId = Number(req.query.leadId)
+    if (!Number.isFinite(leadId) || leadId <= 0) {
+      res.status(400).json({ ok: false, error: 'leadId é obrigatório (?leadId=...)' })
+      return
+    }
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 20))
+    const order = String(req.query.order || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc'
+    const out = await dispatcherGetMessagesByLead(process.env, leadId, { limit, order })
+    if (!out.ok) {
+      res.status(502).json({
+        ok: false,
+        error: out.error || out.status,
+        cause: out.cause || null,
+        status: out.status || null,
+        requestUrl: out.requestUrl || null,
+        elapsedMs: out.elapsedMs || null,
+        hint:
+          'Verifique KOMMO_DISPATCHER_URL e se o servico banco-kommo-dispatcher esta respondendo (use /api/kommo-dispatcher/probe?path=/health).',
+      })
+      return
+    }
+    const messages = out.messages || []
+    const stats = messages.reduce(
+      (acc, m) => {
+        const st = String(m?.sender_type || 'unknown').toLowerCase()
+        const mt = String(m?.message_type || 'unknown').toLowerCase()
+        acc.senderTypes[st] = (acc.senderTypes[st] || 0) + 1
+        acc.messageTypes[mt] = (acc.messageTypes[mt] || 0) + 1
+        return acc
+      },
+      { senderTypes: {}, messageTypes: {} },
+    )
+    const slim = messages.map((m) => ({
+      id: m.id,
+      sender_type: m.sender_type,
+      sender_name: m.sender_name,
+      message_type: m.message_type,
+      message_text: m.message_text,
+      sent_at: m.sent_at,
+      origin: m.origin,
+      synced_at: m.synced_at,
+      chat_id: m.chat_id,
+    }))
+    res.json({
+      ok: true,
+      leadId,
+      total: messages.length,
+      stats,
+      requestUrl: out.requestUrl || null,
+      elapsedMs: out.elapsedMs || null,
+      messages: slim,
     })
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })

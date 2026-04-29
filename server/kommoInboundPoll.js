@@ -7,6 +7,9 @@
  *     (mais robusto, pega mensagem mesmo quando não vira nota).
  *   - amojo: histórico Amojo — precisa KOMMO_CHANNEL_SECRET + KOMMO_CHANNEL_SCOPE_ID + chat_id
  *     (via KOMMO_LEAD_CHAT_MAP JSON ou descoberta de /api/v4/talks).
+ *   - dispatcher: lê do banco-kommo-dispatcher (FastAPI) que já mantém cache
+ *     atualizado das mensagens. RECOMENDADO quando esse serviço existe na
+ *     mesma rede do EasyPanel. Usa GET /api/kommo/messages/by-lead/{id}.
  *   - both: roda notes + events (ambos filtrados por dedupe; útil quando você não sabe qual
  *     fonte sua integração usa).
  *   - all: notes + events + amojo (Amojo só roda se as envs estiverem setadas).
@@ -23,11 +26,13 @@ import {
   getTalkById,
 } from './kommoClient.js'
 import { fetchAmojoChatHistory } from './kommoAmojoHistory.js'
+import { getMessagesByLead as dispatcherGetMessagesByLead } from './kommoDispatcherClient.js'
 import { digitsToWhatsAppLocalPart } from './phoneWhatsApp.js'
 import {
   recordNotesTick,
   recordAmojoTick,
   recordEventsTick,
+  recordDispatcherTick,
 } from './kommoInboundDiagnostics.js'
 
 /** @type {Map<number, { warmed: boolean, lastNoteId: number }>} */
@@ -36,6 +41,8 @@ const noteState = new Map()
 const amojoState = new Map()
 /** @type {Map<number, { warmed: boolean, lastSeenAt: number, seenIds: Set<string> }>} */
 const eventState = new Map()
+/** @type {Map<number, { warmed: boolean, lastMsgId: number, seenIds: Set<number> }>} */
+const dispatcherState = new Map()
 
 export function isKommoInboundPollEnabled(env) {
   const f = String(env.KOMMO_INBOUND_POLL_ENABLED || '').trim().toLowerCase()
@@ -544,6 +551,205 @@ async function pollEvents(env, leadId, sessionId) {
   return pushed
 }
 
+/**
+ * Tipos do dispatcher (kommo-chat-sync) considerados inbound.
+ * Apenas `contact` é o cliente. `user` = operador humano, `bot` = nossa IA.
+ */
+const DISPATCHER_INBOUND_SENDER_TYPES = new Set(['contact'])
+/**
+ * Por enquanto só processamos texto. Voz/áudio/imagem ficam para outra tarefa
+ * (precisaria de transcrição/OCR). Mensagens não-texto são ignoradas mas
+ * registradas no diagnóstico para visibilidade.
+ */
+const DISPATCHER_TEXT_TYPES = new Set(['text'])
+
+function countDispatcherStats(messages) {
+  const senderTypes = {}
+  const messageTypes = {}
+  for (const m of messages) {
+    const st = String(m?.sender_type || 'unknown').toLowerCase()
+    const mt = String(m?.message_type || 'unknown').toLowerCase()
+    senderTypes[st] = (senderTypes[st] || 0) + 1
+    messageTypes[mt] = (messageTypes[mt] || 0) + 1
+  }
+  return { senderTypes, messageTypes }
+}
+
+async function pollDispatcher(env, leadId, sessionId) {
+  const lid = Number(leadId)
+  let st = dispatcherState.get(lid) || { warmed: false, lastMsgId: 0, seenIds: new Set() }
+  const list = await dispatcherGetMessagesByLead(env, lid, { limit: 30, order: 'desc' })
+
+  if (!list.ok) {
+    const errMsg = String(list.error || list.status || 'unknown')
+    console.warn(
+      `[kommo-poll][dispatcher] lead=${lid} api ERRO: ${errMsg} cause=${list.cause || 'n/a'} url=${list.requestUrl || 'n/a'} elapsed=${list.elapsedMs ?? '?'}ms`,
+    )
+    recordDispatcherTick({
+      leadId: lid,
+      sessionId,
+      warmedUp: st.warmed,
+      messagesTotal: 0,
+      stats: { senderTypes: {}, messageTypes: {} },
+      freshCount: 0,
+      pushedCount: 0,
+      filteredOutbound: 0,
+      filteredNonText: 0,
+      filteredEmpty: 0,
+      lastMsgId: st.lastMsgId,
+      pollMode: 'dispatcher',
+      requestUrl: list.requestUrl || null,
+      httpStatus: list.status || null,
+      elapsedMs: list.elapsedMs || null,
+      error: errMsg,
+    })
+    return 0
+  }
+
+  const messages = list.messages || []
+  const stats = countDispatcherStats(messages)
+
+  if (!st.warmed) {
+    const maxId = messages.reduce((m, x) => Math.max(m, Number(x?.id) || 0), 0)
+    dispatcherState.set(lid, { warmed: true, lastMsgId: maxId, seenIds: new Set() })
+    console.log(
+      `[kommo-poll][dispatcher] warmup lead=${lid} session=${sessionId} lastMsgId=${maxId} mensagens=${messages.length} stats=${JSON.stringify(stats)} elapsed=${list.elapsedMs ?? '?'}ms`,
+    )
+    recordDispatcherTick({
+      leadId: lid,
+      sessionId,
+      warmedUp: false,
+      messagesTotal: messages.length,
+      stats,
+      freshCount: 0,
+      pushedCount: 0,
+      filteredOutbound: 0,
+      filteredNonText: 0,
+      filteredEmpty: 0,
+      lastMsgId: maxId,
+      pollMode: 'dispatcher',
+      requestUrl: list.requestUrl || null,
+      httpStatus: list.status || null,
+      elapsedMs: list.elapsedMs || null,
+    })
+    return 0
+  }
+
+  const fresh = messages.filter((m) => {
+    const mid = Number(m?.id) || 0
+    if (mid <= st.lastMsgId) return false
+    if (st.seenIds.has(mid)) return false
+    return true
+  })
+  const asc = [...fresh].sort((a, b) => (Number(a?.id) || 0) - (Number(b?.id) || 0))
+
+  let pushed = 0
+  let filteredOutbound = 0
+  let filteredNonText = 0
+  let filteredEmpty = 0
+  let maxApplied = st.lastMsgId
+
+  for (const m of asc) {
+    const mid = Number(m?.id) || 0
+    const senderType = String(m?.sender_type || '').toLowerCase()
+    const messageType = String(m?.message_type || '').toLowerCase()
+    const text = String(m?.message_text || '').trim()
+
+    if (!DISPATCHER_INBOUND_SENDER_TYPES.has(senderType)) {
+      filteredOutbound += 1
+      st.seenIds.add(mid)
+      maxApplied = Math.max(maxApplied, mid)
+      continue
+    }
+
+    if (!DISPATCHER_TEXT_TYPES.has(messageType)) {
+      filteredNonText += 1
+      st.seenIds.add(mid)
+      maxApplied = Math.max(maxApplied, mid)
+      console.log(
+        `[kommo-poll][dispatcher] ignorando não-texto lead=${lid} msgId=${mid} type=${messageType} sender=${m?.sender_name || senderType}`,
+      )
+      continue
+    }
+
+    if (!text) {
+      filteredEmpty += 1
+      st.seenIds.add(mid)
+      maxApplied = Math.max(maxApplied, mid)
+      continue
+    }
+
+    if (isAgentOutboundEcho(text)) {
+      filteredOutbound += 1
+      st.seenIds.add(mid)
+      maxApplied = Math.max(maxApplied, mid)
+      continue
+    }
+
+    const cleaned = stripExecutionSuffix(text)
+    if (!cleaned) {
+      filteredEmpty += 1
+      st.seenIds.add(mid)
+      maxApplied = Math.max(maxApplied, mid)
+      continue
+    }
+
+    try {
+      await pushMessage(env, sessionId, cleaned)
+      pushed += 1
+      st.seenIds.add(mid)
+      maxApplied = Math.max(maxApplied, mid)
+      console.log(
+        `[kommo-poll][dispatcher] +1 lead=${lid} session=${sessionId} msgId=${mid} sender="${m?.sender_name || senderType}" sentAt=${m?.sent_at || 'n/a'} origin=${m?.origin || 'n/a'} text="${cleaned.slice(0, 80)}"`,
+      )
+    } catch (err) {
+      console.error(
+        `[kommo-poll][dispatcher] pushMessage falhou lead=${lid} msgId=${mid}: ${err.message}`,
+      )
+    }
+  }
+
+  if (st.seenIds.size > 200) {
+    const arr = [...st.seenIds]
+    st.seenIds = new Set(arr.slice(-100))
+  }
+
+  dispatcherState.set(lid, {
+    warmed: true,
+    lastMsgId: Math.max(st.lastMsgId, maxApplied),
+    seenIds: st.seenIds,
+  })
+
+  if (pushed > 0) {
+    console.log(
+      `[kommo-poll][dispatcher] buffer +${pushed} lead=${lid} session=${sessionId} (mensagens vistas=${messages.length})`,
+    )
+  } else if (fresh.length > 0) {
+    console.log(
+      `[kommo-poll][dispatcher] sem inbound novo lead=${lid} fresh=${fresh.length} stats=${JSON.stringify(stats)}`,
+    )
+  }
+
+  recordDispatcherTick({
+    leadId: lid,
+    sessionId,
+    warmedUp: true,
+    messagesTotal: messages.length,
+    stats,
+    freshCount: fresh.length,
+    pushedCount: pushed,
+    filteredOutbound,
+    filteredNonText,
+    filteredEmpty,
+    lastMsgId: Math.max(st.lastMsgId, maxApplied),
+    pollMode: 'dispatcher',
+    requestUrl: list.requestUrl || null,
+    httpStatus: list.status || null,
+    elapsedMs: list.elapsedMs || null,
+  })
+  return pushed
+}
+
 async function pollAmojo(env, leadId, sessionId, contactDigits) {
   if (!amojoConfigured(env)) return 0
   const lid = Number(leadId)
@@ -636,6 +842,11 @@ export async function syncKommoInboundToBuffer(env, { leadId, sessionId, phone }
     byMode.events = n
     pushed += n
   }
+  const runDispatcher = async () => {
+    const n = await pollDispatcher(env, leadId, sessionId)
+    byMode.dispatcher = n
+    pushed += n
+  }
   const runAmojo = async () => {
     if (!amojoConfigured(env)) {
       byMode.amojo = 0
@@ -646,6 +857,10 @@ export async function syncKommoInboundToBuffer(env, { leadId, sessionId, phone }
     pushed += n
   }
 
+  if (mode === 'dispatcher') {
+    await runDispatcher()
+    return { pushed, byMode }
+  }
   if (mode === 'amojo') {
     if (!amojoConfigured(env)) {
       console.warn('[kommo-poll] mode=amojo mas faltam KOMMO_CHANNEL_SECRET / KOMMO_CHANNEL_SCOPE_ID')
@@ -666,6 +881,7 @@ export async function syncKommoInboundToBuffer(env, { leadId, sessionId, phone }
   if (mode === 'all') {
     await runNotes()
     await runEvents()
+    await runDispatcher()
     await runAmojo()
     return { pushed, byMode }
   }

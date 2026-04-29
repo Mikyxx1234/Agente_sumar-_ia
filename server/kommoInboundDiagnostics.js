@@ -49,16 +49,41 @@ const bootAt = Date.now()
  * }} EventsTickSummary
  */
 
+/**
+ * @typedef {{
+ *   at: number,
+ *   leadId: number,
+ *   sessionId: string,
+ *   warmedUp: boolean,
+ *   messagesTotal: number,
+ *   stats: { senderTypes: Record<string, number>, messageTypes: Record<string, number> },
+ *   freshCount: number,
+ *   pushedCount: number,
+ *   filteredOutbound: number,
+ *   filteredNonText: number,
+ *   filteredEmpty: number,
+ *   lastMsgId: number,
+ *   pollMode: string,
+ *   requestUrl?: string|null,
+ *   httpStatus?: number|null,
+ *   elapsedMs?: number|null,
+ *   error?: string|null,
+ * }} DispatcherTickSummary
+ */
+
 /** @type {Map<number, NotesTickSummary>} */
 const lastNotesByLead = new Map()
 /** @type {Map<number, EventsTickSummary>} */
 const lastEventsByLead = new Map()
+/** @type {Map<number, DispatcherTickSummary>} */
+const lastDispatcherByLead = new Map()
 
 /** @type {{ at: number, leadId: number, sessionId: string, ok: boolean, messages: number, error?: string }|null} */
 let lastAmojoTick = null
 
 let totalNotesTicks = 0
 let totalEventsTicks = 0
+let totalDispatcherTicks = 0
 let totalAmojoTicks = 0
 
 export function recordNotesTick(summary) {
@@ -81,6 +106,19 @@ export function recordEventsTick(summary) {
   lastEventsByLead.set(Number(summary.leadId), safe)
 }
 
+export function recordDispatcherTick(summary) {
+  totalDispatcherTicks += 1
+  const safe = {
+    ...summary,
+    at: Date.now(),
+    stats: {
+      senderTypes: { ...(summary.stats?.senderTypes || {}) },
+      messageTypes: { ...(summary.stats?.messageTypes || {}) },
+    },
+  }
+  lastDispatcherByLead.set(Number(summary.leadId), safe)
+}
+
 export function recordAmojoTick(info) {
   totalAmojoTicks += 1
   lastAmojoTick = { ...info, at: Date.now() }
@@ -96,16 +134,22 @@ export function getKommoPollSnapshot() {
   for (const [lid, s] of lastEventsByLead) {
     eventsByLead[lid] = { ...s, ageSec: Math.round((now - s.at) / 1000) }
   }
+  const dispatcherByLead = {}
+  for (const [lid, s] of lastDispatcherByLead) {
+    dispatcherByLead[lid] = { ...s, ageSec: Math.round((now - s.at) / 1000) }
+  }
   return {
     uptimeSec: Math.round((now - bootAt) / 1000),
     totalNotesTicks,
     totalEventsTicks,
+    totalDispatcherTicks,
     totalAmojoTicks,
     lastAmojoTick: lastAmojoTick
       ? { ...lastAmojoTick, ageSec: Math.round((now - lastAmojoTick.at) / 1000) }
       : null,
     notesByLead,
     eventsByLead,
+    dispatcherByLead,
   }
 }
 
@@ -146,6 +190,41 @@ export function formatPollDiagLine(leadId) {
     hint = ` | nada novo desde lastNoteId=${s.lastNoteId} (há ${ago}s)`
   }
   return `[poll-kommo][diag] lead=${lid} mode=${s.pollMode} notas=${s.notesTotal} tipos=${types} fresh=${s.freshCount} pushed=${s.pushedCount} ${filtered} lastNoteId=${s.lastNoteId} (há ${ago}s)${hint}`
+}
+
+/**
+ * Linha de diagnóstico do modo `dispatcher` (banco-kommo-dispatcher).
+ */
+export function formatDispatcherDiagLine(leadId) {
+  const lid = Number(leadId)
+  const s = lastDispatcherByLead.get(lid)
+  if (!s) {
+    return `[poll-kommo][dispatcher][diag] lead=${lid} ainda_não_executou_poll_dispatcher (aguarde 1 tick) totalTicks=${totalDispatcherTicks}`
+  }
+  const ago = Math.round((Date.now() - s.at) / 1000)
+  if (s.error) {
+    return `[poll-kommo][dispatcher][diag] lead=${lid} ÚLTIMO ERRO: ${s.error} status=${s.httpStatus || '?'} elapsed=${s.elapsedMs ?? '?'}ms (há ${ago}s) url=${s.requestUrl || 'n/a'}`
+  }
+  const sTypes = Object.entries(s.stats?.senderTypes || {})
+    .map(([k, v]) => `${k}:${v}`)
+    .join(',') || '(nenhum)'
+  const mTypes = Object.entries(s.stats?.messageTypes || {})
+    .map(([k, v]) => `${k}:${v}`)
+    .join(',') || '(nenhum)'
+  if (!s.warmedUp) {
+    return `[poll-kommo][dispatcher][diag] lead=${lid} warmup há ${ago}s — só mensagens NOVAS depois disso entram no buffer | mensagens existentes=${s.messagesTotal} senderTypes=${sTypes} messageTypes=${mTypes} lastMsgId=${s.lastMsgId}`
+  }
+  const filtered = `filtradas: saída=${s.filteredOutbound} nãoTexto=${s.filteredNonText} vazias=${s.filteredEmpty}`
+  let hint = ''
+  if (s.messagesTotal === 0) {
+    hint =
+      ' | dica: dispatcher devolveu lista vazia para esse lead. Verifique se o monitor do dispatcher inclui esse chat (POST /api/kommo/monitor/chats) ou se o lead acabou de ser criado.'
+  } else if (s.pushedCount === 0 && s.filteredOutbound === s.freshCount && s.freshCount > 0) {
+    hint = ` | nada do cliente nesse fresh (${s.freshCount} eram saída/eco do agente).`
+  } else if (s.pushedCount === 0 && s.messagesTotal > 0 && s.freshCount === 0) {
+    hint = ` | nada novo desde lastMsgId=${s.lastMsgId} (há ${ago}s)`
+  }
+  return `[poll-kommo][dispatcher][diag] lead=${lid} mode=${s.pollMode} mensagens=${s.messagesTotal} senderTypes=${sTypes} messageTypes=${mTypes} fresh=${s.freshCount} pushed=${s.pushedCount} ${filtered} lastMsgId=${s.lastMsgId} elapsed=${s.elapsedMs ?? '?'}ms (há ${ago}s)${hint}`
 }
 
 /**
