@@ -18,7 +18,6 @@ import { recordWebhookIngress, getWebhookDiagnosticsSnapshot } from './server/ev
 import { getKommoPollSnapshot } from './server/kommoInboundDiagnostics.js'
 import { listLeadNotes, listLeadEvents } from './server/kommoClient.js'
 import { getMessagesByLead as dispatcherGetMessagesByLead } from './server/kommoDispatcherClient.js'
-import { sendTyping } from './server/evolution/typingIndicator.js'
 import { pingBackend, pushMessage, getMessages, clearMessages } from './server/evolution/messageBuffer.js'
 import { getDebounceMs } from './server/evolution/debouncer.js'
 import { runAgent } from './server/ai/agentRunner.js'
