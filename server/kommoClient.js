@@ -264,8 +264,8 @@ export async function getTalkById(env, talkId) {
  * Endpoint: GET /api/v4/events
  * Filtros suportados:
  *   - filter[type][n]=<event_type>  (incoming_chat_message, outgoing_chat_message, ...)
- *   - filter[entity]=lead
- *   - filter[entity_id][0]=<leadId>
+ *   - filter[entity]=lead | contact
+ *   - filter[entity_id][0]=<id>
  *   - filter[created_at][from]=<unix_seconds>
  *
  * Observação: NÃO usar with=value_after,value_before — o Kommo rejeita com 400
@@ -274,27 +274,29 @@ export async function getTalkById(env, talkId) {
  *
  * @param {Record<string,string>} env
  * @param {number|string} leadId
- * @param {{ types?: string[], fromTs?: number, limit?: number }} [opts]
+ * @param {{ types?: string[], fromTs?: number, limit?: number, entity?: 'lead'|'contact', entityId?: number|string }} [opts]
  * @returns {Promise<{ ok: boolean, events: any[], status?: number, error?: string, requestUrl?: string }>}
  */
 export async function listLeadEvents(env, leadId, opts = {}) {
   const lid = Number(leadId)
-  if (!Number.isFinite(lid) || lid <= 0) {
-    return { ok: false, code: 'MISSING_LEAD_ID', error: 'leadId inválido', events: [] }
+  const entityIdRaw = opts.entityId != null ? Number(opts.entityId) : lid
+  if (!Number.isFinite(entityIdRaw) || entityIdRaw <= 0) {
+    return { ok: false, code: 'MISSING_LEAD_ID', error: 'leadId/entityId inválido', events: [] }
   }
-  const types =
-    Array.isArray(opts.types) && opts.types.length > 0
-      ? opts.types.map((t) => String(t).trim().toLowerCase()).filter(Boolean)
-      : ['incoming_chat_message']
+  const entity = String(opts.entity || 'lead').trim().toLowerCase() === 'contact' ? 'contact' : 'lead'
+  // types vazio (array vazio) = sem filtro de tipo
+  const typesArr = Array.isArray(opts.types)
+    ? opts.types.map((t) => String(t).trim().toLowerCase()).filter(Boolean)
+    : ['incoming_chat_message']
   const limit = Math.min(250, Math.max(1, Number(opts.limit) || 50))
   const fromTs = Number(opts.fromTs) > 0 ? Math.floor(Number(opts.fromTs)) : 0
 
   const params = []
-  types.forEach((t, i) => {
+  typesArr.forEach((t, i) => {
     params.push(`filter[type][${i}]=${encodeURIComponent(t)}`)
   })
-  params.push(`filter[entity]=lead`)
-  params.push(`filter[entity_id][0]=${lid}`)
+  params.push(`filter[entity]=${entity}`)
+  params.push(`filter[entity_id][0]=${entityIdRaw}`)
   if (fromTs > 0) {
     params.push(`filter[created_at][from]=${fromTs}`)
   }

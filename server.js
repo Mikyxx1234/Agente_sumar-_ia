@@ -431,26 +431,41 @@ app.get('/api/kommo/poll/notes', async (req, res) => {
   }
 })
 
-// Inspeção do poll Kommo (events): lista eventos brutos do log para um lead.
-// Útil para descobrir se a integração de WhatsApp emite incoming_chat_message.
-//   GET /api/kommo/poll/events?leadId=19884275&limit=50&hours=48
-//   GET /api/kommo/poll/events?leadId=19884275&types=incoming_chat_message,outgoing_chat_message
+// Inspeção do poll Kommo (events): lista eventos brutos do log para um lead/contato.
+// Útil para descobrir se a integração de WhatsApp emite eventos de chat no log v4.
+//
+//   GET /api/kommo/poll/events?leadId=19884275&hours=72                (default: incoming+outgoing chat)
+//   GET /api/kommo/poll/events?leadId=19884275&hours=72&types=*        (* = sem filtro de tipo, lista TUDO)
+//   GET /api/kommo/poll/events?leadId=19884275&hours=72&types=incoming_chat_message,incoming_message,chat_message_added
+//   GET /api/kommo/poll/events?entity=contact&entityId=12345&hours=72  (eventos no contato em vez do lead)
 app.get('/api/kommo/poll/events', async (req, res) => {
   try {
-    const leadId = Number(req.query.leadId)
-    if (!Number.isFinite(leadId) || leadId <= 0) {
-      res.status(400).json({ ok: false, error: 'leadId é obrigatório (?leadId=...)' })
+    const entity = String(req.query.entity || 'lead').toLowerCase() === 'contact' ? 'contact' : 'lead'
+    const entityId = Number(req.query.entityId || req.query.leadId)
+    if (!Number.isFinite(entityId) || entityId <= 0) {
+      res.status(400).json({ ok: false, error: 'leadId/entityId é obrigatório (?leadId=... ou ?entity=contact&entityId=...)' })
       return
     }
     const limit = Math.min(250, Math.max(1, Number(req.query.limit) || 50))
     const hours = Math.max(0, Number(req.query.hours) || 0)
     const fromTs = hours > 0 ? Math.floor(Date.now() / 1000) - hours * 3600 : 0
     const typesParam = String(req.query.types || '').trim()
-    const types = typesParam
-      ? typesParam.split(/[,\s]+/).filter(Boolean)
-      : ['incoming_chat_message', 'outgoing_chat_message']
+    let types
+    if (typesParam === '*' || typesParam.toLowerCase() === 'any' || typesParam.toLowerCase() === 'all') {
+      types = [] // sem filtro — lista todos os tipos para o entity
+    } else if (typesParam) {
+      types = typesParam.split(/[,\s]+/).filter(Boolean)
+    } else {
+      types = ['incoming_chat_message', 'outgoing_chat_message']
+    }
 
-    const out = await listLeadEvents(process.env, leadId, { types, fromTs, limit })
+    const out = await listLeadEvents(process.env, entityId, {
+      types,
+      fromTs,
+      limit,
+      entity,
+      entityId,
+    })
     if (!out.ok) {
       res.status(500).json({
         ok: false,
@@ -476,7 +491,8 @@ app.get('/api/kommo/poll/events', async (req, res) => {
     }, {})
     res.json({
       ok: true,
-      leadId,
+      entity,
+      entityId,
       filter: { types, fromTs, hours },
       total: slim.length,
       typeCounts: counts,
