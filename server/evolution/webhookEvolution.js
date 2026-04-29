@@ -31,7 +31,6 @@ import { sendMessageWithNote } from '../whatsappSender.js'
 import { generateExecutionId, saveExecution } from '../ai/executionTelemetry.js'
 import { rememberWamid, getWamids } from './sessionWamid.js'
 import { startTypingHeartbeat } from '../whatsappTypingHeartbeat.js'
-import { startEvolutionTypingHeartbeat } from '../evolutionTypingHeartbeat.js'
 import { canonicalWhatsAppSessionId, phoneToWhatsAppSessionId } from '../phoneWhatsApp.js'
 import { enqueueCloudInboundPending, matchContactToPending, markCloudBridgeExpectsContact, shouldBufferOrphanContact, clearCloudBridgeContactWindow, bufferOrphanContact } from './cloudInboundPending.js'
 import { recordSyncOutcome, recordBufferWrite, recordAsyncError } from './webhookDiagnostics.js'
@@ -246,15 +245,16 @@ async function flushSessionInner(env, sessionId, opts = {}) {
   const leadIdHint = opts.leadIdHint != null ? Number(opts.leadIdHint) : null
   console.log(`[${executionId}] flush ${sessionId} → "${mensagemCompleta}"`)
 
-  // "Digitando..." começa AQUI, depois do debounce. Caminhos:
-  //   1) Cloud API (read receipt + typing_indicator) com heartbeat —
-  //      precisa do `wamid` (id Meta da mensagem original do cliente).
-  //      Disponível quando o agente recebeu a mensagem via webhook
-  //      Evolution.
-  //   2) Evolution presence (`composing`) com heartbeat refire a cada ~5s
-  //      — caminho usado quando o agente recebe a mensagem via dispatcher
-  //      (modo `dispatcher`), porque o dispatcher não devolve o wamid.
-  //      Funciona em instâncias Baileys com Evolution online.
+  // "Digitando..." começa AQUI, depois do debounce. Caminho único:
+  // Cloud API Meta (read receipt + typing_indicator) com heartbeat —
+  // precisa do `wamid` (id Meta da mensagem original do cliente). Só
+  // disponível quando o agente recebeu via webhook Evolution.
+  //
+  // No modo `dispatcher` o `wamid` não vem no payload do
+  // banco-kommo-dispatcher, então o typing simplesmente não é exibido
+  // (NO-OP silencioso) — o foco é responder rápido. Se um dia o
+  // dispatcher passar a expor o wamid, basta empurrá-lo no
+  // sessionWamid.rememberWamid e o heartbeat já passa a funcionar.
   const wamids = getWamids(sessionId)
   let typingHb = null
   if (wamids.length > 0) {
@@ -264,11 +264,7 @@ async function flushSessionInner(env, sessionId, opts = {}) {
       log: (line) => console.log(`[${executionId}] ${line}`),
     })
   } else {
-    typingHb = startEvolutionTypingHeartbeat(env, sessionId, {
-      intervalMs: 5000,
-      maxDurationMs: 90000,
-      log: (line) => console.log(`[${executionId}] ${line}`),
-    })
+    console.log(`[${executionId}] typing pulado (sem wamid; modo dispatcher)`)
   }
 
   let out = null
