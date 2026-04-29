@@ -436,6 +436,82 @@ app.get('/api/kommo/poll/notes', async (req, res) => {
   }
 })
 
+// ── Resumo do OpenAPI do banco-kommo-dispatcher ──
+//
+// Lista todas as rotas + métodos + summary do FastAPI do dispatcher num formato
+// legível. Use isto antes de probe — descobre o nome correto da rota de mensagens.
+//
+//   GET /api/kommo-dispatcher/openapi-summary
+//   GET /api/kommo-dispatcher/openapi-summary?filter=msg
+app.get('/api/kommo-dispatcher/openapi-summary', async (req, res) => {
+  const upstream = String(
+    process.env.KOMMO_DISPATCHER_URL || 'http://banco-kommo-dispatcher:8000',
+  ).replace(/\/$/, '')
+  const filter = String(req.query.filter || '').trim().toLowerCase()
+  const url = `${upstream}/openapi.json`
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 15000)
+  try {
+    const r = await fetch(url, { signal: ctrl.signal })
+    if (!r.ok) {
+      res.status(502).json({
+        ok: false,
+        upstream,
+        url,
+        httpStatus: r.status,
+        error: 'openapi.json não retornou 200',
+      })
+      return
+    }
+    const spec = await r.json()
+    const info = spec?.info || {}
+    const paths = spec?.paths || {}
+    const routes = []
+    for (const [p, methods] of Object.entries(paths)) {
+      if (!methods || typeof methods !== 'object') continue
+      for (const [method, def] of Object.entries(methods)) {
+        if (!['get', 'post', 'put', 'patch', 'delete'].includes(method.toLowerCase())) continue
+        const m = String(method).toUpperCase()
+        const summary = def?.summary || def?.operationId || ''
+        const params = Array.isArray(def?.parameters)
+          ? def.parameters
+              .map((x) => `${x?.name}${x?.required ? '*' : ''}:${x?.in || '?'}`)
+              .join(',')
+          : ''
+        routes.push({ method: m, path: p, summary, params })
+      }
+    }
+    routes.sort((a, b) => a.path.localeCompare(b.path) || a.method.localeCompare(b.method))
+    const filtered = filter
+      ? routes.filter(
+          (r) =>
+            r.path.toLowerCase().includes(filter) ||
+            (r.summary || '').toLowerCase().includes(filter),
+        )
+      : routes
+    res.json({
+      ok: true,
+      upstream,
+      title: info.title || null,
+      version: info.version || null,
+      filterApplied: filter || null,
+      totalRoutes: routes.length,
+      shown: filtered.length,
+      routes: filtered,
+    })
+  } catch (e) {
+    res.status(502).json({
+      ok: false,
+      upstream,
+      url,
+      error: e.message,
+      cause: e?.cause?.code || e?.code || null,
+    })
+  } finally {
+    clearTimeout(timer)
+  }
+})
+
 // ── Proxy de sondagem para o banco-kommo-dispatcher (rede interna do EasyPanel) ──
 //
 // Usado para descobrir QUAIS endpoints o dispatcher expõe além do
