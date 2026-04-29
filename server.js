@@ -390,6 +390,11 @@ app.get('/api/evolution/health', async (_req, res) => {
       buffer: ping,
       webhookDiagnostics: getWebhookDiagnosticsSnapshot(),
       kommoPoll: getKommoPollSnapshot(),
+      kommoDispatcher: {
+        url: process.env.KOMMO_DISPATCHER_URL || 'http://banco-kommo-dispatcher:8000',
+        configured: Boolean(process.env.KOMMO_DISPATCHER_URL),
+        probeEndpoint: '/api/kommo-dispatcher/probe?path=/api/kommo/dashboard/stats',
+      },
       debounceMs: getDebounceMs(process.env),
       scheduler: {
         running: isSchedulerRunning(),
@@ -428,6 +433,85 @@ app.get('/api/kommo/poll/notes', async (req, res) => {
     res.json({ ok: true, leadId, total: slim.length, notes: slim })
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// ── Proxy de sondagem para o banco-kommo-dispatcher (rede interna do EasyPanel) ──
+//
+// Usado para descobrir QUAIS endpoints o dispatcher expõe além do
+// /api/kommo/dashboard/stats que já conhecemos.
+//
+//   GET /api/kommo-dispatcher/probe?path=/api/kommo/dashboard/stats
+//   GET /api/kommo-dispatcher/probe?path=/api/kommo/messages?since=1777400000
+//   GET /api/kommo-dispatcher/probe?path=/api/kommo/chats
+//
+// Defaults: KOMMO_DISPATCHER_URL=http://banco-kommo-dispatcher:8000
+app.get('/api/kommo-dispatcher/probe', async (req, res) => {
+  const upstream = String(
+    process.env.KOMMO_DISPATCHER_URL || 'http://banco-kommo-dispatcher:8000',
+  ).replace(/\/$/, '')
+  const rawPath = String(req.query.path || '').trim()
+  if (!rawPath || !rawPath.startsWith('/')) {
+    res.status(400).json({
+      ok: false,
+      error: 'path obrigatório (?path=/api/kommo/dashboard/stats)',
+      upstream,
+    })
+    return
+  }
+  const url = `${upstream}${rawPath}`
+  const startMs = Date.now()
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 15000)
+  try {
+    const r = await fetch(url, { signal: ctrl.signal })
+    const elapsedMs = Date.now() - startMs
+    const ct = r.headers.get('content-type') || ''
+    const raw = await r.text()
+    let parsed = null
+    if (ct.includes('json')) {
+      try { parsed = JSON.parse(raw) } catch { parsed = null }
+    }
+    const summary = parsed && typeof parsed === 'object'
+      ? Object.fromEntries(
+          Object.entries(parsed).map(([k, v]) => {
+            if (Array.isArray(v)) return [k, `array[${v.length}]`]
+            if (v && typeof v === 'object') return [k, `object{${Object.keys(v).slice(0, 8).join(',')}}`]
+            return [k, typeof v]
+          }),
+        )
+      : null
+    res.json({
+      ok: r.ok,
+      httpStatus: r.status,
+      elapsedMs,
+      upstream,
+      url,
+      contentType: ct,
+      shape: summary,
+      json: parsed,
+      textPreview: parsed ? null : raw.slice(0, 1500),
+    })
+  } catch (e) {
+    const cause = e?.cause?.code || e?.code || ''
+    let hint
+    if (cause === 'ENOTFOUND') {
+      hint = `DNS falhou para ${upstream}. Confirme o nome do servico no EasyPanel ou seta KOMMO_DISPATCHER_URL com a URL correta.`
+    } else if (cause === 'ECONNREFUSED') {
+      hint = `${upstream} recusou conexao — servico desligado ou em outra porta.`
+    } else if (e.name === 'AbortError') {
+      hint = `Timeout de 15s atingido em ${url}.`
+    }
+    res.status(502).json({
+      ok: false,
+      upstream,
+      url,
+      error: e.message,
+      cause,
+      hint,
+    })
+  } finally {
+    clearTimeout(timer)
   }
 })
 
