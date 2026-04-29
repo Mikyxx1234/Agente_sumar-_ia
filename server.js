@@ -18,6 +18,7 @@ import { recordWebhookIngress, getWebhookDiagnosticsSnapshot } from './server/ev
 import { getKommoPollSnapshot } from './server/kommoInboundDiagnostics.js'
 import { listLeadNotes, listLeadEvents } from './server/kommoClient.js'
 import { getMessagesByLead as dispatcherGetMessagesByLead } from './server/kommoDispatcherClient.js'
+import { sendTyping } from './server/evolution/typingIndicator.js'
 import { pingBackend, pushMessage, getMessages, clearMessages } from './server/evolution/messageBuffer.js'
 import { getDebounceMs } from './server/evolution/debouncer.js'
 import { runAgent } from './server/ai/agentRunner.js'
@@ -747,6 +748,48 @@ app.get('/api/kommo/poll/dispatcher', async (req, res) => {
     res.status(500).json({ ok: false, error: e.message })
   }
 })
+
+// Testa o "digitando..." (Evolution presence) num número específico.
+// Útil para validar que a instância Evolution está online e aceitando
+// presence. Não exige webhook — chama POST /chat/sendPresence direto.
+//
+//   GET  /api/evolution/typing-test?to=5511945722117&presence=composing&delayMs=8000
+//   POST /api/evolution/typing-test   body { to, presence?, delayMs? }
+async function handleTypingTest(req, res) {
+  try {
+    const src = req.method === 'POST' ? { ...(req.body || {}), ...req.query } : req.query
+    const to = String(src.to || '').trim()
+    if (!to) {
+      res.status(400).json({ ok: false, error: 'to é obrigatório (?to=5511XXXXXXXXX ou JID)' })
+      return
+    }
+    const presence = String(src.presence || 'composing').toLowerCase()
+    const delayMs = Number(src.delayMs)
+    const r = await sendTyping(process.env, {
+      jid: to,
+      presence,
+      delayMs: Number.isFinite(delayMs) && delayMs >= 0 ? delayMs : undefined,
+    })
+    if (!r.ok) {
+      res.status(r.code === 'EVOLUTION_NOT_CONFIGURED' ? 503 : 502).json({
+        ok: false,
+        code: r.code,
+        status: r.status || null,
+        error: r.error,
+        hint:
+          r.code === 'EVOLUTION_NOT_CONFIGURED'
+            ? 'Defina EVOLUTION_API_URL, EVOLUTION_API_KEY e EVOLUTION_INSTANCE no .env.'
+            : 'Verifique se a instância está conectada (Connected) na Evolution e se o número está em formato internacional sem +.',
+      })
+      return
+    }
+    res.json({ ok: true, status: r.status, data: r.data, presence, to, delayMs: delayMs || null })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+}
+app.get('/api/evolution/typing-test', handleTypingTest)
+app.post('/api/evolution/typing-test', handleTypingTest)
 
 // Dispara um tick do scheduler imediatamente (útil para teste).
 app.post('/api/scheduler/tick', async (_req, res) => {

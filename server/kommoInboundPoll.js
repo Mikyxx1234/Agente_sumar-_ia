@@ -27,6 +27,7 @@ import {
 } from './kommoClient.js'
 import { fetchAmojoChatHistory } from './kommoAmojoHistory.js'
 import { getMessagesByLead as dispatcherGetMessagesByLead } from './kommoDispatcherClient.js'
+import { fireTyping } from './evolution/typingIndicator.js'
 import { digitsToWhatsAppLocalPart } from './phoneWhatsApp.js'
 import {
   recordNotesTick,
@@ -724,6 +725,11 @@ async function pollDispatcher(env, leadId, sessionId) {
     console.log(
       `[kommo-poll][dispatcher] buffer +${pushed} lead=${lid} session=${sessionId} (mensagens vistas=${messages.length})`,
     )
+    // Mostra "digitando..." pro cliente JÁ que a mensagem entrou no buffer.
+    // Cobre todo o debounce + IA + envio (até ~25s no cliente WhatsApp).
+    // Evolution presence é fire-and-forget; se EVOLUTION_* não estiver
+    // configurado, vira NO-OP silencioso.
+    fireTyping(env, { jid: sessionId, delayMs: 25000 }, `kommo-poll/dispatcher lead=${lid}`)
   } else if (fresh.length > 0) {
     console.log(
       `[kommo-poll][dispatcher] sem inbound novo lead=${lid} fresh=${fresh.length} stats=${JSON.stringify(stats)}`,

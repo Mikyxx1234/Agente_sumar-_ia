@@ -29,9 +29,9 @@ import { seenMessage, withSessionLock } from './concurrency.js'
 import { findLeadByPhone } from '../kommoClient.js'
 import { sendMessageWithNote } from '../whatsappSender.js'
 import { generateExecutionId, saveExecution } from '../ai/executionTelemetry.js'
-import { fireTyping } from './typingIndicator.js'
 import { rememberWamid, getWamids } from './sessionWamid.js'
 import { startTypingHeartbeat } from '../whatsappTypingHeartbeat.js'
+import { startEvolutionTypingHeartbeat } from '../evolutionTypingHeartbeat.js'
 import { canonicalWhatsAppSessionId, phoneToWhatsAppSessionId } from '../phoneWhatsApp.js'
 import { enqueueCloudInboundPending, matchContactToPending, markCloudBridgeExpectsContact, shouldBufferOrphanContact, clearCloudBridgeContactWindow, bufferOrphanContact } from './cloudInboundPending.js'
 import { recordSyncOutcome, recordBufferWrite, recordAsyncError } from './webhookDiagnostics.js'
@@ -246,12 +246,15 @@ async function flushSessionInner(env, sessionId, opts = {}) {
   const leadIdHint = opts.leadIdHint != null ? Number(opts.leadIdHint) : null
   console.log(`[${executionId}] flush ${sessionId} → "${mensagemCompleta}"`)
 
-  // "Digitando..." começa AQUI, depois do debounce. Caminho preferido =
-  // Cloud API (read receipt + typing_indicator) com heartbeat: a gente
-  // pinga read+typing a cada ~4s ciclando entre os wamids recentes da
-  // sessão pra manter a animação visível enquanto a IA processa. Quando
-  // o sendMessageWithNote começa, paramos o heartbeat.
-  // Fallback = Evolution presence (só funciona em instâncias Baileys).
+  // "Digitando..." começa AQUI, depois do debounce. Caminhos:
+  //   1) Cloud API (read receipt + typing_indicator) com heartbeat —
+  //      precisa do `wamid` (id Meta da mensagem original do cliente).
+  //      Disponível quando o agente recebeu a mensagem via webhook
+  //      Evolution.
+  //   2) Evolution presence (`composing`) com heartbeat refire a cada ~5s
+  //      — caminho usado quando o agente recebe a mensagem via dispatcher
+  //      (modo `dispatcher`), porque o dispatcher não devolve o wamid.
+  //      Funciona em instâncias Baileys com Evolution online.
   const wamids = getWamids(sessionId)
   let typingHb = null
   if (wamids.length > 0) {
@@ -261,7 +264,11 @@ async function flushSessionInner(env, sessionId, opts = {}) {
       log: (line) => console.log(`[${executionId}] ${line}`),
     })
   } else {
-    fireTyping(env, { jid: sessionId, delayMs: 8000 }, executionId)
+    typingHb = startEvolutionTypingHeartbeat(env, sessionId, {
+      intervalMs: 5000,
+      maxDurationMs: 90000,
+      log: (line) => console.log(`[${executionId}] ${line}`),
+    })
   }
 
   let out = null
