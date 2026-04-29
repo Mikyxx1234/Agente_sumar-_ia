@@ -770,19 +770,34 @@ async function handleTypingTest(req, res) {
       delayMs: Number.isFinite(delayMs) && delayMs >= 0 ? delayMs : undefined,
     })
     if (!r.ok) {
+      const hintByCode = {
+        EVOLUTION_NOT_CONFIGURED: 'Defina EVOLUTION_API_URL, EVOLUTION_API_KEY e EVOLUTION_INSTANCE no .env.',
+        EVOLUTION_TIMEOUT: 'A Evolution não respondeu em 8s. Verifique se EVOLUTION_API_URL está acessível do container do agente (testa com /api/evolution/typing-test ou ping interno).',
+        EVOLUTION_FETCH_FAILED: 'Falha de rede chamando a Evolution. Cheque se EVOLUTION_API_URL está correta (sem barra final, com https://) e se o serviço Evolution está rodando.',
+        EVOLUTION_PRESENCE_FAILED: 'A Evolution recebeu mas rejeitou o request. 401=apikey errada, 404=instance errada, 400=number/payload errado.',
+      }
       res.status(r.code === 'EVOLUTION_NOT_CONFIGURED' ? 503 : 502).json({
         ok: false,
         code: r.code,
         status: r.status || null,
         error: r.error,
-        hint:
-          r.code === 'EVOLUTION_NOT_CONFIGURED'
-            ? 'Defina EVOLUTION_API_URL, EVOLUTION_API_KEY e EVOLUTION_INSTANCE no .env.'
-            : 'Verifique se a instância está conectada (Connected) na Evolution e se o número está em formato internacional sem +.',
+        cause: r.cause || null,
+        requestUrl: r.requestUrl || null,
+        elapsedMs: r.elapsedMs ?? null,
+        hint: hintByCode[r.code] || null,
       })
       return
     }
-    res.json({ ok: true, status: r.status, data: r.data, presence, to, delayMs: delayMs || null })
+    res.json({
+      ok: true,
+      status: r.status,
+      data: r.data,
+      presence,
+      to,
+      delayMs: delayMs || null,
+      requestUrl: r.requestUrl || null,
+      elapsedMs: r.elapsedMs ?? null,
+    })
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })
   }

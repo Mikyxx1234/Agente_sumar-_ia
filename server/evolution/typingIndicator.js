@@ -53,25 +53,53 @@ export async function sendTyping(env, { jid, presence = 'composing', delayMs } =
 
   const number = String(jid).includes('@') ? String(jid) : `${String(jid).replace(/[^0-9]/g, '')}@s.whatsapp.net`
   const delay = Number.isFinite(delayMs) && delayMs >= 0 ? Math.floor(delayMs) : cfg.defaultDelay
+  const url = `${cfg.url}/chat/sendPresence/${encodeURIComponent(cfg.instance)}`
 
+  // Timeout duro de 8s. Sem isso, se a Evolution travar, o handler HTTP
+  // que nos chamou fica pendurado até o proxy do EasyPanel matar a
+  // conexão (30s+) e o usuário vê "Service is not reachable", o que
+  // confunde o diagnóstico.
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 8000)
+  const startMs = Date.now()
   try {
-    const res = await fetch(`${cfg.url}/chat/sendPresence/${encodeURIComponent(cfg.instance)}`, {
+    const res = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         apikey: cfg.apiKey,
       },
       body: JSON.stringify({ number, delay, presence }),
+      signal: ctrl.signal,
     })
+    const elapsedMs = Date.now() - startMs
     const raw = await res.text()
     let data = null
     try { data = raw ? JSON.parse(raw) : null } catch { data = raw }
     if (!res.ok) {
-      return { ok: false, status: res.status, code: 'EVOLUTION_PRESENCE_FAILED', error: typeof raw === 'string' ? raw.slice(0, 400) : '' }
+      return {
+        ok: false,
+        status: res.status,
+        code: 'EVOLUTION_PRESENCE_FAILED',
+        error: typeof raw === 'string' ? raw.slice(0, 400) : '',
+        requestUrl: url,
+        elapsedMs,
+      }
     }
-    return { ok: true, status: res.status, data }
+    return { ok: true, status: res.status, data, requestUrl: url, elapsedMs }
   } catch (e) {
-    return { ok: false, code: 'EVOLUTION_FETCH_FAILED', error: e.message }
+    const elapsedMs = Date.now() - startMs
+    const aborted = e?.name === 'AbortError'
+    return {
+      ok: false,
+      code: aborted ? 'EVOLUTION_TIMEOUT' : 'EVOLUTION_FETCH_FAILED',
+      error: aborted ? `timeout após ${elapsedMs}ms` : e.message,
+      cause: e?.cause?.code || e?.code || null,
+      requestUrl: url,
+      elapsedMs,
+    }
+  } finally {
+    clearTimeout(timer)
   }
 }
 
