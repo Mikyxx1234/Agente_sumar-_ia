@@ -518,8 +518,11 @@ app.get('/api/kommo-dispatcher/openapi-summary', async (req, res) => {
 // /api/kommo/dashboard/stats que já conhecemos.
 //
 //   GET /api/kommo-dispatcher/probe?path=/api/kommo/dashboard/stats
-//   GET /api/kommo-dispatcher/probe?path=/api/kommo/messages?since=1777400000
-//   GET /api/kommo-dispatcher/probe?path=/api/kommo/chats
+//   GET /api/kommo-dispatcher/probe?path=/api/kommo/messages/by-lead/19884275&limit=10&order=desc
+//   GET /api/kommo-dispatcher/probe?path=/api/kommo/messages/sync/19884275&method=POST
+//
+// Toda query param diferente de `path` e `method` é encaminhada para a rota
+// upstream. `method` (default GET) permite testar POST/PUT/DELETE.
 //
 // Defaults: KOMMO_DISPATCHER_URL=http://banco-kommo-dispatcher:8000
 app.get('/api/kommo-dispatcher/probe', async (req, res) => {
@@ -535,12 +538,29 @@ app.get('/api/kommo-dispatcher/probe', async (req, res) => {
     })
     return
   }
-  const url = `${upstream}${rawPath}`
+  // Encaminha automaticamente todas as outras query params para a rota upstream.
+  // Ex.: /probe?path=/api/kommo/messages/by-lead/123&limit=10&order=desc  →
+  //       http://dispatcher/api/kommo/messages/by-lead/123?limit=10&order=desc
+  const extraEntries = Object.entries(req.query).filter(([k]) => k !== 'path' && k !== 'method')
+  let pathWithQuery = rawPath
+  if (extraEntries.length > 0) {
+    const sep = rawPath.includes('?') ? '&' : '?'
+    const qs = extraEntries
+      .flatMap(([k, v]) =>
+        Array.isArray(v)
+          ? v.map((vv) => `${encodeURIComponent(k)}=${encodeURIComponent(String(vv))}`)
+          : [`${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`],
+      )
+      .join('&')
+    pathWithQuery = `${rawPath}${sep}${qs}`
+  }
+  const method = String(req.query.method || 'GET').toUpperCase()
+  const url = `${upstream}${pathWithQuery}`
   const startMs = Date.now()
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), 15000)
   try {
-    const r = await fetch(url, { signal: ctrl.signal })
+    const r = await fetch(url, { method, signal: ctrl.signal })
     const elapsedMs = Date.now() - startMs
     const ct = r.headers.get('content-type') || ''
     const raw = await r.text()
