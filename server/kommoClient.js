@@ -253,3 +253,64 @@ export async function getTalkById(env, talkId) {
   }
   return { ok: true, talk: r.data }
 }
+
+/**
+ * Lista eventos do log do Kommo associados a um lead.
+ *
+ * Útil para capturar mensagens recebidas (`incoming_chat_message`) sem depender
+ * de notas — a maioria das integrações de WhatsApp/Chats API publica esses
+ * eventos no log nativo do Kommo, mesmo quando não cria uma nota visível.
+ *
+ * Endpoint: GET /api/v4/events
+ * Filtros suportados:
+ *   - filter[type][n]=<event_type>  (incoming_chat_message, outgoing_chat_message, ...)
+ *   - filter[entity]=lead
+ *   - filter[entity_id][0]=<leadId>
+ *   - filter[created_at][from]=<unix_seconds>
+ *   - with=value_after,value_before  (necessário para vir o texto da mensagem)
+ *
+ * @param {Record<string,string>} env
+ * @param {number|string} leadId
+ * @param {{ types?: string[], fromTs?: number, limit?: number }} [opts]
+ * @returns {Promise<{ ok: boolean, events: any[], status?: number, error?: string, requestUrl?: string }>}
+ */
+export async function listLeadEvents(env, leadId, opts = {}) {
+  const lid = Number(leadId)
+  if (!Number.isFinite(lid) || lid <= 0) {
+    return { ok: false, code: 'MISSING_LEAD_ID', error: 'leadId inválido', events: [] }
+  }
+  const types =
+    Array.isArray(opts.types) && opts.types.length > 0
+      ? opts.types.map((t) => String(t).trim().toLowerCase()).filter(Boolean)
+      : ['incoming_chat_message']
+  const limit = Math.min(250, Math.max(1, Number(opts.limit) || 50))
+  const fromTs = Number(opts.fromTs) > 0 ? Math.floor(Number(opts.fromTs)) : 0
+
+  const params = []
+  types.forEach((t, i) => {
+    params.push(`filter[type][${i}]=${encodeURIComponent(t)}`)
+  })
+  params.push(`filter[entity]=lead`)
+  params.push(`filter[entity_id][0]=${lid}`)
+  if (fromTs > 0) {
+    params.push(`filter[created_at][from]=${fromTs}`)
+  }
+  params.push(`limit=${limit}`)
+  params.push(`with=value_after,value_before`)
+
+  const path = `/api/v4/events?${params.join('&')}`
+  const r = await kommoFetch(env, path)
+  if (!r.ok) {
+    if (r.status === 204) return { ok: true, events: [], status: 204, requestUrl: path }
+    return {
+      ok: false,
+      code: r.code || 'KOMMO_ERROR',
+      status: r.status,
+      error: summarizeError(r),
+      events: [],
+      requestUrl: path,
+    }
+  }
+  const events = r.data?._embedded?.events || []
+  return { ok: true, events, status: r.status, requestUrl: path }
+}

@@ -16,7 +16,7 @@ import { sendTyping } from './server/evolution/typingIndicator.js'
 import { makeEvolutionWebhookHandler } from './server/evolution/webhookEvolution.js'
 import { recordWebhookIngress, getWebhookDiagnosticsSnapshot } from './server/evolution/webhookDiagnostics.js'
 import { getKommoPollSnapshot } from './server/kommoInboundDiagnostics.js'
-import { listLeadNotes } from './server/kommoClient.js'
+import { listLeadNotes, listLeadEvents } from './server/kommoClient.js'
 import { pingBackend, pushMessage, getMessages, clearMessages } from './server/evolution/messageBuffer.js'
 import { getDebounceMs } from './server/evolution/debouncer.js'
 import { runAgent } from './server/ai/agentRunner.js'
@@ -426,6 +426,63 @@ app.get('/api/kommo/poll/notes', async (req, res) => {
       params: n.params,
     }))
     res.json({ ok: true, leadId, total: slim.length, notes: slim })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// Inspeção do poll Kommo (events): lista eventos brutos do log para um lead.
+// Útil para descobrir se a integração de WhatsApp emite incoming_chat_message.
+//   GET /api/kommo/poll/events?leadId=19884275&limit=50&hours=48
+//   GET /api/kommo/poll/events?leadId=19884275&types=incoming_chat_message,outgoing_chat_message
+app.get('/api/kommo/poll/events', async (req, res) => {
+  try {
+    const leadId = Number(req.query.leadId)
+    if (!Number.isFinite(leadId) || leadId <= 0) {
+      res.status(400).json({ ok: false, error: 'leadId é obrigatório (?leadId=...)' })
+      return
+    }
+    const limit = Math.min(250, Math.max(1, Number(req.query.limit) || 50))
+    const hours = Math.max(0, Number(req.query.hours) || 0)
+    const fromTs = hours > 0 ? Math.floor(Date.now() / 1000) - hours * 3600 : 0
+    const typesParam = String(req.query.types || '').trim()
+    const types = typesParam
+      ? typesParam.split(/[,\s]+/).filter(Boolean)
+      : ['incoming_chat_message', 'outgoing_chat_message']
+
+    const out = await listLeadEvents(process.env, leadId, { types, fromTs, limit })
+    if (!out.ok) {
+      res.status(500).json({
+        ok: false,
+        error: out.error || out.status,
+        status: out.status || null,
+        requestUrl: out.requestUrl || null,
+      })
+      return
+    }
+    const slim = (out.events || []).map((e) => ({
+      id: e.id,
+      type: e.type,
+      entity_id: e.entity_id,
+      entity_type: e.entity_type,
+      created_at: e.created_at,
+      created_by: e.created_by,
+      value_after: e.value_after ?? null,
+    }))
+    const counts = slim.reduce((acc, e) => {
+      const t = String(e.type || 'unknown').toLowerCase()
+      acc[t] = (acc[t] || 0) + 1
+      return acc
+    }, {})
+    res.json({
+      ok: true,
+      leadId,
+      filter: { types, fromTs, hours },
+      total: slim.length,
+      typeCounts: counts,
+      requestUrl: out.requestUrl || null,
+      events: slim,
+    })
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })
   }

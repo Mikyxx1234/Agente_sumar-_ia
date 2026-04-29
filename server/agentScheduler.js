@@ -41,7 +41,7 @@ import { getMessages, getLastTouchedAt } from './evolution/messageBuffer.js'
 import { flushSession } from './evolution/webhookEvolution.js'
 import { formatSchedulerDiagnosticLine } from './evolution/webhookDiagnostics.js'
 import { syncKommoInboundToBuffer, isKommoInboundPollEnabled } from './kommoInboundPoll.js'
-import { formatPollDiagLine } from './kommoInboundDiagnostics.js'
+import { formatPollDiagLine, formatEventsDiagLine } from './kommoInboundDiagnostics.js'
 
 const DEFAULT_INTERVAL_SEC = 30
 const DEFAULT_DEBOUNCE_SEC = 15
@@ -160,11 +160,21 @@ export async function runSchedulerTick(env) {
         stats.skippedNoMessages += 1
         if (whitelist) {
           const pollOn = isKommoInboundPollEnabled(env)
+          const mode = String(env.KOMMO_INBOUND_POLL_MODE || 'notes').trim().toLowerCase()
           console.log(
-            `[scheduler] buffer vazio session=${sessionId} lead=${lead.id} — sem inbound novo neste tick.`,
+            `[scheduler] buffer vazio session=${sessionId} lead=${lead.id} mode=${pollOn ? mode : 'webhook'} — sem inbound novo neste tick.`,
           )
           if (pollOn) {
-            console.log(formatPollDiagLine(lead.id))
+            if (mode === 'events') {
+              console.log(formatEventsDiagLine(lead.id))
+            } else if (mode === 'both' || mode === 'all') {
+              console.log(formatPollDiagLine(lead.id))
+              console.log(formatEventsDiagLine(lead.id))
+            } else if (mode === 'amojo') {
+              console.log(`[poll-kommo][diag] lead=${lead.id} mode=amojo — verifique KOMMO_CHANNEL_SECRET / SCOPE_ID / chat_id`)
+            } else {
+              console.log(formatPollDiagLine(lead.id))
+            }
           } else {
             console.log(formatSchedulerDiagnosticLine())
           }

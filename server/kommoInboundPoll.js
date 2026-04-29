@@ -3,23 +3,39 @@
  *
  * Modos (KOMMO_INBOUND_POLL_MODE):
  *   - notes (default): GET /api/v4/leads/{id}/notes — só Bearer KOMMO_*.
+ *   - events: GET /api/v4/events?filter[type]=incoming_chat_message — só Bearer KOMMO_*
+ *     (mais robusto, pega mensagem mesmo quando não vira nota).
  *   - amojo: histórico Amojo — precisa KOMMO_CHANNEL_SECRET + KOMMO_CHANNEL_SCOPE_ID + chat_id
  *     (via KOMMO_LEAD_CHAT_MAP JSON ou descoberta de /api/v4/talks).
+ *   - both: roda notes + events (ambos filtrados por dedupe; útil quando você não sabe qual
+ *     fonte sua integração usa).
+ *   - all: notes + events + amojo (Amojo só roda se as envs estiverem setadas).
  *
  * Warmup: no primeiro tick por lead, grava o cursor no último item existente e não empurra
  * mensagens antigas (evita reprocessar histórico inteiro após deploy).
  */
 
 import { pushMessage } from './evolution/messageBuffer.js'
-import { listLeadNotes, tryListTalksForLead, getTalkById } from './kommoClient.js'
+import {
+  listLeadNotes,
+  listLeadEvents,
+  tryListTalksForLead,
+  getTalkById,
+} from './kommoClient.js'
 import { fetchAmojoChatHistory } from './kommoAmojoHistory.js'
 import { digitsToWhatsAppLocalPart } from './phoneWhatsApp.js'
-import { recordNotesTick, recordAmojoTick } from './kommoInboundDiagnostics.js'
+import {
+  recordNotesTick,
+  recordAmojoTick,
+  recordEventsTick,
+} from './kommoInboundDiagnostics.js'
 
 /** @type {Map<number, { warmed: boolean, lastNoteId: number }>} */
 const noteState = new Map()
 /** @type {Map<number, { warmed: boolean, lastMsec: number }>} */
 const amojoState = new Map()
+/** @type {Map<number, { warmed: boolean, lastSeenAt: number, seenIds: Set<string> }>} */
+const eventState = new Map()
 
 export function isKommoInboundPollEnabled(env) {
   const f = String(env.KOMMO_INBOUND_POLL_ENABLED || '').trim().toLowerCase()
@@ -274,6 +290,249 @@ async function pollNotes(env, leadId, sessionId, contactDigits) {
   return pushed
 }
 
+function parseEventTypes(env) {
+  const raw = String(env.KOMMO_INBOUND_POLL_EVENT_TYPES || 'incoming_chat_message').trim()
+  return raw
+    .split(/[,\s]+/)
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean)
+}
+
+function countEventTypes(events) {
+  const out = {}
+  for (const e of events) {
+    const t = String(e?.type || 'unknown').toLowerCase()
+    out[t] = (out[t] || 0) + 1
+  }
+  return out
+}
+
+/**
+ * Extrai o texto da mensagem do `value_after` do evento. O Kommo retorna esse
+ * campo em formatos diferentes dependendo da integração:
+ *   - array: [{ message: { id, text } }]
+ *   - objeto: { message: { id, text } }
+ *   - às vezes: { note: { text } } ou { text: '...' }
+ */
+function extractEventMessage(ev) {
+  const raw = ev?.value_after
+  const candidates = []
+  if (Array.isArray(raw)) {
+    for (const item of raw) candidates.push(item)
+  } else if (raw && typeof raw === 'object') {
+    candidates.push(raw)
+  }
+  for (const c of candidates) {
+    if (!c || typeof c !== 'object') continue
+    const m = c.message || c.note || c
+    const text = m?.text ?? m?.body ?? c.text
+    const messageId = m?.id ?? c?.id ?? null
+    if (text != null && String(text).trim()) {
+      return { text: String(text).trim(), messageId: messageId ? String(messageId) : null }
+    }
+  }
+  return { text: '', messageId: null }
+}
+
+const INCOMING_EVENT_TYPES = new Set([
+  'incoming_chat_message',
+  'incoming_message',
+])
+const OUTGOING_EVENT_TYPES = new Set([
+  'outgoing_chat_message',
+  'outgoing_message',
+])
+
+async function pollEvents(env, leadId, sessionId) {
+  const lid = Number(leadId)
+  const types = parseEventTypes(env)
+  let st = eventState.get(lid) || {
+    warmed: false,
+    lastSeenAt: 0,
+    seenIds: new Set(),
+  }
+
+  const fromTs = st.warmed && st.lastSeenAt > 0 ? st.lastSeenAt : 0
+  const list = await listLeadEvents(env, lid, { types, fromTs, limit: 50 })
+
+  if (!list.ok) {
+    const errMsg = String(list.error || list.status || 'unknown')
+    console.warn(
+      `[kommo-poll][events] lead=${lid} api ERRO: ${errMsg} url=${list.requestUrl || 'n/a'}`,
+    )
+    recordEventsTick({
+      leadId: lid,
+      sessionId,
+      warmedUp: st.warmed,
+      eventsTotal: 0,
+      typeCounts: {},
+      freshCount: 0,
+      pushedCount: 0,
+      filteredEmpty: 0,
+      filteredOutbound: 0,
+      filteredOtherType: 0,
+      lastSeenAt: st.lastSeenAt,
+      pollMode: 'events',
+      requestUrl: list.requestUrl || null,
+      error: errMsg,
+      httpStatus: list.status || null,
+    })
+    return 0
+  }
+
+  const events = list.events || []
+  const typeCounts = countEventTypes(events)
+
+  if (!st.warmed) {
+    const maxAt = events.reduce((m, e) => Math.max(m, Number(e.created_at) || 0), 0)
+    const seedAt = maxAt > 0 ? maxAt : Math.floor(Date.now() / 1000)
+    eventState.set(lid, {
+      warmed: true,
+      lastSeenAt: seedAt,
+      seenIds: new Set(events.map((e) => String(e.id)).filter(Boolean)),
+    })
+    console.log(
+      `[kommo-poll][events] warmup lead=${lid} session=${sessionId} lastSeenAt=${seedAt} eventos=${events.length} tipos=${JSON.stringify(typeCounts)} url=${list.requestUrl || 'n/a'}`,
+    )
+    recordEventsTick({
+      leadId: lid,
+      sessionId,
+      warmedUp: false,
+      eventsTotal: events.length,
+      typeCounts,
+      freshCount: 0,
+      pushedCount: 0,
+      filteredEmpty: 0,
+      filteredOutbound: 0,
+      filteredOtherType: 0,
+      lastSeenAt: seedAt,
+      pollMode: 'events',
+      requestUrl: list.requestUrl || null,
+      httpStatus: list.status || null,
+    })
+    return 0
+  }
+
+  const fresh = events.filter((e) => {
+    const at = Number(e?.created_at) || 0
+    if (at < st.lastSeenAt) return false
+    const id = e?.id != null ? String(e.id) : ''
+    if (id && st.seenIds.has(id)) return false
+    return true
+  })
+
+  const asc = [...fresh].sort(
+    (a, b) => (Number(a?.created_at) || 0) - (Number(b?.created_at) || 0),
+  )
+
+  let pushed = 0
+  let maxAt = st.lastSeenAt
+  let filteredEmpty = 0
+  let filteredOutbound = 0
+  let filteredOtherType = 0
+
+  for (const ev of asc) {
+    const at = Number(ev?.created_at) || 0
+    const t = String(ev?.type || '').toLowerCase()
+    const evId = ev?.id != null ? String(ev.id) : ''
+
+    if (OUTGOING_EVENT_TYPES.has(t)) {
+      filteredOutbound += 1
+      if (evId) st.seenIds.add(evId)
+      maxAt = Math.max(maxAt, at)
+      continue
+    }
+
+    if (!INCOMING_EVENT_TYPES.has(t)) {
+      filteredOtherType += 1
+      if (evId) st.seenIds.add(evId)
+      maxAt = Math.max(maxAt, at)
+      continue
+    }
+
+    const { text, messageId } = extractEventMessage(ev)
+    if (!text) {
+      filteredEmpty += 1
+      if (evId) st.seenIds.add(evId)
+      maxAt = Math.max(maxAt, at)
+      console.log(
+        `[kommo-poll][events] sem_texto lead=${lid} eventId=${evId} type=${t} createdAt=${at} value_after_keys=${
+          ev?.value_after ? JSON.stringify(Object.keys(ev.value_after)) : 'null'
+        }`,
+      )
+      continue
+    }
+
+    if (isAgentOutboundEcho(text)) {
+      filteredOutbound += 1
+      if (evId) st.seenIds.add(evId)
+      maxAt = Math.max(maxAt, at)
+      continue
+    }
+
+    const cleaned = stripExecutionSuffix(text)
+    if (!cleaned) {
+      filteredEmpty += 1
+      if (evId) st.seenIds.add(evId)
+      maxAt = Math.max(maxAt, at)
+      continue
+    }
+
+    try {
+      await pushMessage(env, sessionId, cleaned)
+      pushed += 1
+      if (evId) st.seenIds.add(evId)
+      maxAt = Math.max(maxAt, at)
+      console.log(
+        `[kommo-poll][events] +1 lead=${lid} session=${sessionId} eventId=${evId} msgId=${messageId || 'n/a'} createdAt=${at} text="${cleaned.slice(0, 80)}"`,
+      )
+    } catch (err) {
+      console.error(
+        `[kommo-poll][events] pushMessage falhou lead=${lid} eventId=${evId}: ${err.message}`,
+      )
+    }
+  }
+
+  if (st.seenIds.size > 200) {
+    const arr = [...st.seenIds]
+    st.seenIds = new Set(arr.slice(-100))
+  }
+
+  eventState.set(lid, {
+    warmed: true,
+    lastSeenAt: Math.max(st.lastSeenAt, maxAt),
+    seenIds: st.seenIds,
+  })
+
+  if (pushed > 0) {
+    console.log(
+      `[kommo-poll][events] buffer +${pushed} lead=${lid} session=${sessionId} (eventos vistos=${events.length})`,
+    )
+  } else if (fresh.length > 0) {
+    console.log(
+      `[kommo-poll][events] sem inbound novo lead=${lid} fresh=${fresh.length} tipos=${JSON.stringify(typeCounts)} filtroAtivo=${types.join('|')}`,
+    )
+  }
+
+  recordEventsTick({
+    leadId: lid,
+    sessionId,
+    warmedUp: true,
+    eventsTotal: events.length,
+    typeCounts,
+    freshCount: fresh.length,
+    pushedCount: pushed,
+    filteredEmpty,
+    filteredOutbound,
+    filteredOtherType,
+    lastSeenAt: Math.max(st.lastSeenAt, maxAt),
+    pollMode: 'events',
+    requestUrl: list.requestUrl || null,
+    httpStatus: list.status || null,
+  })
+  return pushed
+}
+
 async function pollAmojo(env, leadId, sessionId, contactDigits) {
   if (!amojoConfigured(env)) return 0
   const lid = Number(leadId)
@@ -347,26 +606,58 @@ async function pollAmojo(env, leadId, sessionId, contactDigits) {
 /**
  * @param {Record<string,string>} env
  * @param {{ leadId: number, sessionId: string, phone: string }} p
- * @returns { Promise<{ pushed: number }> }
+ * @returns { Promise<{ pushed: number, byMode: Record<string, number> }> }
  */
 export async function syncKommoInboundToBuffer(env, { leadId, sessionId, phone }) {
-  if (!pollEnabled(env)) return { pushed: 0 }
+  if (!pollEnabled(env)) return { pushed: 0, byMode: {} }
   const mode = pollMode(env)
   const contactDigits = normalizeDigits(phone)
+  const byMode = {}
   let pushed = 0
+
+  const runNotes = async () => {
+    const n = await pollNotes(env, leadId, sessionId, contactDigits)
+    byMode.notes = n
+    pushed += n
+  }
+  const runEvents = async () => {
+    const n = await pollEvents(env, leadId, sessionId)
+    byMode.events = n
+    pushed += n
+  }
+  const runAmojo = async () => {
+    if (!amojoConfigured(env)) {
+      byMode.amojo = 0
+      return
+    }
+    const n = await pollAmojo(env, leadId, sessionId, contactDigits)
+    byMode.amojo = n
+    pushed += n
+  }
+
   if (mode === 'amojo') {
     if (!amojoConfigured(env)) {
       console.warn('[kommo-poll] mode=amojo mas faltam KOMMO_CHANNEL_SECRET / KOMMO_CHANNEL_SCOPE_ID')
-      return { pushed: 0 }
+      return { pushed: 0, byMode }
     }
-    pushed += await pollAmojo(env, leadId, sessionId, contactDigits)
-    return { pushed }
+    await runAmojo()
+    return { pushed, byMode }
+  }
+  if (mode === 'events') {
+    await runEvents()
+    return { pushed, byMode }
   }
   if (mode === 'both') {
-    pushed += await pollNotes(env, leadId, sessionId, contactDigits)
-    pushed += await pollAmojo(env, leadId, sessionId, contactDigits)
-    return { pushed }
+    await runNotes()
+    await runEvents()
+    return { pushed, byMode }
   }
-  pushed += await pollNotes(env, leadId, sessionId, contactDigits)
-  return { pushed }
+  if (mode === 'all') {
+    await runNotes()
+    await runEvents()
+    await runAmojo()
+    return { pushed, byMode }
+  }
+  await runNotes()
+  return { pushed, byMode }
 }
