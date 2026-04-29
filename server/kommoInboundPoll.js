@@ -455,10 +455,21 @@ async function pollEvents(env, leadId, sessionId) {
       filteredEmpty += 1
       if (evId) st.seenIds.add(evId)
       maxAt = Math.max(maxAt, at)
+      const vaShape = Array.isArray(ev?.value_after)
+        ? `array[${ev.value_after.length}]`
+        : ev?.value_after && typeof ev.value_after === 'object'
+          ? `object{${Object.keys(ev.value_after).join(',')}}`
+          : ev?.value_after === null
+            ? 'null'
+            : typeof ev?.value_after
+      let preview = ''
+      try {
+        preview = JSON.stringify(ev?.value_after ?? null).slice(0, 280)
+      } catch {
+        preview = '(unserializable)'
+      }
       console.log(
-        `[kommo-poll][events] sem_texto lead=${lid} eventId=${evId} type=${t} createdAt=${at} value_after_keys=${
-          ev?.value_after ? JSON.stringify(Object.keys(ev.value_after)) : 'null'
-        }`,
+        `[kommo-poll][events] sem_texto lead=${lid} eventId=${evId} type=${t} createdAt=${at} value_after=${vaShape} preview=${preview}`,
       )
       continue
     }

@@ -267,7 +267,10 @@ export async function getTalkById(env, talkId) {
  *   - filter[entity]=lead
  *   - filter[entity_id][0]=<leadId>
  *   - filter[created_at][from]=<unix_seconds>
- *   - with=value_after,value_before  (necessário para vir o texto da mensagem)
+ *
+ * Observação: NÃO usar with=value_after,value_before — o Kommo rejeita com 400
+ * "Invalid with parameter given". Os campos value_after/value_before já vêm
+ * por padrão no objeto do evento quando aplicáveis.
  *
  * @param {Record<string,string>} env
  * @param {number|string} leadId
@@ -296,7 +299,6 @@ export async function listLeadEvents(env, leadId, opts = {}) {
     params.push(`filter[created_at][from]=${fromTs}`)
   }
   params.push(`limit=${limit}`)
-  params.push(`with=value_after,value_before`)
 
   const path = `/api/v4/events?${params.join('&')}`
   const r = await kommoFetch(env, path)
