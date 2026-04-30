@@ -15,8 +15,11 @@
  */
 
 import { resolveModel } from './ai/modelRegistry.js'
+import { findLeadByPhone } from './kommoClient.js'
 
-const WAIT_BEFORE_LLM_MS = 5000
+// Espera curta antes de chamar o LLM de resumo — dá uma janela mínima
+// pra `chat_messages` sincronizar a última troca, sem travar a tool.
+const WAIT_BEFORE_LLM_MS = 1500
 
 const DEFAULT_DISTRIB_PIPELINE_ID = 11685120
 const DEFAULT_DISTRIB_STATUS_IDS = [89820300, 89820304]
@@ -284,15 +287,20 @@ function parseLeadFromKommoGet(data) {
  */
 export async function runDistribuirHumano(env, body) {
   const telefone = normalizeTelefone(body?.telefone)
-  const idLead = normalizeIdLead(body?.id_lead ?? body?.idLead)
+  let idLead = normalizeIdLead(body?.id_lead ?? body?.idLead)
+  // O LLM frequentemente chama a tool com id_lead = 0 (default da
+  // OpenAI quando ele não tem o ID no contexto). Tratamos 0/negativo
+  // como "ausente" e tentamos resolver pelo telefone — assim a tool
+  // funciona mesmo sem o id_lead vir do orquestrador.
+  if (idLead == null || idLead <= 0) idLead = null
 
-  if (!telefone || idLead == null) {
+  if (!telefone) {
     return {
       ok: false,
       code: 'MISSING_CRM_FIELDS',
       message:
-        'Informe telefone e id_lead (Kommo) para distribuir o atendimento humano.',
-      telefone: telefone || null,
+        'Informe o telefone do lead para distribuir o atendimento humano.',
+      telefone: null,
       id_lead: idLead,
     }
   }
@@ -345,6 +353,31 @@ export async function runDistribuirHumano(env, body) {
 
   const steps = []
   const warnings = []
+
+  // Se o LLM não trouxe id_lead, resolvemos via telefone no Kommo.
+  // (No fluxo WhatsApp a busca pelo telefone já foi feita pelo
+  // scheduler, mas como a tool é stateless, precisamos refazer aqui
+  // sempre que id_lead estiver faltando.)
+  if (idLead == null) {
+    try {
+      const lookup = await findLeadByPhone(env, telefone)
+      if (lookup.ok && lookup.lead?.id) {
+        idLead = Number(lookup.lead.id)
+        steps.push({ step: 'kommo_lookup_by_phone', ok: true, id_lead: idLead })
+      } else {
+        steps.push({ step: 'kommo_lookup_by_phone', ok: false, matched: lookup.matched || 0 })
+        return {
+          ok: false,
+          code: 'KOMMO_LEAD_NOT_FOUND',
+          message: 'Não localizei nenhum lead no CRM com esse telefone. Confirme o número ou peça pra ele entrar em contato pelo canal padrão.',
+          steps,
+        }
+      }
+    } catch (e) {
+      steps.push({ step: 'kommo_lookup_by_phone', ok: false, error: e.message })
+      return { ok: false, code: 'KOMMO_LOOKUP_ERROR', error: e.message, steps }
+    }
+  }
 
   const leadGet = await kommoFetch(
     kommoBase,
@@ -636,7 +669,10 @@ export async function runDistribuirHumano(env, body) {
 export function formatDistribuirHumanoReply(result) {
   if (!result.ok) {
     if (result.code === 'MISSING_CRM_FIELDS') {
-      return [result.message, 'Passe id_lead e telefone quando o CRM estiver ligado ao playground.'].join('\n')
+      return result.message || 'Informe o telefone do lead para distribuir o atendimento humano.'
+    }
+    if (result.code === 'KOMMO_LEAD_NOT_FOUND') {
+      return result.message || 'Lead não localizado no CRM. Peça pra ele entrar em contato pelo canal padrão.'
     }
     // Mensagem genérica pro LLM (sem citar funil/pipeline/IDs ao cliente).
     if (result.code === 'LEAD_NOT_ELIGIBLE') {

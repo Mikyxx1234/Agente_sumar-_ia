@@ -37,7 +37,10 @@
 import { resolveModel } from './modelRegistry.js'
 
 const URL_CHAT = 'https://api.openai.com/v1/chat/completions'
-const TIMEOUT_MS = 5000
+// Timeout curto pra reescrita não virar gargalo. Se o nano demora
+// mais que isso, fallback p/ a query original (custo: 0 latência
+// extra além do timeout).
+const TIMEOUT_MS = 2500
 const MAX_LEN_OUT = 200
 const MIN_LEN_OUT = 3
 
@@ -121,7 +124,7 @@ export async function rewriteSearchQuery(env, { rawQuery, toolName } = {}) {
           { role: 'user', content: userPrompt },
         ],
         temperature: 0,
-        max_tokens: 100,
+        max_tokens: 60,
         response_format: { type: 'json_object' },
       }),
       signal: ctrl.signal,

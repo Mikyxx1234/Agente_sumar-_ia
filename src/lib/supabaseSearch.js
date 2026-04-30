@@ -428,22 +428,23 @@ export const TOOL_DEFINITIONS = [
     function: {
       name: 'distribuir_humano',
       description:
-        '⚠️ SÓ USAR SE o contexto/RAG indicar distribuir_humano ou ausência de resultado de curso (RAG_SEM_RESULTADO). ' +
-        '❌ NUNCA usar se houver dados de curso para vender (preço, grade, etc.): quando tem dados = vender, não distribuir. ' +
-        'Encaminha o lead para um consultor humano: exige id_lead e telefone no CRM; o lead deve estar nas etapas corretas do funil de distribuição.',
+        'Encaminha o lead para um consultor humano. Use quando o cliente PEDIR para falar com atendente/consultor/humano, ' +
+        'ou quando a conversa indicar que ele precisa de ajuda especializada (negociação, casos complexos, fora do escopo da IA). ' +
+        '⚠️ Não use se o cliente apenas perguntou preço/curso e há dados pra responder — primeiro venda, depois encaminhe se ele insistir. ' +
+        'O sistema localiza o lead pelo telefone automaticamente — você NÃO precisa passar id_lead se não souber.',
       parameters: {
         type: 'object',
         properties: {
-          id_lead: {
-            type: 'integer',
-            description: 'ID do lead no Kommo.',
-          },
           telefone: {
             type: 'string',
-            description: 'Telefone/WhatsApp do lead (mesmo formato usado no CRM ou chat).',
+            description: 'Telefone/WhatsApp do lead (obrigatório). Pode ser só dígitos ou com +55.',
+          },
+          id_lead: {
+            type: 'integer',
+            description: 'ID do lead no Kommo. OPCIONAL — se você não souber, omita este campo (NÃO mande 0 nem inventado).',
           },
         },
-        required: ['id_lead', 'telefone'],
+        required: ['telefone'],
       },
     },
   },

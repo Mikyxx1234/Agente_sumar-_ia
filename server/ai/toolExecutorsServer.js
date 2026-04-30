@@ -107,6 +107,7 @@ function formatInscricaoResult(data) {
 function formatDistribuirResult(data) {
   if (!data.ok) {
     if (data.code === 'MISSING_CRM_FIELDS' && data.message) return data.message
+    if (data.code === 'KOMMO_LEAD_NOT_FOUND' && data.message) return data.message
     // Em qualquer outro erro, o LLM recebe uma mensagem GENÉRICA com
     // instrução clara — nunca expor pipeline/funil/IDs internos pro
     // cliente. Falhas técnicas viram "consultor entrará em contato em

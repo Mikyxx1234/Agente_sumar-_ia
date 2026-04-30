@@ -17,7 +17,8 @@
  */
 
 const URL_CHAT = 'https://api.openai.com/v1/chat/completions'
-const TIMEOUT_MS = 5000
+// Timeout curto pra reescrita não virar gargalo no Teste IA.
+const TIMEOUT_MS = 2500
 const MAX_LEN_OUT = 200
 const MIN_LEN_OUT = 3
 const DEFAULT_MODEL = 'gpt-4.1-nano'
@@ -88,7 +89,7 @@ export async function rewriteSearchQuery({
           { role: 'user', content: userPrompt },
         ],
         temperature: 0,
-        max_tokens: 100,
+        max_tokens: 60,
         response_format: { type: 'json_object' },
       }),
       signal: ctrl.signal,
