@@ -27,13 +27,62 @@
  */
 
 import { resolveModel } from './ai/modelRegistry.js'
-import { findLeadByPhone } from './kommoClient.js'
+import { findLeadByPhone, listLeadCustomFields } from './kommoClient.js'
 
-const KOMMO_FIELD_CURSO = 31782
-const KOMMO_FIELD_NIVEL = 31786
-const KOMMO_FIELD_NOME = 304628
-const KOMMO_FIELD_POLO = 693837
-const KOMMO_FIELD_TIPO_INGRESSO = 693843
+// IDs dos campos "fixos" do Kommo (estáveis no projeto). Os IDs dos
+// campos da seção "Inscrição" (Curso Inscrição, Polo Inscrição etc.)
+// são descobertos em runtime via listLeadCustomFields() — assim,
+// quando os nomes batem, o lead é preenchido sem precisar hard-codar
+// IDs específicos por instância.
+const KOMMO_FIELD_CURSO = 31782 // "Curso" (campo do funil de vendas)
+const KOMMO_FIELD_NIVEL = 31786 // "Formação" / "Nível"
+const KOMMO_FIELD_NOME = 304628 // "Nome"
+
+// Aliases por nome — primeiro que bater na lista do Kommo é usado.
+// Cubrimos variações comuns de PT-BR (com/sem acento, com/sem
+// underscore) pra ser tolerante a renomeações no painel do CRM.
+const FIELD_NAME_ALIASES = {
+  cursoInscricao: ['Curso Inscrição', 'Curso da Inscrição', 'Curso_Inscricao', 'Curso da Inscricao'],
+  poloInscricao: ['Polo Inscrição', 'Polo da Inscrição', 'Polo_Inscricao', 'Polo da Inscricao'],
+  tipoInscricao: ['Tipo Inscrição', 'Tipo de Ingresso', 'Tipo_Inscricao', 'Tipo de Inscrição', 'Tipo da Inscrição'],
+}
+
+function resolveFieldByAliases(fieldsByName, aliases) {
+  if (!fieldsByName) return null
+  for (const a of aliases) {
+    const def = fieldsByName.get(String(a).trim().toLowerCase())
+    if (def) return def
+  }
+  return null
+}
+
+// Para campos do tipo "select" (enum) do Kommo, o PATCH exige
+// `enum_id` (não `value`). Tenta achar o enum pelo `value` exato,
+// depois case-insensitive, depois substring. Retorna `null` se não
+// achar — caller decide se manda `value` puro (campos `text`) ou
+// pula o campo.
+function pickEnumIdFor(def, value) {
+  if (!def?.enums || !value) return null
+  const target = String(value).trim()
+  const targetLower = target.toLowerCase()
+  let m = def.enums.find((e) => String(e.value).trim() === target)
+  if (m) return m.id
+  m = def.enums.find((e) => String(e.value).trim().toLowerCase() === targetLower)
+  if (m) return m.id
+  m = def.enums.find((e) => String(e.value).toLowerCase().includes(targetLower))
+  if (m) return m.id
+  return null
+}
+
+function buildCustomFieldEntry(def, value) {
+  if (!def) return null
+  if (def.type === 'select' || def.type === 'multiselect' || (Array.isArray(def.enums) && def.enums.length > 0)) {
+    const enumId = pickEnumIdFor(def, value)
+    if (enumId == null) return null
+    return { field_id: def.id, values: [{ enum_id: enumId }] }
+  }
+  return { field_id: def.id, values: [{ value: String(value) }] }
+}
 
 /** Etapa Kommo “Aguardando inscrição” (mesmo pipeline_id que o restante do fluxo). */
 const DEFAULT_STATUS_AGUARDANDO_INSCRICAO = 99045180
@@ -511,13 +560,61 @@ export async function runInscricao(env, body) {
     : String(parsed.nivel).trim()
   const poloKommo = 'polo mais próximo'
 
+  // Descobre os IDs dos campos da seção "Inscrição" via API do Kommo
+  // (listagem cacheada por 5min). Antes a tool só atualizava o campo
+  // "Curso" (id 31782) e o cliente percebia que "Curso Inscrição" não
+  // mudava. Agora preenche os dois quando ambos existem.
+  const fieldsLookup = await listLeadCustomFields(env).catch(() => ({ ok: false }))
+  const fieldsByName = fieldsLookup.ok ? fieldsLookup.byName : null
+  steps.push({
+    step: 'kommo_lead_custom_fields',
+    ok: fieldsLookup.ok,
+    cached: fieldsLookup.cached,
+    total: fieldsLookup.raw?.length || 0,
+  })
+
+  const cursoInscricaoDef = resolveFieldByAliases(fieldsByName, FIELD_NAME_ALIASES.cursoInscricao)
+  const poloInscricaoDef = resolveFieldByAliases(fieldsByName, FIELD_NAME_ALIASES.poloInscricao)
+  const tipoInscricaoDef = resolveFieldByAliases(fieldsByName, FIELD_NAME_ALIASES.tipoInscricao)
+
   const customFields = [
     { field_id: KOMMO_FIELD_CURSO, values: [{ value: curso }] },
     { field_id: KOMMO_FIELD_NIVEL, values: [{ value: nivelKommo }] },
     { field_id: KOMMO_FIELD_NOME, values: [{ value: nomeKommo }] },
-    { field_id: KOMMO_FIELD_POLO, values: [{ value: poloKommo }] },
-    { field_id: KOMMO_FIELD_TIPO_INGRESSO, values: [{ value: tipoRaw }] },
   ]
+
+  // "Polo Inscrição" e "Tipo Inscrição" — usar IDs descobertos. Se
+  // forem do tipo `select`, mapeia o valor textual pra `enum_id`
+  // automaticamente. Se não acharmos o nome no Kommo, registra um
+  // warning mas não bloqueia (o resto dos campos vai do mesmo jeito).
+  const poloEntry = buildCustomFieldEntry(poloInscricaoDef, poloKommo)
+  if (poloEntry) {
+    customFields.push(poloEntry)
+  } else if (poloInscricaoDef) {
+    warnings.push(`polo: enum não encontrado no Kommo (campo "${poloInscricaoDef.name}")`)
+  } else {
+    warnings.push('polo: campo "Polo Inscrição" não encontrado no Kommo')
+  }
+
+  const tipoEntry = buildCustomFieldEntry(tipoInscricaoDef, tipoRaw)
+  if (tipoEntry) {
+    customFields.push(tipoEntry)
+  } else if (tipoInscricaoDef) {
+    warnings.push(`tipo_ingresso: enum não encontrado (campo "${tipoInscricaoDef.name}", valor "${tipoRaw}")`)
+  } else {
+    warnings.push('tipo_ingresso: campo "Tipo Inscrição" não encontrado no Kommo')
+  }
+
+  // "Curso Inscrição" — campo dedicado da seção de inscrição. Antes
+  // não era atualizado e ficava com resíduo do salesbot.
+  const cursoInscricaoEntry = buildCustomFieldEntry(cursoInscricaoDef, curso)
+  if (cursoInscricaoEntry) {
+    customFields.push(cursoInscricaoEntry)
+  } else if (cursoInscricaoDef) {
+    warnings.push(`curso_inscricao: enum não encontrado (campo "${cursoInscricaoDef.name}", valor "${curso}")`)
+  } else {
+    warnings.push('curso_inscricao: campo "Curso Inscrição" não encontrado no Kommo')
+  }
 
   // 5-6) Notas + PATCH do lead (campos + pipeline/status) em PARALELO.
   // Antes a tool fazia em série; ambos só dependem do idLead que já temos.

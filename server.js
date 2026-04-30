@@ -17,7 +17,7 @@ import { makeEvolutionWebhookHandler } from './server/evolution/webhookEvolution
 import { recordWebhookIngress, getWebhookDiagnosticsSnapshot } from './server/evolution/webhookDiagnostics.js'
 import { getKommoPollSnapshot } from './server/kommoInboundDiagnostics.js'
 import { getModelRegistrySnapshot } from './server/ai/modelRegistry.js'
-import { listLeadNotes, listLeadEvents } from './server/kommoClient.js'
+import { listLeadNotes, listLeadEvents, listLeadCustomFields } from './server/kommoClient.js'
 import { getMessagesByLead as dispatcherGetMessagesByLead } from './server/kommoDispatcherClient.js'
 import { pingBackend, pushMessage, getMessages, clearMessages } from './server/evolution/messageBuffer.js'
 import { getDebounceMs } from './server/evolution/debouncer.js'
@@ -684,6 +684,39 @@ app.get('/api/kommo/poll/events', async (req, res) => {
       requestUrl: out.requestUrl || null,
       events: slim,
     })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// Lista TODOS os custom fields de leads no Kommo (id + nome + tipo).
+// Útil para descobrir o field_id de campos novos sem precisar abrir
+// o painel do Kommo. Resultado vem ordenado por nome.
+//   GET /api/kommo/lead-fields           → JSON com todos
+//   GET /api/kommo/lead-fields?q=curso   → filtra pelo nome (substring)
+//   GET /api/kommo/lead-fields?force=1   → ignora cache (TTL 5min)
+app.get('/api/kommo/lead-fields', async (req, res) => {
+  try {
+    const force = String(req.query.force || '').toLowerCase() === '1' || String(req.query.force || '').toLowerCase() === 'true'
+    const q = String(req.query.q || '').trim().toLowerCase()
+    const out = await listLeadCustomFields(process.env, { force })
+    if (!out.ok) {
+      res.status(502).json({ ok: false, error: out.error || `status ${out.status}` })
+      return
+    }
+    let fields = (out.raw || []).map((f) => ({
+      id: f.id,
+      name: f.name,
+      type: f.type,
+      enums: Array.isArray(f.enums)
+        ? f.enums.map((e) => ({ id: e.id, value: e.value, sort: e.sort }))
+        : null,
+    }))
+    if (q) {
+      fields = fields.filter((f) => String(f.name || '').toLowerCase().includes(q))
+    }
+    fields.sort((a, b) => String(a.name).localeCompare(String(b.name), 'pt-BR'))
+    res.json({ ok: true, total: fields.length, cached: out.cached, fields })
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })
   }

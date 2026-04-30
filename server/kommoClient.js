@@ -237,6 +237,77 @@ export async function tryListTalksForLead(env, leadId) {
   return { ok: true, talks: [] }
 }
 
+// Cache de mapeamento "nome do campo" → field_id (em memória, por
+// processo). Os custom fields do Kommo raramente mudam, então 5min
+// de TTL é suficiente para evitar listar a cada chamada de tool.
+let _leadCustomFieldsCache = { ts: 0, byName: null, raw: null }
+const LEAD_FIELDS_TTL_MS = 5 * 60 * 1000
+
+/**
+ * Lista todos os custom fields do tipo "lead" no Kommo (paginado).
+ * Retorna `{ ok, byName: Map<lowerName, fieldDef>, raw: [...] }` onde
+ * `byName` permite descobrir o `field_id` por nome (case-insensitive).
+ *
+ * Cache em memória (TTL 5min). Use `force=true` p/ recarregar.
+ */
+export async function listLeadCustomFields(env, { force = false } = {}) {
+  const now = Date.now()
+  if (
+    !force &&
+    _leadCustomFieldsCache.byName &&
+    now - _leadCustomFieldsCache.ts < LEAD_FIELDS_TTL_MS
+  ) {
+    return { ok: true, byName: _leadCustomFieldsCache.byName, raw: _leadCustomFieldsCache.raw, cached: true }
+  }
+  const all = []
+  let page = 1
+  const limit = 250
+  for (let safety = 0; safety < 20; safety += 1) {
+    const r = await kommoFetch(env, `/api/v4/leads/custom_fields?page=${page}&limit=${limit}`)
+    if (!r.ok) {
+      // 204 = sem conteúdo (fim da paginação) — Kommo retorna isso
+      // quando a página passa do total.
+      if (r.status === 204) break
+      return { ok: false, status: r.status, error: summarizeError(r) }
+    }
+    const items = r.data?._embedded?.custom_fields || []
+    if (!items.length) break
+    all.push(...items)
+    if (items.length < limit) break
+    page += 1
+  }
+  const byName = new Map()
+  for (const f of all) {
+    if (f?.name && Number.isFinite(Number(f.id))) {
+      byName.set(String(f.name).trim().toLowerCase(), {
+        id: Number(f.id),
+        type: f.type,
+        name: f.name,
+        enums: f.enums || null,
+      })
+    }
+  }
+  _leadCustomFieldsCache = { ts: now, byName, raw: all }
+  return { ok: true, byName, raw: all, cached: false }
+}
+
+/**
+ * Resolve o `field_id` por nome (case-insensitive). Retorna `null` se
+ * não encontrar. Aceita uma lista de aliases — o primeiro que bater é
+ * retornado. Útil quando o Kommo pode ter o campo nomeado de várias
+ * formas ("Curso Inscrição" / "Curso da Inscrição").
+ */
+export async function resolveLeadFieldIdByName(env, names) {
+  const r = await listLeadCustomFields(env)
+  if (!r.ok) return null
+  const list = Array.isArray(names) ? names : [names]
+  for (const n of list) {
+    const def = r.byName.get(String(n).trim().toLowerCase())
+    if (def) return def
+  }
+  return null
+}
+
 /**
  * Detalhe de uma conversa (inclui chat_id).
  *
