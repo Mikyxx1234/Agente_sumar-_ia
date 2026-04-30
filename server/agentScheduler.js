@@ -47,8 +47,14 @@ import {
   formatDispatcherDiagLine,
 } from './kommoInboundDiagnostics.js'
 
-const DEFAULT_INTERVAL_SEC = 30
-const DEFAULT_DEBOUNCE_SEC = 15
+// Defaults agressivos pra reduzir latência ponta-a-ponta.
+// - Interval: a cada 10s o scheduler verifica se há leads c/ msgs prontas.
+// - Debounce: 5s de silêncio é suficiente pra agrupar mensagens
+//   "soltas" do mesmo lead e evitar processar a meio. Se a operação
+//   precisar de janelas maiores (ex.: leads que digitam devagar),
+//   ajustar via env KOMMO_SCHEDULER_DEBOUNCE_SEC.
+const DEFAULT_INTERVAL_SEC = 10
+const DEFAULT_DEBOUNCE_SEC = 5
 
 let intervalHandle = null
 let running = false
@@ -159,7 +165,12 @@ export async function runSchedulerTick(env) {
 
       await syncKommoInboundToBuffer(env, { leadId: Number(lead.id), sessionId, phone })
 
-      const messages = await getMessages(env, sessionId)
+      // Lê messages e o lastTouchedAt em paralelo — são entradas
+      // separadas no buffer (Redis/Supabase) e independentes.
+      const [messages, last] = await Promise.all([
+        getMessages(env, sessionId),
+        getLastTouchedAt(env, sessionId),
+      ])
       if (!messages || messages.length === 0) {
         stats.skippedNoMessages += 1
         if (whitelist) {
@@ -191,7 +202,6 @@ export async function runSchedulerTick(env) {
         }
         return
       }
-      const last = await getLastTouchedAt(env, sessionId)
       const ageMs = last ? Date.now() - last.getTime() : Infinity
       if (ageMs < debounceMs) {
         stats.skippedDebounce += 1

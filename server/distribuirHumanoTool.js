@@ -17,10 +17,6 @@
 import { resolveModel } from './ai/modelRegistry.js'
 import { findLeadByPhone } from './kommoClient.js'
 
-// Espera curta antes de chamar o LLM de resumo — dá uma janela mínima
-// pra `chat_messages` sincronizar a última troca, sem travar a tool.
-const WAIT_BEFORE_LLM_MS = 1500
-
 const DEFAULT_DISTRIB_PIPELINE_ID = 11685120
 const DEFAULT_DISTRIB_STATUS_IDS = [89820300, 89820304]
 const DEFAULT_ASSIGN_STATUS_ID = 89820300
@@ -379,12 +375,16 @@ export async function runDistribuirHumano(env, body) {
     }
   }
 
-  const leadGet = await kommoFetch(
-    kommoBase,
-    kommoToken,
-    `/api/v4/leads/${idLead}?with=contacts`,
-    { method: 'GET' },
-  )
+  // Buscar dados do lead no Kommo + lista de consultores no Supabase
+  // EM PARALELO. As duas requisições são independentes — só precisam
+  // estar prontas antes de decidir pra quem distribuir.
+  const [leadGet, consultoresRes] = await Promise.all([
+    kommoFetch(kommoBase, kommoToken, `/api/v4/leads/${idLead}?with=contacts`, { method: 'GET' }),
+    supabaseRest(distUrl, distKey, 'GET', 'distrib_comercial?status=eq.ATIVO&select=*')
+      .then((r) => ({ ok: true, rows: Array.isArray(r) ? r : [] }))
+      .catch((e) => ({ ok: false, error: e.message })),
+  ])
+
   steps.push({ step: 'kommo_get_lead', ok: leadGet.ok, status: leadGet.status })
   if (!leadGet.ok) {
     return {
@@ -435,18 +435,10 @@ export async function runDistribuirHumano(env, body) {
     return { ok: false, code: 'KOMMO_NO_CONTACT', error: 'Lead sem contato embarcado (with=contacts).', steps }
   }
 
-  let consultores
-  try {
-    consultores = await supabaseRest(
-      distUrl,
-      distKey,
-      'GET',
-      'distrib_comercial?status=eq.ATIVO&select=*',
-    )
-  } catch (e) {
-    return { ok: false, code: 'SUPABASE_DIST_COMERCIAL', error: e.message, steps }
+  if (!consultoresRes.ok) {
+    return { ok: false, code: 'SUPABASE_DIST_COMERCIAL', error: consultoresRes.error, steps }
   }
-  const rows = Array.isArray(consultores) ? consultores : []
+  const rows = consultoresRes.rows
   steps.push({ step: 'supabase_distrib_comercial', ok: true, count: rows.length })
   if (rows.length === 0) {
     return { ok: false, code: 'NO_CONSULTANTS', error: 'Nenhuma linha ATIVO em distrib_comercial.', steps }
@@ -510,50 +502,59 @@ export async function runDistribuirHumano(env, body) {
     }
   }
 
-  const contactPatch = await kommoFetch(kommoBase, kommoToken, `/api/v4/contacts/${contactId}`, {
+  // Agora que o lead já foi atribuído (passo crítico), TODOS os
+  // próximos passos não dependem entre si — rodam em PARALELO pra
+  // cortar latência. Antes a tool fazia 3+ Kommo + 3+ Supabase em
+  // série, gastando ~5-8s só esperando ida/volta de rede.
+  const phoneQueries = [...new Set([telefone, formatTelefoneDigits(telefone), `+55${formatTelefoneDigits(telefone)}`])].filter(Boolean)
+  const contactPatchPromise = kommoFetch(kommoBase, kommoToken, `/api/v4/contacts/${contactId}`, {
     method: 'PATCH',
     body: { responsible_user_id: consultorUserId },
   })
-  steps.push({ step: 'kommo_assign_contact', ok: contactPatch.ok, status: contactPatch.status })
-  if (!contactPatch.ok) {
-    warnings.push(`kommo_assign_contact: ${contactPatch.text.slice(0, 200)}`)
-  }
-
-  try {
-    const enc = encodeURIComponent(telefone)
-    await supabaseRest(mainUrl, mainKey, 'PATCH', `dados_cliente?telefone=eq.${enc}`, {
-      atendimento_ia: 'pause',
-    })
-    steps.push({ step: 'supabase_dados_cliente_pause', ok: true })
-  } catch (e) {
-    warnings.push(`dados_cliente: ${e.message}`)
-    steps.push({ step: 'supabase_dados_cliente_pause', ok: false })
-  }
-
-  let messages = []
-  const phoneQueries = [...new Set([telefone, formatTelefoneDigits(telefone), `+55${formatTelefoneDigits(telefone)}`])]
-  for (const q of phoneQueries) {
-    if (!q) continue
+  const dadosClientePromise = (async () => {
     try {
-      const enc = encodeURIComponent(q)
-      const rowsMsg = await supabaseRest(
-        mainUrl,
-        mainKey,
-        'GET',
-        `chat_messages?phone=eq.${enc}&select=*&order=created_at.asc&limit=500`,
-      )
-      if (Array.isArray(rowsMsg) && rowsMsg.length > 0) {
-        messages = rowsMsg
-        break
-      }
-    } catch {
-      /* try next */
+      const enc = encodeURIComponent(telefone)
+      await supabaseRest(mainUrl, mainKey, 'PATCH', `dados_cliente?telefone=eq.${enc}`, {
+        atendimento_ia: 'pause',
+      })
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: e.message }
     }
-  }
+  })()
+  // Busca chat_messages pelas 3 variantes do telefone EM PARALELO,
+  // pega a primeira não-vazia. Antes era loop sequencial.
+  const messagesPromise = (async () => {
+    const tasks = phoneQueries.map(async (q) => {
+      try {
+        const enc = encodeURIComponent(q)
+        const rowsMsg = await supabaseRest(
+          mainUrl,
+          mainKey,
+          'GET',
+          `chat_messages?phone=eq.${enc}&select=*&order=created_at.asc&limit=500`,
+        )
+        return Array.isArray(rowsMsg) ? rowsMsg : []
+      } catch {
+        return []
+      }
+    })
+    const results = await Promise.all(tasks)
+    return results.find((r) => r.length > 0) || []
+  })()
+
+  const [contactPatch, dadosClienteRes, messages] = await Promise.all([
+    contactPatchPromise,
+    dadosClientePromise,
+    messagesPromise,
+  ])
+  steps.push({ step: 'kommo_assign_contact', ok: contactPatch.ok, status: contactPatch.status })
+  if (!contactPatch.ok) warnings.push(`kommo_assign_contact: ${contactPatch.text.slice(0, 200)}`)
+  steps.push({ step: 'supabase_dados_cliente_pause', ok: dadosClienteRes.ok })
+  if (!dadosClienteRes.ok) warnings.push(`dados_cliente: ${dadosClienteRes.error}`)
   steps.push({ step: 'supabase_chat_messages', ok: true, count: messages.length })
 
   const conversation = buildConversationFromMessages(messages)
-  await new Promise((r) => setTimeout(r, WAIT_BEFORE_LLM_MS))
 
   let summaryText = ''
   let parsed
@@ -576,18 +577,21 @@ export async function runDistribuirHumano(env, body) {
     parsed = parseResumoCamposDistribuicao('')
   }
 
+  // Pós-processamento totalmente paralelo: nota com resumo, mover pro
+  // funil final e gravar a distribuição na tabela. As 3 operações são
+  // independentes — rodavam em série antes (custo: 3-5s).
   const resumoNote = parsed.resumo || summaryText || 'Sem resumo automático.'
-  const noteRes = await kommoFetch(kommoBase, kommoToken, `/api/v4/leads/${idLead}/notes`, {
+  const cursoVal = parsed.curso || 'Não informado'
+  const nivelVal = parsed.nivel || 'Não informado'
+  const telefoneFormatado = formatTelefoneDigits(telefone)
+  const ts = new Date().toISOString()
+
+  const notePromise = kommoFetch(kommoBase, kommoToken, `/api/v4/leads/${idLead}/notes`, {
     method: 'POST',
     body: [{ note_type: 'common', params: { text: resumoNote } }],
   })
-  steps.push({ step: 'kommo_note', ok: noteRes.ok, status: noteRes.status })
-  if (!noteRes.ok) warnings.push(`kommo_note: ${noteRes.text.slice(0, 200)}`)
 
-  const cursoVal = parsed.curso || 'Não informado'
-  const nivelVal = parsed.nivel || 'Não informado'
-
-  const finalPatch = await kommoFetch(kommoBase, kommoToken, `/api/v4/leads/${idLead}`, {
+  const finalPatchPromise = kommoFetch(kommoBase, kommoToken, `/api/v4/leads/${idLead}`, {
     method: 'PATCH',
     body: {
       pipeline_id: finalPipelineId,
@@ -598,57 +602,62 @@ export async function runDistribuirHumano(env, body) {
       ],
     },
   })
-  steps.push({ step: 'kommo_final_lead', ok: finalPatch.ok, status: finalPatch.status })
-  if (!finalPatch.ok) {
-    warnings.push(`kommo_final_lead: ${finalPatch.text.slice(0, 300)}`)
-  }
 
-  const telefoneFormatado = formatTelefoneDigits(telefone)
-  const ts = new Date().toISOString()
-  const rowDistribuicao = {
-    id_lead: idLead,
-    consultor: consultorNome,
-    timestamp: ts,
-    origem: 'whatsapp',
-    id_consultor: consultorUserId,
-    telefone: telefoneFormatado,
-  }
-  try {
-    await supabaseRest(
-      mainUrl,
-      mainKey,
-      'POST',
-      'distribuicao_por_consultor',
-      [rowDistribuicao],
-      'resolution=merge-duplicates',
-    )
-    steps.push({ step: 'supabase_distribuicao', ok: true })
-  } catch (e) {
-    if (String(e.message).includes('409')) {
-      try {
-        await supabaseRest(
-          mainUrl,
-          mainKey,
-          'PATCH',
-          `distribuicao_por_consultor?id_lead=eq.${idLead}`,
-          {
-            consultor: consultorNome,
-            timestamp: ts,
-            origem: 'whatsapp',
-            id_consultor: consultorUserId,
-            telefone: telefoneFormatado,
-          },
-        )
-        steps.push({ step: 'supabase_distribuicao', ok: true, via: 'patch_id_lead' })
-      } catch (e2) {
-        warnings.push(`distribuicao_por_consultor: ${e2.message}`)
-        steps.push({ step: 'supabase_distribuicao', ok: false })
-      }
-    } else {
-      warnings.push(`distribuicao_por_consultor: ${e.message}`)
-      steps.push({ step: 'supabase_distribuicao', ok: false })
+  const distribuicaoPromise = (async () => {
+    const rowDistribuicao = {
+      id_lead: idLead,
+      consultor: consultorNome,
+      timestamp: ts,
+      origem: 'whatsapp',
+      id_consultor: consultorUserId,
+      telefone: telefoneFormatado,
     }
-  }
+    try {
+      await supabaseRest(
+        mainUrl,
+        mainKey,
+        'POST',
+        'distribuicao_por_consultor',
+        [rowDistribuicao],
+        'resolution=merge-duplicates',
+      )
+      return { ok: true }
+    } catch (e) {
+      if (String(e.message).includes('409')) {
+        try {
+          await supabaseRest(
+            mainUrl,
+            mainKey,
+            'PATCH',
+            `distribuicao_por_consultor?id_lead=eq.${idLead}`,
+            {
+              consultor: consultorNome,
+              timestamp: ts,
+              origem: 'whatsapp',
+              id_consultor: consultorUserId,
+              telefone: telefoneFormatado,
+            },
+          )
+          return { ok: true, via: 'patch_id_lead' }
+        } catch (e2) {
+          return { ok: false, error: e2.message }
+        }
+      }
+      return { ok: false, error: e.message }
+    }
+  })()
+
+  const [noteRes, finalPatch, distribuicaoRes] = await Promise.all([
+    notePromise,
+    finalPatchPromise,
+    distribuicaoPromise,
+  ])
+  steps.push({ step: 'kommo_note', ok: noteRes.ok, status: noteRes.status })
+  if (!noteRes.ok) warnings.push(`kommo_note: ${noteRes.text.slice(0, 200)}`)
+  steps.push({ step: 'kommo_final_lead', ok: finalPatch.ok, status: finalPatch.status })
+  if (!finalPatch.ok) warnings.push(`kommo_final_lead: ${finalPatch.text.slice(0, 300)}`)
+  steps.push({ step: 'supabase_distribuicao', ok: distribuicaoRes.ok, via: distribuicaoRes.via })
+  if (!distribuicaoRes.ok) warnings.push(`distribuicao_por_consultor: ${distribuicaoRes.error}`)
 
   return {
     ok: true,

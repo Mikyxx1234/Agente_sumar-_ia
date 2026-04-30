@@ -314,37 +314,48 @@ async function flushSessionInner(env, sessionId, opts = {}) {
         typingHb = null
       }
 
-      try {
-        sendResult = await sendMessageWithNote(env, {
-          telefone,
-          text: out.reply,
-          leadId: idLead,
-          executionId,
-        })
-        if (sendResult.ok) {
-          console.log(`[${executionId}] whatsapp enviado ${sendResult.sent}/${sendResult.total} partes`)
-        } else {
-          console.error(`[${executionId}] whatsapp falha após ${sendResult.sent}/${sendResult.total}:`, sendResult.error)
+      // Envio do WhatsApp + persistência da conversa em paralelo: são
+      // independentes (Evolution/Cloud API vs Supabase) e juntas
+      // adicionavam ~1-2s extras quando feitas em série.
+      const sendPromise = (async () => {
+        try {
+          const r = await sendMessageWithNote(env, {
+            telefone,
+            text: out.reply,
+            leadId: idLead,
+            executionId,
+          })
+          if (r.ok) {
+            console.log(`[${executionId}] whatsapp enviado ${r.sent}/${r.total} partes`)
+          } else {
+            console.error(`[${executionId}] whatsapp falha após ${r.sent}/${r.total}:`, r.error)
+          }
+          return r
+        } catch (err) {
+          console.error(`[${executionId}] whatsapp exception:`, err.message)
+          return null
         }
-      } catch (err) {
-        console.error(`[${executionId}] whatsapp exception:`, err.message)
-      }
-
-      try {
-        histResult = await saveConversation(env, {
-          telefone,
-          userMessage: mensagemCompleta,
-          botMessage: out.reply,
-          messageType: 'conversation',
-          idLead,
-        })
-        if (!histResult.ok) {
-          const failed = histResult.steps.filter((s) => s.ok === false)
-          console.warn(`[${executionId}] history falhas:`, JSON.stringify(failed))
+      })()
+      const histPromise = (async () => {
+        try {
+          const r = await saveConversation(env, {
+            telefone,
+            userMessage: mensagemCompleta,
+            botMessage: out.reply,
+            messageType: 'conversation',
+            idLead,
+          })
+          if (!r.ok) {
+            const failed = (r.steps || []).filter((s) => s.ok === false)
+            console.warn(`[${executionId}] history falhas:`, JSON.stringify(failed))
+          }
+          return r
+        } catch (err) {
+          console.error(`[${executionId}] history exception:`, err.message)
+          return null
         }
-      } catch (err) {
-        console.error(`[${executionId}] history exception:`, err.message)
-      }
+      })()
+      ;[sendResult, histResult] = await Promise.all([sendPromise, histPromise])
     }
   } catch (err) {
     console.error(`[${executionId}] agent exception:`, err.message)
