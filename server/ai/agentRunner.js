@@ -60,7 +60,7 @@ async function callOpenAI(env, apiMessages, model) {
   return res.json()
 }
 
-async function executeToolCalls(executors, toolCalls, trace) {
+async function executeToolCalls(executors, toolCalls, trace, ctx) {
   const results = []
   for (const tc of toolCalls) {
     const fn = tc.function
@@ -84,6 +84,13 @@ async function executeToolCalls(executors, toolCalls, trace) {
       step.error = e.message
       step.durationMs = Date.now() - t0
       results.push({ tool_call_id: tc.id, role: 'tool', content: `Erro: ${e.message}` })
+    }
+    // Anexa o trace de "auditoria" do query rewrite (se for tool de
+    // busca vetorial). Vem do executionContext, populado em
+    // toolExecutorsServer.vectorSearch.
+    if (ctx?.consumeToolTrace) {
+      const qrTrace = ctx.consumeToolTrace(fn.name)
+      if (qrTrace) step.queryRewrite = qrTrace
     }
     trace.push(step)
   }
@@ -144,7 +151,7 @@ export async function runAgent(env, input) {
 
       if (choice.finish_reason === 'tool_calls' || (msg.tool_calls && msg.tool_calls.length > 0)) {
         apiMessages.push(msg)
-        const toolResults = await executeToolCalls(executors, msg.tool_calls, toolTrace)
+        const toolResults = await executeToolCalls(executors, msg.tool_calls, toolTrace, ctx)
         apiMessages.push(...toolResults)
         round++
         continue

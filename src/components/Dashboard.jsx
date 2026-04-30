@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import {
   MessageSquare, Zap, DollarSign, AlertTriangle, Clock,
-  TrendingUp, Database, Search, RefreshCw, Calendar, Filter, Tag
+  TrendingUp, Database, Search, RefreshCw, Calendar, Filter, Tag,
+  Wand2, Bot, Wrench, Layers
 } from 'lucide-react'
 import { getExecutionsByRange } from '../lib/executionStore'
 import { calcCostBRL } from '../lib/openaiPricing'
@@ -138,6 +139,54 @@ function AreaChart({ data }) {
   )
 }
 
+/**
+ * Breakdown de custo por componente do agente.
+ *
+ * Mostra cada parte do pipeline (orquestrador, reescrita de query,
+ * embeddings, tools auxiliares) com seu custo, % do total, modelo
+ * usado e tokens consumidos. O custo total acima do card é a soma
+ * dessas barras (igual ao KPI "Custo estimado").
+ */
+function CostBreakdown({ items, total }) {
+  if (!items || items.length === 0) return <div className="empty">Sem dados no período</div>
+  const maxCost = Math.max(...items.map((d) => d.cost)) || 1
+  return (
+    <div className="hbars">
+      {items.map((d, i) => {
+        const Icon = d.icon
+        const pct = total > 0 ? (d.cost / total) * 100 : 0
+        const fillPct = (d.cost / maxCost) * 100
+        const tokensLabel = d.tokens > 0 ? `${d.tokens.toLocaleString('pt-BR')} tokens` : 'sem uso'
+        const modelsLabel = d.models?.length ? d.models.join(', ') : '—'
+        return (
+          <div key={d.key || i} className="hbar-row">
+            <div className="hbar-label-row">
+              <div className="hbar-name">
+                <Icon size={13} style={{ color: d.color, flexShrink: 0 }} />
+                <span>{d.label}</span>
+                <span className="card-title-sub" style={{ marginLeft: 6, fontSize: 11 }}>
+                  {modelsLabel} · {tokensLabel}
+                </span>
+              </div>
+              <div className="hbar-value tnum">
+                {formatBRL(d.cost)}
+                <span className="hbar-pct">{pct.toFixed(1)}%</span>
+              </div>
+            </div>
+            <div className="hbar-track">
+              <div
+                className="hbar-fill"
+                style={{ width: `${fillPct}%`, background: d.color }}
+                title={d.hint}
+              />
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function HBars({ data, total }) {
   if (data.length === 0) return <div className="empty">Sem dados no período</div>
   const max = Math.max(...data.map(d => d.value))
@@ -259,6 +308,87 @@ export default function Dashboard() {
       ? Math.round(executions.reduce((sum, e) => sum + (e.totalDurationMs || 0), 0) / executions.length)
       : 0
 
+    // Breakdown de custo por componente — útil pra identificar quem está
+    // gastando mais (orquestrador, reescrita de query, embeddings ou
+    // tools auxiliares com LLM próprio como inscricao/distribuir_humano).
+    let costOrchestrator = 0
+    let costRewrite = 0
+    let costEmbeddings = 0
+    let costAuxTools = 0
+    let tokensOrchestrator = 0
+    let tokensRewrite = 0
+    let tokensEmbeddings = 0
+    let tokensAuxTools = 0
+    const modelsByComponent = {
+      orchestrator: new Set(),
+      rewrite: new Set(),
+      embeddings: new Set(),
+      auxTools: new Set(),
+    }
+    executions.forEach((e) => {
+      costOrchestrator += calcCostBRL(e.usage || {}, e.model)
+      tokensOrchestrator += Number(e.usage?.total_tokens) || 0
+      if (e.model) modelsByComponent.orchestrator.add(e.model)
+
+      for (const u of e.aiMeta?.queryRewriteUsage || []) {
+        costRewrite += calcCostBRL(u.usage || {}, u.model)
+        tokensRewrite += Number(u.usage?.total_tokens) || 0
+        if (u.model) modelsByComponent.rewrite.add(u.model)
+      }
+      for (const u of e.aiMeta?.embeddingsUsage || []) {
+        costEmbeddings += calcCostBRL(u.usage || {}, u.model)
+        tokensEmbeddings += Number(u.usage?.total_tokens) || Number(u.usage?.prompt_tokens) || 0
+        if (u.model) modelsByComponent.embeddings.add(u.model)
+      }
+      for (const u of e.aiMeta?.toolUsage || []) {
+        costAuxTools += calcCostBRL(u.usage || {}, u.model)
+        tokensAuxTools += Number(u.usage?.total_tokens) || 0
+        if (u.model) modelsByComponent.auxTools.add(u.model)
+      }
+    })
+    const costBreakdown = [
+      {
+        key: 'orchestrator',
+        label: 'Orquestrador',
+        hint: 'LLM principal que decide qual tool usar e responde ao cliente.',
+        cost: costOrchestrator,
+        tokens: tokensOrchestrator,
+        models: [...modelsByComponent.orchestrator],
+        color: '#34d399',
+        icon: Bot,
+      },
+      {
+        key: 'rewrite',
+        label: 'Reescrita de query',
+        hint: 'LLM nano que transforma a pergunta do cliente em uma query melhor antes do RAG.',
+        cost: costRewrite,
+        tokens: tokensRewrite,
+        models: [...modelsByComponent.rewrite],
+        color: '#c084fc',
+        icon: Wand2,
+      },
+      {
+        key: 'embeddings',
+        label: 'Embeddings (RAG)',
+        hint: 'text-embedding-3-small para buscar nos documentos do Supabase.',
+        cost: costEmbeddings,
+        tokens: tokensEmbeddings,
+        models: [...modelsByComponent.embeddings],
+        color: '#38bdf8',
+        icon: Layers,
+      },
+      {
+        key: 'auxTools',
+        label: 'Tools auxiliares',
+        hint: 'LLMs internos das tools (ex.: resumo da inscrição / distribuição humana).',
+        cost: costAuxTools,
+        tokens: tokensAuxTools,
+        models: [...modelsByComponent.auxTools],
+        color: '#f472b6',
+        icon: Wrench,
+      },
+    ]
+
     function toLocalDateKey(iso) {
       const d = new Date(iso)
       return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -339,6 +469,7 @@ export default function Dashboard() {
       chartData,
       toolsData,
       topicsData,
+      costBreakdown,
     }
   }, [executions, startDate, endDate])
 
@@ -399,9 +530,22 @@ export default function Dashboard() {
             <div className="kpi-grid">
               <KPI icon={MessageSquare} label="Mensagens" value={stats.messagesCount} />
               <KPI icon={Zap} label="Tokens usados" value={stats.tokens > 1000000 ? (stats.tokens/1000000).toFixed(2) : stats.tokens.toLocaleString('pt-BR')} unit={stats.tokens > 1000000 ? 'M' : ''} sub="Total de tokens consumidos" />
-              <KPI icon={DollarSign} label="Custo estimado" value={formatBRL(stats.cost)} sub="Baseado no modelo usado" />
+              <KPI icon={DollarSign} label="Custo estimado" value={formatBRL(stats.cost)} sub="Soma de todos os componentes" />
               <KPI icon={Clock} label="Tempo médio" value={stats.avgTime > 0 ? (stats.avgTime / 1000).toFixed(1) : '-'} unit={stats.avgTime > 0 ? 's' : ''} />
               <KPI icon={AlertTriangle} label="Erros" value={stats.errorsCount} sub={stats.messagesCount > 0 ? `${((stats.errorsCount / stats.messagesCount) * 100).toFixed(1)}% do total` : ''} />
+            </div>
+
+            <div className="card">
+              <div className="card-header">
+                <div className="card-title">
+                  <DollarSign size={14} />
+                  Custo por componente
+                </div>
+                <span className="card-title-sub">{formatBRL(stats.cost)} no total</span>
+              </div>
+              <div className="card-body">
+                <CostBreakdown items={stats.costBreakdown} total={stats.cost} />
+              </div>
             </div>
 
             <div className="dash-grid">

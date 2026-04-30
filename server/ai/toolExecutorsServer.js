@@ -56,6 +56,19 @@ async function vectorSearch(env, ctx, toolName, rpcName, query, matchCount = 10)
   } else if (rw.reason) {
     console.log(`[tool/${toolName}] queryRewrite skip: ${rw.reason}`)
   }
+  // Empilha o trace pra o agentRunner colocar dentro do step.queryRewrite
+  // — assim a aba "Execuções" mostra exatamente o que a reescrita fez.
+  if (ctx) {
+    ctx.recordToolTrace(toolName, {
+      applied: rw.applied,
+      query: finalQuery,
+      originalQuery: rw.originalQuery || query,
+      model: rw.model,
+      reason: rw.reason || null,
+      usage: rw.usage || null,
+      elapsedMs: rw.elapsedMs || 0,
+    })
+  }
 
   const embedding = await getEmbedding(env, finalQuery, ctx, toolName)
   const res = await fetch(`${url}/rest/v1/rpc/${rpcName}`, {

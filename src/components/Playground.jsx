@@ -150,7 +150,7 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
     return res.json()
   }
 
-  async function executeToolCalls(toolCalls, trace) {
+  async function executeToolCalls(toolCalls, trace, aiMeta) {
     const results = []
     for (const tc of toolCalls) {
       const fn = tc.function
@@ -177,10 +177,12 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
       setToolStatus(toolLabel[fn.name] || `Executando ${fn.name}...`)
 
       const t0 = Date.now()
+      // Coletor opcional populado pelas tools de busca (queryRewrite + embeddings).
+      const traceCollector = {}
       try {
         const args = JSON.parse(fn.arguments)
         step.args = args
-        const result = await executor(args, apiKey)
+        const result = await executor(args, apiKey, traceCollector)
         step.result = result || 'Nenhum resultado encontrado na base.'
         step.durationMs = Date.now() - t0
         results.push({ tool_call_id: tc.id, role: 'tool', content: step.result })
@@ -188,6 +190,25 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
         step.error = e.message
         step.durationMs = Date.now() - t0
         results.push({ tool_call_id: tc.id, role: 'tool', content: `Erro: ${e.message}` })
+      }
+      // Anexa o trace da reescrita pra a aba "Execuções" mostrar.
+      if (traceCollector.queryRewrite) {
+        step.queryRewrite = traceCollector.queryRewrite
+        if (aiMeta && traceCollector.queryRewrite.usage) {
+          aiMeta.queryRewriteUsage.push({
+            model: traceCollector.queryRewrite.model,
+            tool: fn.name,
+            usage: traceCollector.queryRewrite.usage,
+          })
+        }
+      }
+      // Custo de embeddings (RAG) entra no aiMeta.
+      if (aiMeta && traceCollector.embeddingsUsage) {
+        aiMeta.embeddingsUsage.push({
+          model: traceCollector.embeddingsUsage.model,
+          tool: fn.name,
+          usage: traceCollector.embeddingsUsage.usage,
+        })
       }
       trace.push(step)
     }
@@ -270,6 +291,10 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
     if (!apiKey) { setShowConfig(true); return }
 
     const execId = generateExecutionId()
+    // aiMeta: mesma estrutura do server (executionContext.toAiMeta).
+    // Será serializado em `usage._meta` por executionStore.saveExecution
+    // — assim o Dashboard usa o mesmo cálculo de custo.
+    const aiMeta = { queryRewriteUsage: [], toolUsage: [], embeddingsUsage: [] }
     const execution = {
       id: execId,
       timestamp: new Date().toISOString(),
@@ -314,7 +339,7 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
         if (choice.finish_reason === 'tool_calls' || msg.tool_calls?.length > 0) {
           apiMessages.push(msg)
           const toolTrace = []
-          const toolResults = await executeToolCalls(msg.tool_calls, toolTrace)
+          const toolResults = await executeToolCalls(msg.tool_calls, toolTrace, aiMeta)
           execution.toolCalls.push(...toolTrace)
           execution.steps.push({ type: 'tool_execution', round, tools: toolTrace.map((t) => t.tool) })
           apiMessages.push(...toolResults)
@@ -326,6 +351,7 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
         const reply = msg.content || 'Sem resposta.'
         execution.response = reply
         execution.totalDurationMs = Date.now() - t0
+        execution.usage._meta = aiMeta
         saveExecution(execution)
         setMessages((prev) => [...prev, { role: 'assistant', content: reply, execId }])
         return
@@ -335,12 +361,14 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
       const errMsg = 'Limite de buscas atingido. Tente reformular a pergunta.'
       execution.error = errMsg
       execution.totalDurationMs = Date.now() - t0
+      execution.usage._meta = aiMeta
       saveExecution(execution)
       setMessages((prev) => [...prev, { role: 'error', content: errMsg }])
     } catch (e) {
       setToolStatus('')
       execution.error = e.message
       execution.totalDurationMs = Date.now() - t0
+      execution.usage._meta = aiMeta
       saveExecution(execution)
       setMessages((prev) => [...prev, { role: 'error', content: e.message }])
     } finally {

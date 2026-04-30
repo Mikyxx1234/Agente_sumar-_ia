@@ -1,4 +1,7 @@
+import { rewriteSearchQuery } from './queryRewrite'
+
 const BASE_URL = '/api/supabase'
+const EMBEDDING_MODEL = 'text-embedding-3-small'
 
 async function getEmbedding(text, apiKey) {
   const res = await fetch('https://api.openai.com/v1/embeddings', {
@@ -8,7 +11,7 @@ async function getEmbedding(text, apiKey) {
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: 'text-embedding-3-small',
+      model: EMBEDDING_MODEL,
       input: text,
     }),
   })
@@ -17,13 +20,53 @@ async function getEmbedding(text, apiKey) {
     throw new Error(err.error?.message || `Embedding HTTP ${res.status}`)
   }
   const data = await res.json()
-  return data.data[0].embedding
+  return {
+    embedding: data.data[0].embedding,
+    usage: data.usage || null,
+    model: EMBEDDING_MODEL,
+  }
 }
 
-async function vectorSearch(rpcName, query, apiKey, matchCount = 10) {
-  console.log(`[Supabase] Gerando embedding para: "${query}"`)
-  const embedding = await getEmbedding(query, apiKey)
-  console.log(`[Supabase] Embedding OK (${embedding.length} dims), chamando RPC ${rpcName}...`)
+/**
+ * Busca vetorial no Supabase. Espelha `server/ai/toolExecutorsServer.vectorSearch`:
+ *   1. (opcional) reescreve a query com `gpt-4.1-nano`.
+ *   2. gera embedding (`text-embedding-3-small`) da query final.
+ *   3. chama o RPC `match_documents_*`.
+ *
+ * `traceCollector` (opcional) recebe metadados pra a aba "Execuções"
+ * mostrar o que a reescrita fez e pra o Playground contabilizar custo
+ * de tudo no `aiMeta`:
+ *   {
+ *     queryRewrite: { applied, query, originalQuery, model, usage, reason, elapsedMs },
+ *     embeddingsUsage: { model, usage },
+ *   }
+ */
+async function vectorSearch(rpcName, query, apiKey, matchCount = 10, opts = {}) {
+  const traceCollector = opts.traceCollector || null
+  const toolName = opts.toolName || rpcName
+
+  // Etapa 1 — reescrita conservadora (com fallback p/ a query original).
+  const rw = await rewriteSearchQuery({
+    rawQuery: query,
+    toolName,
+    apiKey,
+    model: opts.rewriteModel || 'gpt-4.1-nano',
+    enabled: opts.rewriteEnabled !== false,
+  })
+  if (traceCollector) traceCollector.queryRewrite = rw
+  const finalQuery = rw.applied ? rw.query : query
+  if (rw.applied) {
+    console.log(`[Supabase] queryRewrite: "${query}" → "${finalQuery}"`)
+  } else if (rw.reason && rw.reason !== 'disabled' && rw.reason !== 'noop') {
+    console.log(`[Supabase] queryRewrite skip: ${rw.reason}`)
+  }
+
+  console.log(`[Supabase] Gerando embedding para: "${finalQuery}"`)
+  const emb = await getEmbedding(finalQuery, apiKey)
+  if (traceCollector && emb.usage) {
+    traceCollector.embeddingsUsage = { model: emb.model, usage: emb.usage }
+  }
+  console.log(`[Supabase] Embedding OK (${emb.embedding.length} dims), chamando RPC ${rpcName}...`)
 
   const url = `${BASE_URL}/rest/v1/rpc/${rpcName}`
   console.log(`[Supabase] POST ${url}`)
@@ -34,7 +77,7 @@ async function vectorSearch(rpcName, query, apiKey, matchCount = 10) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      query_embedding: embedding,
+      query_embedding: emb.embedding,
       filter: {},
       match_count: matchCount,
     }),
@@ -55,20 +98,20 @@ async function vectorSearch(rpcName, query, apiKey, matchCount = 10) {
   return data.map((d) => d.content).join('\n\n---\n\n')
 }
 
-export async function buscarPrecos(query, apiKey) {
-  return vectorSearch('match_documents_precos', query, apiKey, 8)
+export async function buscarPrecos(query, apiKey, traceCollector) {
+  return vectorSearch('match_documents_precos', query, apiKey, 8, { traceCollector, toolName: 'buscar_precos' })
 }
 
-export async function buscarInformacoes(query, apiKey) {
-  return vectorSearch('match_documents', query, apiKey, 15)
+export async function buscarInformacoes(query, apiKey, traceCollector) {
+  return vectorSearch('match_documents', query, apiKey, 15, { traceCollector, toolName: 'buscar_informacoes' })
 }
 
-export async function buscarPos(query, apiKey) {
-  return vectorSearch('match_documents_pos', query, apiKey, 8)
+export async function buscarPos(query, apiKey, traceCollector) {
+  return vectorSearch('match_documents_pos', query, apiKey, 8, { traceCollector, toolName: 'buscar_pos' })
 }
 
-export async function buscarPerguntas(query, apiKey) {
-  return vectorSearch('match_documents_perguntas', query, apiKey, 6)
+export async function buscarPerguntas(query, apiKey, traceCollector) {
+  return vectorSearch('match_documents_perguntas', query, apiKey, 6, { traceCollector, toolName: 'buscar_perguntas' })
 }
 
 /** Tool localização — chama API do servidor (Google Geocoding + Supabase polo_loc + Distance Matrix). */
@@ -374,10 +417,10 @@ export const TOOL_DEFINITIONS = [
 ]
 
 export const TOOL_EXECUTORS = {
-  buscar_precos: (args, apiKey) => buscarPrecos(args.query, apiKey),
-  buscar_informacoes: (args, apiKey) => buscarInformacoes(args.query, apiKey),
-  buscar_pos: (args, apiKey) => buscarPos(args.query, apiKey),
-  buscar_perguntas: (args, apiKey) => buscarPerguntas(args.query, apiKey),
+  buscar_precos: (args, apiKey, traceCollector) => buscarPrecos(args.query, apiKey, traceCollector),
+  buscar_informacoes: (args, apiKey, traceCollector) => buscarInformacoes(args.query, apiKey, traceCollector),
+  buscar_pos: (args, apiKey, traceCollector) => buscarPos(args.query, apiKey, traceCollector),
+  buscar_perguntas: (args, apiKey, traceCollector) => buscarPerguntas(args.query, apiKey, traceCollector),
   localizacao: (args) => executarLocalizacao(args),
   inscricao: (args) => executarInscricao(args),
   distribuir_humano: (args) => executarDistribuirHumano(args),

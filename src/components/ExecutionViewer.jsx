@@ -3,7 +3,7 @@ import {
   Search, Trash2, Clock, Bot, Database,
   ChevronRight, ChevronDown, AlertCircle,
   User, Cpu, Zap, Copy, RefreshCw,
-  Check, ListChecks
+  Check, ListChecks, Wand2
 } from 'lucide-react'
 import { getAllExecutions, clearExecutions } from '../lib/executionStore'
 
@@ -86,6 +86,27 @@ function ExecutionDetail({ execution, onCopy }) {
                 <div className="flow-label">Entrada</div>
                 <pre className="flow-content-pre">{JSON.stringify(tc.args, null, 2)}</pre>
               </div>
+              {tc.queryRewrite && (
+                <div className="flow-section">
+                  <div className="flow-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Wand2 size={11} />
+                    Reescrita da query (LLM {tc.queryRewrite.model || 'nano'})
+                    {tc.queryRewrite.applied
+                      ? <span className="badge success" style={{ marginLeft: 4 }}>aplicada</span>
+                      : <span className="badge" style={{ marginLeft: 4 }}>{tc.queryRewrite.reason || 'skip'}</span>}
+                  </div>
+                  <pre className="flow-content-pre">
+{`Original    : ${tc.queryRewrite.originalQuery ?? '-'}
+Reescrita   : ${tc.queryRewrite.applied ? tc.queryRewrite.query : '(usou a original)'}
+Motivo      : ${tc.queryRewrite.reason || '-'}
+Tempo       : ${tc.queryRewrite.elapsedMs ?? 0} ms` +
+(tc.queryRewrite.usage
+  ? `
+Tokens LLM  : prompt=${tc.queryRewrite.usage.prompt_tokens || 0}, completion=${tc.queryRewrite.usage.completion_tokens || 0}, total=${tc.queryRewrite.usage.total_tokens || 0}`
+  : '')}
+                  </pre>
+                </div>
+              )}
               <div className="flow-section">
                 <div className="flow-label">{tc.error ? 'Erro' : 'Resultado'}</div>
                 <pre className="flow-content-pre" style={tc.error ? { color: 'var(--danger)' } : {}}>

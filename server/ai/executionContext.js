@@ -29,6 +29,11 @@ export function createExecutionContext() {
   const queryRewriteUsage = []
   const toolUsage = []
   const embeddingsUsage = []
+  // Fila FIFO por tool com info "de auditoria" da última chamada — hoje
+  // só guarda o resultado do query rewrite (ver toolExecutorsServer.js).
+  // O agentRunner consome um item antes de gravar cada step do toolTrace,
+  // permitindo ao ExecutionViewer mostrar "o que a reescrita fez".
+  const toolTraceQueues = new Map()
 
   function pushUsage(arr, info) {
     if (!info || !info.model) return
@@ -58,6 +63,27 @@ export function createExecutionContext() {
     recordToolUsage(info) { pushUsage(toolUsage, info) },
     recordEmbeddingsUsage(info) { pushUsage(embeddingsUsage, info) },
 
+    /**
+     * Empilha um trace de "auditoria" associado a uma tool (FIFO).
+     * Hoje usado só para a reescrita de query: cada chamada de tool
+     * de busca deixa um trace que o agentRunner consome ao montar
+     * o step do toolTrace. Assim o ExecutionViewer mostra
+     * "Reescrita: 'oi' → 'preço mensalidade curso'".
+     */
+    recordToolTrace(toolName, trace) {
+      if (!toolName || !trace) return
+      let q = toolTraceQueues.get(toolName)
+      if (!q) { q = []; toolTraceQueues.set(toolName, q) }
+      q.push(trace)
+    },
+
+    /** Consome (FIFO) o próximo trace pendente para a tool. */
+    consumeToolTrace(toolName) {
+      const q = toolTraceQueues.get(toolName)
+      if (!q || q.length === 0) return null
+      return q.shift()
+    },
+
     /** Snapshot serializável para `mensagens_ia.ai_meta`. */
     toAiMeta() {
       return {
@@ -75,6 +101,8 @@ export function createNoopExecutionContext() {
     recordQueryRewriteUsage() {},
     recordToolUsage() {},
     recordEmbeddingsUsage() {},
+    recordToolTrace() {},
+    consumeToolTrace() { return null },
     toAiMeta() {
       return { queryRewriteUsage: [], toolUsage: [], embeddingsUsage: [] }
     },
