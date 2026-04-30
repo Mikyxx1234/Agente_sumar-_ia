@@ -25,6 +25,11 @@ function num(v) {
   return Number.isFinite(n) ? n : null
 }
 
+// CEP brasileiro: 5 dígitos + (opcional hífen) + 3 dígitos. Quando o
+// usuário passa CEP completo, o ponto retornado pelo Google é
+// suficientemente preciso pra calcular trajeto (mesmo sem número).
+const CEP_FULL_REGEX = /\b\d{5}-?\d{3}\b/
+
 async function googleGeocode(address, apiKey) {
   const url = new URL('https://maps.googleapis.com/maps/api/geocode/json')
   url.searchParams.set('address', address)
@@ -41,12 +46,35 @@ async function googleGeocode(address, apiKey) {
   if (!loc || typeof loc.lat !== 'number' || typeof loc.lng !== 'number') {
     return { error: 'Resposta do Geocoding não contém coordenadas válidas', raw: data }
   }
+
+  // Detecta se a coordenada retornada é precisa o suficiente pra
+  // calcular trajeto. Critérios:
+  //   - location_type ROOFTOP / RANGE_INTERPOLATED (Google diz que é
+  //     endereço exato ou interpolado dentro de uma rua)  → preciso.
+  //   - Address components contém `street_number` → endereço com
+  //     número → preciso.
+  //   - Input do usuário contém CEP completo (XXXXX-XXX) → preciso.
+  //   - Caso contrário (só bairro, "Zona Leste", cidade etc.) → vago.
+  const components = Array.isArray(first.address_components) ? first.address_components : []
+  const hasStreetNumber = components.some((c) => Array.isArray(c.types) && c.types.includes('street_number'))
+  const inputHasCep = CEP_FULL_REGEX.test(String(address))
+  const locationType = first.geometry?.location_type || null
+  const preciseByGoogle = locationType === 'ROOFTOP' || locationType === 'RANGE_INTERPOLATED'
+  const precise = preciseByGoogle || hasStreetNumber || inputHasCep
+
   return {
     origem: {
       lat: loc.lat,
       lng: loc.lng,
       endereco_formatado: first.formatted_address || null,
       place_id: first.place_id || null,
+    },
+    precision: {
+      precise,
+      location_type: locationType,
+      has_street_number: hasStreetNumber,
+      input_has_cep: inputHasCep,
+      result_types: Array.isArray(first.types) ? first.types : [],
     },
   }
 }
@@ -183,7 +211,7 @@ export async function runNearestPolo(env, body) {
   if (geo.error) {
     return { ok: false, error: geo.error }
   }
-  const { origem } = geo
+  const { origem, precision } = geo
 
   let polos
   try {
@@ -202,9 +230,32 @@ export async function runNearestPolo(env, body) {
     distancia_km: haversineKm(origem.lat, origem.lng, num(p.latitude), num(p.longitude)),
   }))
   scored.sort((a, b) => a.distancia_km - b.distancia_km)
-  const top2 = scored.slice(0, 2)
+
+  // Localização imprecisa (ex.: "Zona Leste", "centro de SP", só
+  // nome de bairro grande): NÃO calcula tempo nem distância — esses
+  // valores seriam medidos a partir de um centroide arbitrário e
+  // poderiam ser muito errados (talvez nem o polo mais próximo seja
+  // de fato o mais próximo do cliente). Apenas devolve o polo
+  // candidato + instrução clara pra o LLM pedir endereço/CEP.
+  if (!precision?.precise) {
+    const top1 = scored[0]
+    const enderecoPolo = top1.endereco || ''
+    const linkBuscaPolo =
+      `https://www.google.com/maps/search/?api=1&query=` +
+      encodeURIComponent(`${top1.nome || 'Polo'} ${enderecoPolo}`.trim())
+    return {
+      ok: true,
+      imprecise: true,
+      precision_reason: precision?.location_type || 'sem_endereco_completo',
+      origem_imprecisa: origem.endereco_formatado,
+      polo_provavel: top1.nome || 'Polo',
+      rua_do_polo: enderecoPolo,
+      link_polo_maps: linkBuscaPolo,
+    }
+  }
 
   let modeUsed = 'transit'
+  const top2 = scored.slice(0, 2)
   let matrix = await googleDistanceMatrix(origem.lat, origem.lng, top2, mapsKey, modeUsed)
   let best = pickBestFromMatrix(matrix, top2, origem.endereco_formatado, modeUsed)
 
@@ -220,6 +271,7 @@ export async function runNearestPolo(env, body) {
 
   return {
     ok: true,
+    imprecise: false,
     origem_endereco: origem.endereco_formatado,
     polo_mais_proximo: best.polo_mais_proximo,
     rua_do_polo: best.rua_polo_mais_proximo,

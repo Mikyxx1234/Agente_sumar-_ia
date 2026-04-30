@@ -133,6 +133,23 @@ export async function executarLocalizacao(args) {
   if (!data.ok) {
     return `Não foi possível encontrar o polo mais próximo: ${data.error || `HTTP ${res.status}`}`
   }
+  // Localização vaga: não mostrar tempo nem distância — apenas o
+  // polo provável + instrução pra o LLM pedir endereço/CEP.
+  if (data.imprecise) {
+    const polo = data.polo_provavel || 'Polo'
+    const endereco = data.rua_do_polo ? `\nEndereço do polo: ${data.rua_do_polo}` : ''
+    return [
+      'ATENÇÃO — LOCALIZAÇÃO IMPRECISA:',
+      `A localização informada${data.origem_imprecisa ? ` ("${data.origem_imprecisa}")` : ''} é uma área genérica, não um endereço exato. NÃO É POSSÍVEL calcular tempo nem distância confiáveis.`,
+      '',
+      `Polo provável dessa região: ${polo}${endereco}`,
+      '',
+      'INSTRUÇÃO PARA O ATENDIMENTO:',
+      '1. PEÇA ao cliente o endereço completo (rua e número) ou o CEP antes de informar tempo/rota.',
+      '2. Caso o cliente prefira NÃO informar, pode mencionar APENAS o nome do polo provável acima — NUNCA cite tempo ou distância para uma localização imprecisa.',
+      '3. Não invente tempo, distância ou link de rota.',
+    ].join('\n')
+  }
   const lines = [
     `Polo mais próximo: ${data.polo_mais_proximo}`,
     `Endereço do polo: ${data.rua_do_polo}`,
