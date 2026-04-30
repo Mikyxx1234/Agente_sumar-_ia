@@ -376,16 +376,21 @@ export async function runDistribuirHumano(env, body) {
 
   const st = Number(lead.status_id)
   const pip = Number(lead.pipeline_id)
-  const eligible =
-    pip === distribPipelineId && distribStatusIds.includes(st)
-
-  if (!eligible) {
+  // Por padrão a tool aceita qualquer pipeline/status — a função dela
+  // é simplesmente mover o lead pro funil de distribuição e atribuir
+  // ao consultor. Caso a operação queira voltar a ter um filtro de
+  // elegibilidade (ex.: só leads "Aguardando distribuição"), basta
+  // setar KOMMO_DISTRIB_REQUIRE_ELIGIBLE_STATUS=true no .env.
+  const requireEligible = String(env.KOMMO_DISTRIB_REQUIRE_ELIGIBLE_STATUS || 'false').toLowerCase() === 'true'
+  const eligible = pip === distribPipelineId && distribStatusIds.includes(st)
+  if (requireEligible && !eligible) {
     return {
       ok: false,
       code: 'LEAD_NOT_ELIGIBLE',
+      // Mensagem genérica pro LLM — sem expor IDs internos pro cliente.
       message:
-        `O lead precisa estar no funil ${distribPipelineId} com status ${distribStatusIds.join(' ou ')}. ` +
-        `Atual: pipeline ${pip}, status ${st}.`,
+        'Não foi possível encaminhar esse lead para um consultor agora. ' +
+        'Continue a conversa normalmente e tente de novo mais tarde.',
       pipeline_id: pip,
       status_id: st,
       steps,
@@ -633,20 +638,30 @@ export function formatDistribuirHumanoReply(result) {
     if (result.code === 'MISSING_CRM_FIELDS') {
       return [result.message, 'Passe id_lead e telefone quando o CRM estiver ligado ao playground.'].join('\n')
     }
+    // Mensagem genérica pro LLM (sem citar funil/pipeline/IDs ao cliente).
     if (result.code === 'LEAD_NOT_ELIGIBLE') {
-      return result.message || 'Lead não está nas etapas elegíveis para distribuição humana.'
+      return [
+        'Não foi possível encaminhar para um consultor humano agora.',
+        'INSTRUÇÃO: continue ajudando o cliente normalmente e diga que um consultor entrará em contato em breve. Não cite funil, pipeline ou detalhes técnicos.',
+      ].join('\n')
     }
     if (result.code === 'DIST_COMERCIAL_NOT_CONFIGURED') {
-      return result.error
+      return [
+        'Distribuição indisponível por configuração interna.',
+        'INSTRUÇÃO: peça desculpas brevemente e diga que um consultor entrará em contato em breve.',
+      ].join('\n')
     }
-    return `Distribuição não executada: ${result.error || result.code || 'erro'}`
+    return [
+      'Distribuição não executada.',
+      'INSTRUÇÃO: continue a conversa normalmente e diga que um consultor entrará em contato em breve. Não cite detalhes técnicos.',
+    ].join('\n')
   }
   const lines = [
     result.retorno || 'Distribuição concluída.',
-    result.consultor ? `Consultor: ${result.consultor}` : null,
-    result.id_consultor != null ? `ID consultor (Kommo): ${result.id_consultor}` : null,
+    result.consultor ? `Consultor designado: ${result.consultor}` : null,
   ].filter(Boolean)
   if (result.resumo_campos?.resumo) lines.push(`Resumo: ${result.resumo_campos.resumo}`)
-  if (result.warnings?.length) lines.push(`Avisos: ${result.warnings.join(' | ')}`)
+  // Não devolver `id_consultor` (Kommo user id) pra o LLM — não tem
+  // serventia pro cliente e atrapalha a resposta.
   return lines.join('\n')
 }

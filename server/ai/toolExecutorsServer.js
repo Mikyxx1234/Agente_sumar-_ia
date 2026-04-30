@@ -107,17 +107,33 @@ function formatInscricaoResult(data) {
 function formatDistribuirResult(data) {
   if (!data.ok) {
     if (data.code === 'MISSING_CRM_FIELDS' && data.message) return data.message
-    if (data.code === 'LEAD_NOT_ELIGIBLE' && data.message) return data.message
-    if (data.code === 'DIST_COMERCIAL_NOT_CONFIGURED') return data.error
-    return `Distribuição não executada: ${data.error || data.message || data.code || 'erro'}`
+    // Em qualquer outro erro, o LLM recebe uma mensagem GENÉRICA com
+    // instrução clara — nunca expor pipeline/funil/IDs internos pro
+    // cliente. Falhas técnicas viram "consultor entrará em contato em
+    // breve" do ponto de vista do usuário.
+    if (data.code === 'LEAD_NOT_ELIGIBLE') {
+      return [
+        'Não foi possível encaminhar para um consultor humano agora.',
+        'INSTRUÇÃO: continue ajudando o cliente normalmente e diga que um consultor entrará em contato em breve. Não cite funil, pipeline ou detalhes técnicos.',
+      ].join('\n')
+    }
+    if (data.code === 'DIST_COMERCIAL_NOT_CONFIGURED') {
+      return [
+        'Distribuição indisponível por configuração interna.',
+        'INSTRUÇÃO: peça desculpas brevemente e diga que um consultor entrará em contato em breve.',
+      ].join('\n')
+    }
+    return [
+      'Distribuição não executada.',
+      'INSTRUÇÃO: continue a conversa normalmente e diga que um consultor entrará em contato em breve. Não cite detalhes técnicos.',
+    ].join('\n')
   }
   const lines = [
     data.retorno || 'Distribuição concluída.',
-    data.consultor ? `Consultor: ${data.consultor}` : null,
-    data.id_consultor != null ? `ID consultor (Kommo): ${data.id_consultor}` : null,
+    data.consultor ? `Consultor designado: ${data.consultor}` : null,
   ].filter(Boolean)
   if (data.resumo_campos?.resumo) lines.push(`Resumo: ${data.resumo_campos.resumo}`)
-  if (data.warnings?.length) lines.push(`Avisos: ${data.warnings.join(' | ')}`)
+  // Sem `id_consultor` pra o LLM — não traz valor pro cliente final.
   return lines.join('\n')
 }
 
