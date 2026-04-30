@@ -272,7 +272,17 @@ async function flushSessionInner(env, sessionId, opts = {}) {
   let sendResult = null
   let histResult = null
   try {
-    out = await runAgent(env, { telefone, userMessage: mensagemCompleta, executionId })
+    // Quando o scheduler já achou o lead no Kommo (caminho normal no
+    // modo dispatcher), passamos o id_lead p/ o agente — assim o LLM
+    // pode chamar tools como inscricao/distribuir_humano sem precisar
+    // adivinhar o ID. Sem isso o LLM mandava `id_lead: 0` e a tool
+    // caía em MISSING_CRM_FIELDS.
+    out = await runAgent(env, {
+      telefone,
+      userMessage: mensagemCompleta,
+      executionId,
+      leadId: Number.isFinite(leadIdHint) && leadIdHint > 0 ? leadIdHint : undefined,
+    })
     if (out.ok) {
       console.log(
         `[${executionId}] agent ok (${out.durationMs}ms, ${out.usage?.total_tokens} tok, tools=${out.toolCalls?.length || 0}): ${out.reply?.slice(0, 200)}`,

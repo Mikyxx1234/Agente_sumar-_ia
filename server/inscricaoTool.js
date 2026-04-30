@@ -27,6 +27,7 @@
  */
 
 import { resolveModel } from './ai/modelRegistry.js'
+import { findLeadByPhone } from './kommoClient.js'
 
 const KOMMO_FIELD_CURSO = 31782
 const KOMMO_FIELD_NIVEL = 31786
@@ -87,7 +88,19 @@ function normalizeTelefone(t) {
 function normalizeIdLead(id) {
   if (id == null || id === '') return null
   const n = Number(id)
-  return Number.isFinite(n) ? n : null
+  // Trata 0 / negativos como "ausente" (default da OpenAI quando o
+  // LLM não tem o ID real). Caller deve fazer fallback por telefone.
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
+// "Curso" tem que ter conteúdo de verdade — strings de 2-3 chars
+// como "as" / "ola" são quase sempre alucinação do LLM. Aceita só
+// se tem ≥4 caracteres alfabéticos (espaços não contam).
+function isCursoValido(s) {
+  const t = String(s || '').trim()
+  if (!t) return false
+  const alpha = t.replace(/[^A-Za-zÀ-ÿ]/g, '')
+  return alpha.length >= 4
 }
 
 function extractField(text, fieldName, fieldNames) {
@@ -232,7 +245,7 @@ export async function runInscricao(env, body) {
   ).trim()
 
   const telefone = normalizeTelefone(body?.telefone)
-  const idLead = normalizeIdLead(body?.id_lead ?? body?.idLead)
+  let idLead = normalizeIdLead(body?.id_lead ?? body?.idLead)
 
   if (!curso || !tipoRaw) {
     return {
@@ -242,17 +255,50 @@ export async function runInscricao(env, body) {
     }
   }
 
-  if (!telefone || idLead == null) {
+  // Reject curso obviamente alucinado ("as", "oi", strings curtas).
+  // Sem isso a tool acabava gravando "Curso Inscrição: as" no Kommo.
+  if (!isCursoValido(curso)) {
+    return {
+      ok: false,
+      code: 'CURSO_INVALIDO',
+      message:
+        'Curso inválido — peça ao usuário o nome completo do curso (ex.: "Desenvolvimento Backend") ' +
+        'antes de chamar a tool.',
+      curso,
+    }
+  }
+
+  if (!telefone) {
     return {
       ok: false,
       code: 'MISSING_CRM_FIELDS',
       curso,
       tipo_ingresso: tipoRaw,
-      telefone: telefone || null,
-      id_lead: idLead,
       message:
-        'Integração pendente: é necessário telefone (ex.: formato WhatsApp do lead) e id_lead (Kommo) ' +
-        'para disparar o fluxo completo de inscrição. Os valores de curso e tipo de ingresso já foram recebidos e podem ser usados quando o CRM estiver ligado ao playground.',
+        'Não recebi o telefone do lead. Confirme o número (formato WhatsApp) e tente novamente.',
+    }
+  }
+
+  // Mesmo padrão de distribuir_humano: se o LLM não trouxe id_lead
+  // (ou trouxe 0), procura pelo telefone no Kommo. Sem isso, no
+  // caminho whatsapp, a tool retornava MISSING_CRM_FIELDS porque o
+  // orquestrador raramente conhece o id_lead real.
+  if (idLead == null) {
+    try {
+      const lookup = await findLeadByPhone(env, telefone)
+      if (lookup.ok && lookup.lead?.id) {
+        idLead = Number(lookup.lead.id)
+      } else {
+        return {
+          ok: false,
+          code: 'KOMMO_LEAD_NOT_FOUND',
+          message:
+            'Não localizei nenhum lead no CRM com esse telefone. Confirme o número ou peça ao cliente que mande mensagem pelo canal padrão.',
+          telefone,
+        }
+      }
+    } catch (e) {
+      return { ok: false, code: 'KOMMO_LOOKUP_ERROR', error: e.message, telefone }
     }
   }
 
@@ -262,7 +308,6 @@ export async function runInscricao(env, body) {
   const kommoToken = env.KOMMO_ACCESS_TOKEN || ''
   const botId = Number(env.KOMMO_SALESBOT_BOT_ID || 46605)
   const pipelineId = Number(env.KOMMO_PIPELINE_ID || 5481944)
-  const statusId = Number(env.KOMMO_STATUS_ID || 48539246)
   const statusAguardandoInscricao = Number(
     env.KOMMO_STATUS_AGUARDANDO_INSCRICAO || DEFAULT_STATUS_AGUARDANDO_INSCRICAO,
   )
@@ -289,21 +334,52 @@ export async function runInscricao(env, body) {
   const steps = []
   const warnings = []
 
-  // 1) chat_messages (antes do formulário / salesbot — precisamos saber se nome e nível existem)
-  let messages = []
-  try {
-    const enc = encodeURIComponent(telefone)
-    const rows = await supabaseRest(
+  // 1) chat_messages + lead Kommo EM PARALELO. O lead Kommo serve
+  // como fallback do nome do candidato quando o resumo do LLM não
+  // consegue extrair "Nome do candidato:" da conversa (caminho
+  // comum: o cliente nunca digita o próprio nome no whatsapp).
+  const enc = encodeURIComponent(telefone)
+  const [messagesRes, leadKommoRes] = await Promise.all([
+    supabaseRest(
       supabaseUrl,
       supabaseKey,
       'GET',
       `chat_messages?phone=eq.${enc}&select=*&order=created_at.asc&limit=500`,
     )
-    messages = Array.isArray(rows) ? rows : []
+      .then((rows) => ({ ok: true, rows: Array.isArray(rows) ? rows : [] }))
+      .catch((e) => ({ ok: false, error: e.message })),
+    kommoFetch(kommoBase, kommoToken, `/api/v4/leads/${idLead}?with=contacts`, { method: 'GET' })
+      .then((r) => ({ ok: r.ok, status: r.status, text: r.text }))
+      .catch((e) => ({ ok: false, error: e.message })),
+  ])
+
+  let messages = []
+  if (messagesRes.ok) {
+    messages = messagesRes.rows
     steps.push({ step: 'supabase_chat_messages', ok: true, count: messages.length })
-  } catch (e) {
-    warnings.push(`chat_messages: ${e.message}`)
+  } else {
+    warnings.push(`chat_messages: ${messagesRes.error}`)
     steps.push({ step: 'supabase_chat_messages', ok: false })
+  }
+
+  // Extrai nome do lead/contato Kommo (lead.name ou primeiro contato).
+  let nomeKommoFallback = ''
+  if (leadKommoRes.ok) {
+    try {
+      const leadData = JSON.parse(leadKommoRes.text)
+      if (leadData?.name && String(leadData.name).trim()) {
+        nomeKommoFallback = String(leadData.name).trim()
+      }
+      const contact = leadData?._embedded?.contacts?.[0]
+      if (!nomeKommoFallback && contact?.name) {
+        nomeKommoFallback = String(contact.name).trim()
+      }
+      steps.push({ step: 'kommo_get_lead', ok: true, nome_fallback: nomeKommoFallback || null })
+    } catch {
+      steps.push({ step: 'kommo_get_lead', ok: false, error: 'parse' })
+    }
+  } else {
+    steps.push({ step: 'kommo_get_lead', ok: false })
   }
 
   const conversation = buildConversationFromMessages(messages)
@@ -360,123 +436,81 @@ export async function runInscricao(env, body) {
     }
   }
 
+  // Fallback do nome: se o resumo não extraiu o nome do candidato da
+  // conversa (caso comum — o lead raramente diz o próprio nome no
+  // whatsapp), usa o nome do lead/contato registrado no Kommo.
+  if (isCampoAusente(parsed.nome_candidato) && nomeKommoFallback) {
+    parsed.nome_candidato = nomeKommoFallback
+  }
+
+  // Inferência simples de nível pelo curso quando o resumo não
+  // identificou. Cobre os casos mais comuns sem precisar de outro LLM.
+  if (isCampoAusente(parsed.nivel)) {
+    const c = curso.toLowerCase()
+    if (/(mba|mestrad|doutorad|p[óo]s[\s-]?gradua|especializa)/.test(c)) {
+      parsed.nivel = 'Pós-graduação'
+    } else {
+      parsed.nivel = 'Graduação'
+    }
+  }
+
   const missingFields = []
   if (isCampoAusente(parsed.nome_candidato)) missingFields.push('Nome do candidato')
   if (isCampoAusente(parsed.nivel)) missingFields.push('Nível de interesse')
 
-  const destino = missingFields.length === 0 ? 'aguardando_inscricao' : 'atendimento'
+  // O LLM só chama a tool inscricao quando o lead confirmou que
+  // quer se inscrever. Antes a tool podia "rebaixar" pra atendimento
+  // se faltasse algum dado no resumo — isso fazia leads válidos
+  // ficarem no funil errado. Agora o destino é SEMPRE Aguardando
+  // Inscrição; campos faltantes viram só uma nota informativa.
+  const destino = 'aguardando_inscricao'
 
-  // 2–4) Formulário (salesbot) + inscricao_ab + pause: somente se for para Aguardando Inscrição
-  if (destino === 'aguardando_inscricao') {
-    const salesbotRes = await kommoFetch(kommoBase, kommoToken, '/api/v2/salesbot/run', {
+  // 2-4) Salesbot + inscricao_ab + dados_cliente pause em PARALELO.
+  // Como destino agora é sempre 'aguardando_inscricao', removemos
+  // o ramo "skipped". As 3 operações são independentes — antes em
+  // série gastavam ~2-3s extras.
+  const encTel = encodeURIComponent(telefone)
+  const [salesbotRes, inscricaoAbRes, dadosClienteRes] = await Promise.all([
+    kommoFetch(kommoBase, kommoToken, '/api/v2/salesbot/run', {
       method: 'POST',
       body: [{ entity_type: 'leads', entity_id: idLead, bot_id: botId }],
+    }),
+    supabaseRest(
+      supabaseUrl,
+      supabaseKey,
+      'POST',
+      'inscricao_ab',
+      [{ id_lead: idLead, Atendimento: 'IA' }],
+      'resolution=merge-duplicates',
+    )
+      .then(() => ({ ok: true }))
+      .catch((e) => ({ ok: false, error: e.message })),
+    supabaseRest(supabaseUrl, supabaseKey, 'PATCH', `dados_cliente?telefone=eq.${encTel}`, {
+      atendimento_ia: 'pause',
     })
-    steps.push({ step: 'kommo_salesbot', ok: salesbotRes.ok, status: salesbotRes.status })
-    if (!salesbotRes.ok) {
-      return {
-        ok: false,
-        code: 'KOMMO_SALESBOT_FAILED',
-        detail: salesbotRes.text.slice(0, 400),
-        steps,
-      }
-    }
+      .then(() => ({ ok: true }))
+      .catch((e) => ({ ok: false, error: e.message })),
+  ])
 
-    try {
-      await supabaseRest(
-        supabaseUrl,
-        supabaseKey,
-        'POST',
-        'inscricao_ab',
-        [{ id_lead: idLead, Atendimento: 'IA' }],
-        'resolution=merge-duplicates',
-      )
-      steps.push({ step: 'supabase_inscricao_ab', ok: true })
-    } catch (e) {
-      return { ok: false, code: 'SUPABASE_INSCRICAO_AB', error: e.message, steps }
-    }
-
-    try {
-      const enc = encodeURIComponent(telefone)
-      await supabaseRest(
-        supabaseUrl,
-        supabaseKey,
-        'PATCH',
-        `dados_cliente?telefone=eq.${enc}`,
-        { atendimento_ia: 'pause' },
-      )
-      steps.push({ step: 'supabase_dados_cliente_pause', ok: true })
-    } catch (e) {
-      warnings.push(`dados_cliente: ${e.message}`)
-      steps.push({ step: 'supabase_dados_cliente_pause', ok: false, error: e.message })
-    }
-  } else {
-    steps.push({
-      step: 'kommo_salesbot',
-      ok: true,
-      skipped: true,
-      reason: 'dados_incompletos_nao_disparar_formulario',
-    })
-    steps.push({
-      step: 'supabase_inscricao_ab',
-      ok: true,
-      skipped: true,
-      reason: 'dados_incompletos_nao_disparar_formulario',
-    })
-    steps.push({
-      step: 'supabase_dados_cliente_pause',
-      ok: true,
-      skipped: true,
-      reason: 'dados_incompletos_nao_disparar_formulario',
-    })
+  steps.push({ step: 'kommo_salesbot', ok: salesbotRes.ok, status: salesbotRes.status })
+  if (!salesbotRes.ok) {
+    // Salesbot pode falhar por motivos benignos (bot já rodando,
+    // permissão, etc.). Não bloqueia o resto do fluxo — só registra.
+    warnings.push(`kommo_salesbot: ${salesbotRes.text.slice(0, 200)}`)
   }
+  steps.push({ step: 'supabase_inscricao_ab', ok: inscricaoAbRes.ok })
+  if (!inscricaoAbRes.ok) warnings.push(`inscricao_ab: ${inscricaoAbRes.error}`)
+  steps.push({ step: 'supabase_dados_cliente_pause', ok: dadosClienteRes.ok })
+  if (!dadosClienteRes.ok) warnings.push(`dados_cliente: ${dadosClienteRes.error}`)
 
-  const nomeKommo =
-    destino === 'aguardando_inscricao'
-      ? String(parsed.nome_candidato).trim()
-      : isCampoAusente(parsed.nome_candidato)
-        ? 'Não informado'
-        : String(parsed.nome_candidato).trim()
-  const nivelKommo =
-    destino === 'aguardando_inscricao'
-      ? String(parsed.nivel).trim()
-      : isCampoAusente(parsed.nivel)
-        ? 'Não informado'
-        : String(parsed.nivel).trim()
+  const nomeKommo = isCampoAusente(parsed.nome_candidato)
+    ? 'Não informado'
+    : String(parsed.nome_candidato).trim()
+  const nivelKommo = isCampoAusente(parsed.nivel)
+    ? 'Não informado'
+    : String(parsed.nivel).trim()
   const poloKommo = 'polo mais próximo'
 
-  const targetPipeline = pipelineId
-  const targetStatus = destino === 'aguardando_inscricao' ? statusAguardandoInscricao : statusId
-
-  // 5) Notas no lead (Kommo v4)
-  const notas = []
-  if (parsed.resumo) {
-    notas.push({ note_type: 'common', params: { text: String(parsed.resumo) } })
-  }
-  if (destino === 'atendimento' && missingFields.length > 0) {
-    notas.push({
-      note_type: 'common',
-      params: {
-        text:
-          '[Inscrição automática] Lead mantido em atendimento: faltam dados para mover a Aguardando Inscrição. ' +
-          'Formulário/template de inscrição (salesbot) não foi disparado. ' +
-          'Pendências: ' +
-          missingFields.join(', ') +
-          '. Completar no CRM e, quando estiver pronto, mover manualmente para a etapa de inscrição.',
-      },
-    })
-  }
-
-  if (notas.length) {
-    const noteRes = await kommoFetch(kommoBase, kommoToken, `/api/v4/leads/${idLead}/notes`, {
-      method: 'POST',
-      body: notas,
-    })
-    steps.push({ step: 'kommo_note', ok: noteRes.ok, status: noteRes.status })
-    if (!noteRes.ok) warnings.push(`kommo_note: ${noteRes.text.slice(0, 200)}`)
-  }
-
-  // 6) Atualizar lead (custom fields + pipeline / status)
   const customFields = [
     { field_id: KOMMO_FIELD_CURSO, values: [{ value: curso }] },
     { field_id: KOMMO_FIELD_NIVEL, values: [{ value: nivelKommo }] },
@@ -485,53 +519,52 @@ export async function runInscricao(env, body) {
     { field_id: KOMMO_FIELD_TIPO_INGRESSO, values: [{ value: tipoRaw }] },
   ]
 
-  const patchRes = await kommoFetch(kommoBase, kommoToken, `/api/v4/leads/${idLead}`, {
+  // 5-6) Notas + PATCH do lead (campos + pipeline/status) em PARALELO.
+  // Antes a tool fazia em série; ambos só dependem do idLead que já temos.
+  const notas = []
+  if (parsed.resumo) {
+    notas.push({ note_type: 'common', params: { text: String(parsed.resumo) } })
+  }
+  if (missingFields.length > 0) {
+    notas.push({
+      note_type: 'common',
+      params: {
+        text:
+          '[Inscrição automática] Lead movido para Aguardando Inscrição com dados parciais. ' +
+          'Pendências detectadas no resumo: ' +
+          missingFields.join(', ') +
+          '. Completar no CRM ou no atendimento humano.',
+      },
+    })
+  }
+
+  const notePromise = notas.length > 0
+    ? kommoFetch(kommoBase, kommoToken, `/api/v4/leads/${idLead}/notes`, {
+        method: 'POST',
+        body: notas,
+      })
+    : Promise.resolve(null)
+
+  const patchPromise = kommoFetch(kommoBase, kommoToken, `/api/v4/leads/${idLead}`, {
     method: 'PATCH',
     body: {
-      pipeline_id: targetPipeline,
-      status_id: targetStatus,
+      pipeline_id: pipelineId,
+      status_id: statusAguardandoInscricao,
       custom_fields_values: customFields,
     },
   })
+
+  const [noteRes, patchRes] = await Promise.all([notePromise, patchPromise])
+  if (noteRes) {
+    steps.push({ step: 'kommo_note', ok: noteRes.ok, status: noteRes.status })
+    if (!noteRes.ok) warnings.push(`kommo_note: ${noteRes.text.slice(0, 200)}`)
+  }
   steps.push({ step: 'kommo_update_lead', ok: patchRes.ok, status: patchRes.status })
   if (!patchRes.ok) warnings.push(`kommo_update_lead: ${patchRes.text.slice(0, 300)}`)
 
-  // 7) distribuicao_por_consultor — só quando fica em atendimento (fila de consultor)
-  if (destino === 'atendimento') {
-    try {
-      await supabaseRest(
-        supabaseUrl,
-        supabaseKey,
-        'POST',
-        'distribuicao_por_consultor',
-        [
-          {
-            id_lead: idLead,
-            timestamp: new Date().toISOString(),
-            origem: 'whatsapp',
-          },
-        ],
-        'resolution=merge-duplicates',
-      )
-      steps.push({ step: 'supabase_distribuicao', ok: true })
-    } catch (e) {
-      warnings.push(`distribuicao_por_consultor: ${e.message}`)
-      steps.push({ step: 'supabase_distribuicao', ok: false })
-    }
-  } else {
-    steps.push({ step: 'supabase_distribuicao', ok: true, skipped: true })
-  }
-
-  const retorno =
-    destino === 'aguardando_inscricao'
-      ? 'Lead movido para Aguardando Inscrição.'
-      : missingFields.length > 0
-        ? 'Lead mantido em atendimento: faltam dados para inscrição automática (ver nota no lead).'
-        : 'Lead mantido em atendimento (distribuição para consultor).'
-
   return {
     ok: true,
-    retorno,
+    retorno: 'Lead movido para Aguardando Inscrição.',
     destino,
     missing_fields: missingFields.length ? missingFields : undefined,
     curso,

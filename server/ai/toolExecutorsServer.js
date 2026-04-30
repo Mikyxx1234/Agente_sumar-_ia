@@ -91,16 +91,27 @@ async function vectorSearch(env, ctx, toolName, rpcName, query, matchCount = 10)
 
 function formatInscricaoResult(data) {
   if (!data.ok) {
+    if (data.code === 'CURSO_INVALIDO') {
+      return [
+        data.message || 'Curso inválido.',
+        'INSTRUÇÃO: peça ao usuário o nome completo do curso antes de tentar de novo. Não tente chamar a tool com a string atual.',
+      ].join('\n')
+    }
     if (data.code === 'MISSING_CRM_FIELDS' && data.message) return data.message
+    if (data.code === 'KOMMO_LEAD_NOT_FOUND' && data.message) return data.message
     if (data.code === 'MISSING_PARAMS') return data.error || 'Informe curso e tipo de ingresso.'
-    return `Inscrição não executada: ${data.error || data.message || data.code || 'erro'}`
+    // Falhas técnicas: não exposor detalhes ao usuário.
+    return [
+      'Não foi possível concluir a inscrição agora.',
+      'INSTRUÇÃO: peça desculpas ao usuário, diga que vai encaminhar para um consultor e siga conversando normalmente. Não cite IDs ou detalhes técnicos.',
+    ].join('\n')
   }
-  const lines = [data.retorno || 'Inscrição processada.', `Curso: ${data.curso}`, `Tipo de ingresso: ${data.tipo_ingresso}`]
-  if (data.destino === 'aguardando_inscricao') lines.push('Destino no CRM: Aguardando Inscrição.')
-  if (data.destino === 'atendimento') lines.push('Destino no CRM: atendimento (consultor).')
-  if (data.missing_fields?.length) lines.push(`Pendências: ${data.missing_fields.join(', ')}`)
-  if (data.resumo_campos?.resumo) lines.push(`Resumo: ${data.resumo_campos.resumo}`)
-  if (data.warnings?.length) lines.push(`Avisos: ${data.warnings.join(' | ')}`)
+  const lines = [
+    data.retorno || 'Lead movido para Aguardando Inscrição.',
+    `Curso: ${data.curso}`,
+    `Tipo de ingresso: ${data.tipo_ingresso}`,
+    'INSTRUÇÃO: confirme ao usuário que o pedido de inscrição foi registrado e que um consultor entrará em contato para finalizar. Tom acolhedor e direto.',
+  ]
   return lines.join('\n')
 }
 

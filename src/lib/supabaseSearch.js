@@ -369,16 +369,16 @@ export const TOOL_DEFINITIONS = [
     function: {
       name: 'inscricao',
       description:
-        'Dispara o fluxo de inscrição no WhatsApp (template e integração Kommo/Supabase), com curso e tipo de ingresso. ' +
-        'Use quando o interessado confirmar inscrição ou pedir para seguir com a matrícula/inscrição. ' +
-        'Tipo de ingresso: ENEM ou Vestibular Múltipla Escolha. ' +
-        'telefone e id_lead são opcionais no playground até a integração com o CRM; sem eles o servidor retorna aviso de integração pendente.',
+        'Dispara o fluxo de inscrição: move o lead para "Aguardando Inscrição" no Kommo e preenche curso, tipo de ingresso, nível, nome e polo. ' +
+        'Use quando o lead confirmar que quer se inscrever em um curso específico (depois de já ter o nome completo do curso — NUNCA chame com curso vago como "as", "ola" ou abreviações). ' +
+        'O telefone do lead está no Contexto do atendimento — sempre passe ele. ' +
+        'O id_lead é OPCIONAL: se não souber, OMITA o campo (a tool resolve pelo telefone). Nunca envie 0.',
       parameters: {
         type: 'object',
         properties: {
           curso: {
             type: 'string',
-            description: 'Nome do curso desejado pelo interessado.',
+            description: 'Nome completo do curso confirmado pelo lead (ex.: "Desenvolvimento Backend").',
           },
           tipo_ingresso: {
             type: 'string',
@@ -387,14 +387,14 @@ export const TOOL_DEFINITIONS = [
           },
           telefone: {
             type: 'string',
-            description: 'Telefone do lead (WhatsApp); opcional até integração.',
+            description: 'Telefone do lead (Contexto do atendimento).',
           },
           id_lead: {
             type: 'integer',
-            description: 'ID do lead no Kommo; opcional até integração.',
+            description: 'OPCIONAL — id_lead do Kommo se já estiver no Contexto. OMITA se não souber.',
           },
         },
-        required: ['curso', 'tipo_ingresso'],
+        required: ['curso', 'tipo_ingresso', 'telefone'],
       },
     },
   },

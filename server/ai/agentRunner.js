@@ -99,7 +99,7 @@ async function executeToolCalls(executors, toolCalls, trace, ctx) {
 
 /**
  * @param {object} env    process.env
- * @param {object} input  { telefone, userMessage, pushName, executionId? }
+ * @param {object} input  { telefone, userMessage, pushName, executionId?, leadId? }
  * @returns { ok, reply, toolCalls[], usage, durationMs, executionId, model, aiMeta }
  *   `aiMeta` agrega usage de sub-chamadas (query rewrite, tools com LLM
  *   próprio, embeddings) — usado pelo dashboard pra calcular custo real.
@@ -109,6 +109,7 @@ export async function runAgent(env, input) {
   const telefone = input?.telefone || ''
   const userMessage = (input?.userMessage || '').trim()
   const executionId = input?.executionId || generateExecutionId()
+  const leadId = Number.isFinite(Number(input?.leadId)) && Number(input?.leadId) > 0 ? Number(input.leadId) : null
   const model = resolveModel(env, 'orchestrator')
   const ctx = createExecutionContext()
   if (!userMessage) return { ok: false, error: 'Mensagem vazia', executionId, model, aiMeta: ctx.toAiMeta() }
@@ -119,10 +120,15 @@ export async function runAgent(env, input) {
   ])
 
   const systemMessage = buildSystemMessage(prompts)
-  const contextPreamble =
-    telefone
-      ? `Contexto do atendimento:\n- Telefone do lead: ${telefone}${input?.pushName ? `\n- Nome (pushName): ${input.pushName}` : ''}`
-      : ''
+  // Contexto do atendimento — telefone + id_lead vão p/ o LLM sempre
+  // que disponíveis. Sem id_lead aqui, o LLM tendia a chamar tools
+  // (inscricao / distribuir_humano) com `id_lead: 0` (default da
+  // OpenAI), causando MISSING_CRM_FIELDS e o fluxo nunca completava.
+  const contextLines = []
+  if (telefone) contextLines.push(`- Telefone do lead: ${telefone}`)
+  if (leadId) contextLines.push(`- id_lead (Kommo): ${leadId}`)
+  if (input?.pushName) contextLines.push(`- Nome (pushName): ${input.pushName}`)
+  const contextPreamble = contextLines.length > 0 ? `Contexto do atendimento:\n${contextLines.join('\n')}` : ''
 
   const apiMessages = [
     { role: 'system', content: systemMessage },
