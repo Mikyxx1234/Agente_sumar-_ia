@@ -25,6 +25,7 @@ function mapRow(r) {
     aiMeta: payload.aiMeta || null,
     rowCurso: payload.rowCurso || null,
     grauOriginal: payload.grauOriginal || null,
+    nivel: payload.nivel || 'graduacao',
   }
 }
 
@@ -53,4 +54,18 @@ export async function runSalesbotForLead(leadId) {
   })
   const data = await res.json().catch(() => ({}))
   return { ok: res.ok && !data.error, ...data }
+}
+
+/**
+ * Roda o reindex da tabela vetorial de pós-graduação.
+ * Demora ~30-60s pra 277 cursos.
+ */
+export async function reindexPosCursos() {
+  const res = await fetch('/api/salesbot/reindex-pos', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ clear: true }),
+  })
+  const data = await res.json().catch(() => ({}))
+  return { httpOk: res.ok, ...data }
 }

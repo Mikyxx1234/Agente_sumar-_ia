@@ -50,6 +50,7 @@ export async function saveSalesbotExecution(env, exec) {
       aiMeta: exec.aiMeta || null,
       rowCurso: exec.rowCurso || null,
       grauOriginal: exec.grauOriginal ?? null,
+      nivel: exec.nivel ?? 'graduacao',
     },
   }
   try {

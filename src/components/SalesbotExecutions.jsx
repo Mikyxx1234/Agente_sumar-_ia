@@ -2,9 +2,9 @@ import { useState, useMemo, useEffect, useCallback } from 'react'
 import {
   Search, Clock, Bot, Database, ChevronRight, ChevronDown,
   AlertCircle, Cpu, Zap, Copy, RefreshCw, Check, Bot as BotIcon,
-  Wand2, FileSearch, Tag,
+  Wand2, FileSearch, Tag, GraduationCap, BookMarked,
 } from 'lucide-react'
-import { getAllSalesbotExecutions, runSalesbotForLead } from '../lib/salesbotStore'
+import { getAllSalesbotExecutions, runSalesbotForLead, reindexPosCursos } from '../lib/salesbotStore'
 
 function formatDuration(ms) {
   if (!ms || ms < 1000) return `${ms || 0}ms`
@@ -64,6 +64,7 @@ function KvTable({ data }) {
 }
 
 function ExecutionDetail({ execution, onCopy }) {
+  const NivelIcon = execution.nivel === 'pos' ? BookMarked : GraduationCap
   return (
     <div className="exec-detail">
       <div className="exec-detail-header">
@@ -74,6 +75,10 @@ function ExecutionDetail({ execution, onCopy }) {
           </button>
           <span className={`badge ${execution.error ? 'danger' : execution.encontrado ? 'success' : 'warning'}`}>
             {execution.error ? 'Erro' : execution.encontrado ? 'Encontrado' : 'Não encontrado'}
+          </span>
+          <span className="badge" style={{ background: execution.nivel === 'pos' ? 'var(--accent, #3b82f6)' : 'var(--bg-3, rgba(255,255,255,0.08))', color: execution.nivel === 'pos' ? '#fff' : 'var(--fg-2)' }}>
+            <NivelIcon size={11} style={{ marginRight: 4, marginBottom: -1 }} />
+            {execution.nivel === 'pos' ? 'Pós-graduação' : 'Graduação'}
           </span>
         </div>
         <div className="exec-detail-meta">
@@ -203,6 +208,9 @@ export default function SalesbotExecutions() {
   const [copiedFlash, setCopiedFlash] = useState(false)
   const [manualLeadId, setManualLeadId] = useState('')
   const [running, setRunning] = useState(false)
+  const [nivelFilter, setNivelFilter] = useState('all') // all | grad | pos
+  const [reindexing, setReindexing] = useState(false)
+  const [reindexResult, setReindexResult] = useState(null)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -221,13 +229,15 @@ export default function SalesbotExecutions() {
       if (filter === 'encontrado' && !e.encontrado) return false
       if (filter === 'nao_encontrado' && (e.encontrado || e.error)) return false
       if (filter === 'erro' && !e.error) return false
+      if (nivelFilter === 'grad' && e.nivel === 'pos') return false
+      if (nivelFilter === 'pos' && e.nivel !== 'pos') return false
       if (q) {
         const hay = `${e.id} ${e.leadId} ${e.cursoOriginal} ${e.cursoCorrigido} ${e.cursoBusca} ${e.error || ''}`.toLowerCase()
         if (!hay.includes(q)) return false
       }
       return true
     })
-  }, [executions, search, filter])
+  }, [executions, search, filter, nivelFilter])
 
   const selected = useMemo(
     () => executions.find((e) => e.id === selectedId) || filtered[0] || null,
@@ -249,6 +259,15 @@ export default function SalesbotExecutions() {
     refresh()
   }
 
+  const onReindexPos = async () => {
+    if (!confirm('Vai apagar e regravar a tabela de embeddings de pós (cursos_salesbot_pos_nome) — usa OpenAI embeddings (~277 chamadas, ~$0.01). Confirma?')) return
+    setReindexing(true)
+    setReindexResult(null)
+    const r = await reindexPosCursos()
+    setReindexing(false)
+    setReindexResult(r)
+  }
+
   return (
     <div className="page-container">
       <div className="page-header">
@@ -260,11 +279,39 @@ export default function SalesbotExecutions() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn-secondary" onClick={onReindexPos} disabled={reindexing} title="Gera embeddings dos 277 cursos de pós (one-shot)">
+            <BookMarked size={14} /> {reindexing ? 'Indexando…' : 'Reindexar pós'}
+          </button>
           <button className="btn-secondary" onClick={refresh} disabled={loading}>
             <RefreshCw size={14} /> {loading ? 'Atualizando…' : 'Atualizar'}
           </button>
         </div>
       </div>
+
+      {reindexResult && (
+        <div
+          style={{
+            padding: '10px 14px',
+            background: reindexResult.ok ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
+            border: `1px solid ${reindexResult.ok ? 'var(--success, #10b981)' : 'var(--danger, #ef4444)'}`,
+            borderRadius: 6,
+            marginBottom: 14,
+            fontSize: 13,
+            color: 'var(--fg-1)',
+          }}
+        >
+          {reindexResult.ok ? (
+            <>
+              ✓ Reindex OK — {reindexResult.total} cursos indexados em {reindexResult.batches} batches (
+              {((reindexResult.durationMs || 0) / 1000).toFixed(1)}s) · modelo:{' '}
+              <code>{reindexResult.model}</code> · tokens:{' '}
+              {reindexResult.usage?.total_tokens || reindexResult.usage?.prompt_tokens || 0}
+            </>
+          ) : (
+            <>✗ Erro: {reindexResult.error || 'falha desconhecida'}</>
+          )}
+        </div>
+      )}
 
       {/* Disparo manual */}
       <div
@@ -343,6 +390,22 @@ export default function SalesbotExecutions() {
             </button>
           ))}
         </div>
+        <div style={{ display: 'flex', gap: 4, marginLeft: 8 }}>
+          {[
+            { id: 'all', label: 'Todos' },
+            { id: 'grad', label: 'Grad' },
+            { id: 'pos', label: 'Pós' },
+          ].map((f) => (
+            <button
+              key={f.id}
+              onClick={() => setNivelFilter(f.id)}
+              className={nivelFilter === f.id ? 'btn-primary' : 'btn-secondary'}
+              style={{ fontSize: 12, padding: '6px 12px' }}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {copiedFlash && (
@@ -380,9 +443,14 @@ export default function SalesbotExecutions() {
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
                   <span style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--fg-2)' }}>{e.id}</span>
-                  <span className={`badge ${tone}`} style={{ fontSize: 10 }}>
-                    {e.error ? 'Erro' : e.encontrado ? 'OK' : 'Não'}
-                  </span>
+                  <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                    <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 3, background: e.nivel === 'pos' ? 'rgba(59,130,246,0.2)' : 'rgba(255,255,255,0.05)', color: e.nivel === 'pos' ? 'var(--accent, #3b82f6)' : 'var(--fg-3)' }}>
+                      {e.nivel === 'pos' ? 'Pós' : 'Grad'}
+                    </span>
+                    <span className={`badge ${tone}`} style={{ fontSize: 10 }}>
+                      {e.error ? 'Erro' : e.encontrado ? 'OK' : 'Não'}
+                    </span>
+                  </div>
                 </div>
                 <div style={{ fontSize: 13, marginTop: 4, color: 'var(--fg-1)' }}>
                   {e.cursoOriginal || '(sem curso)'}

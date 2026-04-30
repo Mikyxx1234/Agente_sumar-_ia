@@ -142,17 +142,57 @@ function pickCustomFieldValue(lead, fieldNameAliases, fieldId, fieldsByName) {
 }
 
 /**
- * Vector search em `cursos_salesbot_nome` via RPC
- * `match_cursos_salesbot_nome` — espelha o tool n8n "Buscar Cursos".
+ * Roteamento por nível: "graduacao" | "pos".
+ *
+ * Heurística pra inferir do campo `Grau_new` do lead. Se o campo não
+ * existir ou ficar ambíguo, default = graduacao (preserva comportamento
+ * anterior do robocsv original).
  */
-async function buscarCursosTool(env, query) {
+function inferNivel(grauStr) {
+  const s = String(grauStr || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+  if (!s) return 'graduacao'
+  // padrões de pós:
+  if (/(pos|p[oó]s|mba|especializa|mestrado|doutorado|latu|stricto|stricto-sensu|lato-sensu)/.test(s)) {
+    return 'pos'
+  }
+  return 'graduacao'
+}
+
+/**
+ * Tabelas e RPCs por nível. Pra "pos" precisa que existam:
+ *   - cursos_salesbot_pos
+ *   - cursos_salesbot_pos_nome  (vetorial)
+ *   - match_cursos_salesbot_pos_nome (RPC)
+ * Veja server/salesbot/SCHEMA_POS.sql.
+ */
+const NIVEL_TABLES = {
+  graduacao: {
+    catalog: 'cursos_salesbot',
+    rpc: 'match_cursos_salesbot_nome',
+  },
+  pos: {
+    catalog: 'cursos_salesbot_pos',
+    rpc: 'match_cursos_salesbot_pos_nome',
+  },
+}
+
+/**
+ * Vector search nas tabelas vetoriais do salesbot. Espelha a "tool"
+ * "Buscar Cursos" do n8n original — única diferença é que escolhe a
+ * tabela certa pelo nível inferido (`graduacao` ou `pos`).
+ */
+async function buscarCursosTool(env, query, nivel = 'graduacao') {
   const apiKey = env.OPENAI_API_KEY || env.VITE_OPENAI_API_KEY
   const supaUrl = env.SUPABASE_URL || env.VITE_SUPABASE_URL
   const supaKey = env.SUPABASE_KEY || env.VITE_SUPABASE_KEY
   if (!apiKey || !supaUrl || !supaKey) {
     return 'Tool indisponível (config faltando).'
   }
-  // Embedding (text-embedding-3-small por default).
+  const tables = NIVEL_TABLES[nivel] || NIVEL_TABLES.graduacao
   const embModel = resolveModel(env, 'embeddings')
   const embRes = await fetch('https://api.openai.com/v1/embeddings', {
     method: 'POST',
@@ -169,8 +209,7 @@ async function buscarCursosTool(env, query) {
 
   const usageEmb = embData.usage || null
 
-  // RPC match_cursos_salesbot_nome.
-  const rpcRes = await fetch(`${supaUrl.replace(/\/$/, '')}/rest/v1/rpc/match_cursos_salesbot_nome`, {
+  const rpcRes = await fetch(`${supaUrl.replace(/\/$/, '')}/rest/v1/rpc/${tables.rpc}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', apikey: supaKey, Authorization: `Bearer ${supaKey}` },
     body: JSON.stringify({ query_embedding: embedding, match_count: 2 }),
@@ -218,7 +257,7 @@ const AGENT_TOOLS = [
   },
 ]
 
-async function runAgentCorrigeCurso(env, cursoBruto) {
+async function runAgentCorrigeCurso(env, cursoBruto, nivel = 'graduacao') {
   const apiKey = env.OPENAI_API_KEY || env.VITE_OPENAI_API_KEY
   if (!apiKey) throw new Error('OPENAI_API_KEY não configurada')
   const model = resolveModel(env, 'salesbot_curso')
@@ -266,7 +305,7 @@ async function runAgentCorrigeCurso(env, cursoBruto) {
         }
         let args = {}
         try { args = JSON.parse(tc.function.arguments || '{}') } catch {}
-        const result = await buscarCursosTool(env, args.query || cursoBruto).catch((e) => `Erro tool: ${e.message}`)
+        const result = await buscarCursosTool(env, args.query || cursoBruto, nivel).catch((e) => `Erro tool: ${e.message}`)
         const resultText = typeof result === 'string' ? result : (result?.text || '')
         if (typeof result === 'object' && result?.usage && result.embModel) {
           embeddingsUsage.push({ tool: 'salesbot.buscar_cursos', model: result.embModel, usage: result.usage })
@@ -306,23 +345,22 @@ function normalizeCursoBusca(output) {
 /**
  * Query SQL espelhando o "Execute a SQL query" do n8n. Mantemos o
  * mesmo critério: case-insensitive em curso_sinonimo + Curso, com
- * fallback ILIKE com espaços (`% % `).
+ * fallback ILIKE com espaços (`% % `). A tabela é determinada pelo
+ * nível (`graduacao` ou `pos`).
  */
-async function buscarLinhaCurso(env, cursoBusca) {
+async function buscarLinhaCurso(env, cursoBusca, nivel = 'graduacao') {
   const url = env.SUPABASE_URL || env.VITE_SUPABASE_URL
   const key = env.SUPABASE_KEY || env.VITE_SUPABASE_KEY
   if (!url || !key) throw new Error('SUPABASE_URL/KEY não configurados')
 
+  const tableName = (NIVEL_TABLES[nivel] || NIVEL_TABLES.graduacao).catalog
   const enc = encodeURIComponent(cursoBusca)
-  // PostgREST `or` aceita múltiplos filtros. ILIKE no PostgREST é `ilike.*term*`
-  // (case-insensitive). Como o original usa `% term %` (com espaços),
-  // mantemos o mesmo padrão pra empatar resultados.
   const orParts = [
     `curso_sinonimo.ilike.${enc}`,
     `Curso.ilike.${enc}`,
     `curso_sinonimo.ilike.* ${enc} *`,
   ].join(',')
-  const path = `cursos_salesbot?or=(${orParts})&select=*&limit=1`
+  const path = `${tableName}?or=(${orParts})&select=*&limit=1`
   const res = await fetch(`${url.replace(/\/$/, '')}/rest/v1/${path}`, {
     headers: { apikey: key, Authorization: `Bearer ${key}` },
   })
@@ -350,7 +388,7 @@ function pickRowField(row, ...candidates) {
   return null
 }
 
-function buildKommoCustomFieldsFromRow(env, row) {
+function buildKommoCustomFieldsFromRowGrad(env, row) {
   return [
     { field_id: envFieldId(env, 'CURSO', F.CURSO), values: [{ value: pickRowField(row, 'Curso', 'curso') || ' ' }] },
     { field_id: envFieldId(env, 'GRAU_SITE_1', F.GRAU_SITE_1), values: [{ value: pickRowField(row, 'Grau site 1', 'grau_site_1') || ' ' }] },
@@ -367,6 +405,51 @@ function buildKommoCustomFieldsFromRow(env, row) {
     { field_id: envFieldId(env, 'TIPO_1', F.TIPO_1), values: [{ value: pickRowField(row, 'Tipo 1', 'tipo_1') || ' ' }] },
     { field_id: envFieldId(env, 'TIPO_2', F.TIPO_2), values: [{ value: pickRowField(row, 'Tipo 2', 'tipo_2') || ' ' }] },
   ]
+}
+
+/**
+ * Mapeia uma linha de `cursos_salesbot_pos` pros mesmos custom fields
+ * do Kommo da graduação. O usuário pediu pra reaproveitar:
+ *   "Semestres"    → duracao_1   (ex: "6 meses")
+ *   "Semestres 2"  → duracao_2   (ex: "9 meses" ou vazio)
+ *   "Preço eduit 1"→ preco_1
+ *   "Preço eduit 2"→ preco_2
+ *   "Modalidade"   → modalidade  (sempre "EAD")
+ *   "Tipo 1/2"     → vazio       (pós não tem ENEM/Vestibular)
+ *   "Grau site 1/2"→ "Pós-graduação"
+ *
+ * `Curso` recebe o nome do curso de pós já resolvido pelo agente.
+ */
+function buildKommoCustomFieldsFromRowPos(env, row) {
+  const curso = pickRowField(row, 'Curso', 'curso') || ' '
+  const modalidade = pickRowField(row, 'modalidade', 'Modalidade') || 'EAD'
+  const duracao1 = pickRowField(row, 'duracao_1') || ' '
+  const duracao2 = pickRowField(row, 'duracao_2') || ' '
+  const preco1 = pickRowField(row, 'preco_1') || ' '
+  const preco2 = pickRowField(row, 'preco_2') || ' '
+  const contagem = pickRowField(row, 'contagem') || '2'
+  return [
+    { field_id: envFieldId(env, 'CURSO', F.CURSO), values: [{ value: curso }] },
+    { field_id: envFieldId(env, 'GRAU_SITE_1', F.GRAU_SITE_1), values: [{ value: 'Pós-graduação' }] },
+    { field_id: envFieldId(env, 'GRAU_SITE_2', F.GRAU_SITE_2), values: [{ value: 'Pós-graduação' }] },
+    { field_id: envFieldId(env, 'MODALIDADE', F.MODALIDADE), values: [{ value: modalidade }] },
+    { field_id: envFieldId(env, 'MODALIDADE2', F.MODALIDADE2), values: [{ value: modalidade }] },
+    { field_id: envFieldId(env, 'SEMESTRES', F.SEMESTRES), values: [{ value: duracao1 }] },
+    { field_id: envFieldId(env, 'SEMESTRES_2', F.SEMESTRES_2), values: [{ value: duracao2 }] },
+    { field_id: envFieldId(env, 'SEMESTRES_3', F.SEMESTRES_3), values: [{ value: ' ' }] },
+    { field_id: envFieldId(env, 'PRECO_1', F.PRECO_1), values: [{ value: preco1 }] },
+    { field_id: envFieldId(env, 'PRECO_2', F.PRECO_2), values: [{ value: preco2 }] },
+    { field_id: envFieldId(env, 'PRECO_3', F.PRECO_3), values: [{ value: ' ' }] },
+    { field_id: envFieldId(env, 'CONTAGEM', F.CONTAGEM), values: [{ value: contagem }] },
+    { field_id: envFieldId(env, 'TIPO_1', F.TIPO_1), values: [{ value: ' ' }] },
+    { field_id: envFieldId(env, 'TIPO_2', F.TIPO_2), values: [{ value: ' ' }] },
+  ]
+}
+
+function buildKommoCustomFieldsFromRow(env, row, nivel) {
+  return nivel === 'pos'
+    ? buildKommoCustomFieldsFromRowPos(env, row)
+    : buildKommoCustomFieldsFromRowGrad(env, row)
 }
 
 /**
@@ -387,6 +470,7 @@ export async function runSalesbotCsv(env, input) {
     timestamp: nowIso(),
     cursoOriginal: null,
     grauOriginal: null,
+    nivel: 'graduacao',
     cursoCorrigido: null,
     cursoBusca: null,
     encontrado: false,
@@ -440,7 +524,9 @@ export async function runSalesbotCsv(env, input) {
     )
     out.cursoOriginal = cursoBruto || null
     out.grauOriginal = grauBruto || null
-    steps.push({ step: 'lead_fields', curso: cursoBruto, grau: grauBruto })
+    const nivel = inferNivel(grauBruto)
+    out.nivel = nivel
+    steps.push({ step: 'lead_fields', curso: cursoBruto, grau: grauBruto, nivel })
 
     if (!cursoBruto || !String(cursoBruto).trim()) {
       out.error = 'Lead não tem campo "Curso" preenchido — nada para pesquisar.'
@@ -448,8 +534,8 @@ export async function runSalesbotCsv(env, input) {
       return out
     }
 
-    // 3) Agente IA corrige o nome.
-    const agent = await runAgentCorrigeCurso(env, String(cursoBruto))
+    // 3) Agente IA corrige o nome (busca semântica na tabela do nível certo).
+    const agent = await runAgentCorrigeCurso(env, String(cursoBruto), nivel)
     out.cursoCorrigido = agent.content
     out.model = agent.model
     out.usage = agent.usage
@@ -466,15 +552,20 @@ export async function runSalesbotCsv(env, input) {
     out.cursoBusca = cursoBusca
     steps.push({ step: 'normalize', cursoBusca })
 
-    // 5) SQL no Supabase (cursos_salesbot).
-    const row = await buscarLinhaCurso(env, cursoBusca)
+    // 5) SQL no Supabase (tabela do nível inferido).
+    const row = await buscarLinhaCurso(env, cursoBusca, nivel)
     out.rowCurso = row
     out.encontrado = !!row
-    steps.push({ step: 'sql_query', encontrado: out.encontrado, columns: row ? Object.keys(row).length : 0 })
+    steps.push({
+      step: 'sql_query',
+      tabela: (NIVEL_TABLES[nivel] || NIVEL_TABLES.graduacao).catalog,
+      encontrado: out.encontrado,
+      columns: row ? Object.keys(row).length : 0,
+    })
 
     // 6) PATCH no lead.
     const customFields = out.encontrado
-      ? buildKommoCustomFieldsFromRow(env, row)
+      ? buildKommoCustomFieldsFromRow(env, row, nivel)
       : [{ field_id: envFieldId(env, 'CURSO', F.CURSO), values: [{ value: 'Não Encontrado' }] }]
 
     const patchBody = {
