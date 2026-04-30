@@ -4,7 +4,7 @@ import {
   AlertCircle, Cpu, Zap, Copy, RefreshCw, Check, Bot as BotIcon,
   Wand2, FileSearch, Tag, GraduationCap, BookMarked,
 } from 'lucide-react'
-import { getAllSalesbotExecutions, runSalesbotForLead, reindexPosCursos } from '../lib/salesbotStore'
+import { getAllSalesbotExecutions, runSalesbotForLead, reindexPosCursos, rebuildPosCatalog } from '../lib/salesbotStore'
 
 function formatDuration(ms) {
   if (!ms || ms < 1000) return `${ms || 0}ms`
@@ -211,6 +211,8 @@ export default function SalesbotExecutions() {
   const [nivelFilter, setNivelFilter] = useState('all') // all | grad | pos
   const [reindexing, setReindexing] = useState(false)
   const [reindexResult, setReindexResult] = useState(null)
+  const [rebuilding, setRebuilding] = useState(false)
+  const [rebuildResult, setRebuildResult] = useState(null)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -268,6 +270,15 @@ export default function SalesbotExecutions() {
     setReindexResult(r)
   }
 
+  const onRebuildPos = async () => {
+    if (!confirm('Vai reconstruir o catálogo cursos_salesbot_pos a partir da documents_precos (a tabela que a IA principal usa). Apaga as linhas atuais e recria. Depois precisa rodar "Reindexar pós". Confirma?')) return
+    setRebuilding(true)
+    setRebuildResult(null)
+    const r = await rebuildPosCatalog()
+    setRebuilding(false)
+    setRebuildResult(r)
+  }
+
   return (
     <div className="page-container">
       <div className="page-header">
@@ -279,7 +290,10 @@ export default function SalesbotExecutions() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn-secondary" onClick={onReindexPos} disabled={reindexing} title="Gera embeddings dos 277 cursos de pós (one-shot)">
+          <button className="btn-secondary" onClick={onRebuildPos} disabled={rebuilding} title="Reconstrói cursos_salesbot_pos a partir da documents_precos (fonte que a IA usa)">
+            <Database size={14} /> {rebuilding ? 'Reconstruindo…' : 'Reconstruir catálogo pós'}
+          </button>
+          <button className="btn-secondary" onClick={onReindexPos} disabled={reindexing} title="Gera embeddings dos cursos de pós (depois do rebuild)">
             <BookMarked size={14} /> {reindexing ? 'Indexando…' : 'Reindexar pós'}
           </button>
           <button className="btn-secondary" onClick={refresh} disabled={loading}>
@@ -287,6 +301,42 @@ export default function SalesbotExecutions() {
           </button>
         </div>
       </div>
+
+      {rebuildResult && (
+        <div
+          style={{
+            padding: '10px 14px',
+            background: rebuildResult.ok ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
+            border: `1px solid ${rebuildResult.ok ? 'var(--success, #10b981)' : 'var(--danger, #ef4444)'}`,
+            borderRadius: 6,
+            marginBottom: 14,
+            fontSize: 13,
+            color: 'var(--fg-1)',
+          }}
+        >
+          {rebuildResult.ok ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div>
+                ✓ Catálogo reconstruído — {rebuildResult.cursosAgrupados} cursos (
+                {rebuildResult.comDoisPacotes} com 2 pacotes, {rebuildResult.comUmPacote} com 1 pacote) ·
+                {' '}{rebuildResult.totalPos} linhas pós lidas de {rebuildResult.totalDocsLidos} ·
+                {' '}{((rebuildResult.durationMs || 0) / 1000).toFixed(1)}s
+              </div>
+              {rebuildResult.comUmPacote > 0 && (
+                <div style={{ fontSize: 12, color: 'var(--fg-3)' }}>
+                  Cursos com 1 pacote só (verificar):{' '}
+                  {(rebuildResult.exemplosUmPacote || []).join(' · ')}
+                </div>
+              )}
+              <div style={{ fontSize: 12, color: 'var(--fg-3)', marginTop: 2 }}>
+                Próximo passo: clique <b>Reindexar pós</b> pra recalcular embeddings.
+              </div>
+            </div>
+          ) : (
+            <>✗ Erro: {rebuildResult.error || 'falha desconhecida'}</>
+          )}
+        </div>
+      )}
 
       {reindexResult && (
         <div

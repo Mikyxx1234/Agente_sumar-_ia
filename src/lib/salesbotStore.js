@@ -69,3 +69,17 @@ export async function reindexPosCursos() {
   const data = await res.json().catch(() => ({}))
   return { httpOk: res.ok, ...data }
 }
+
+/**
+ * Reconstrói o catálogo cursos_salesbot_pos a partir da
+ * documents_precos (mesma fonte que a IA principal usa).
+ * Após rodar, é preciso reindexar (botão Reindexar pós).
+ */
+export async function rebuildPosCatalog() {
+  const res = await fetch('/api/salesbot/rebuild-pos-catalog', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  })
+  const data = await res.json().catch(() => ({}))
+  return { httpOk: res.ok, ...data }
+}
