@@ -25,8 +25,6 @@ import { runAgent } from './server/ai/agentRunner.js'
 import { startAgentScheduler, runSchedulerTick, isSchedulerRunning } from './server/agentScheduler.js'
 import { runSalesbotCsv, extractLeadIdFromWebhookBody } from './server/salesbot/csvSearch.js'
 import { saveSalesbotExecution } from './server/salesbot/telemetry.js'
-import { reindexPos } from './server/salesbot/reindexPos.js'
-import { rebuildPosFromDocumentsPrecos } from './server/salesbot/rebuildPos.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -760,34 +758,6 @@ app.post('/api/salesbot/run', async (req, res) => {
     const exec = await runSalesbotCsv(process.env, { leadId })
     await saveSalesbotExecution(process.env, exec).catch(() => {})
     res.json(exec)
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message })
-  }
-})
-
-// Reconstrói o catálogo cursos_salesbot_pos a partir de
-// documents_precos (a fonte que a IA principal usa). Útil quando
-// preços mudam — basta rodar este endpoint que o salesbot fica
-// sincronizado. Após rodar, é preciso reindexar via reindex-pos.
-//   POST /api/salesbot/rebuild-pos-catalog
-app.post('/api/salesbot/rebuild-pos-catalog', async (req, res) => {
-  try {
-    const result = await rebuildPosFromDocumentsPrecos(process.env)
-    res.json(result)
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message })
-  }
-})
-
-// Reindex one-shot da tabela vetorial cursos_salesbot_pos_nome.
-//   POST /api/salesbot/reindex-pos
-//   body opcional: { clear: true|false }
-// Default: clear=true (apaga tudo e regrava — evita duplicatas).
-app.post('/api/salesbot/reindex-pos', async (req, res) => {
-  try {
-    const clear = req.body?.clear === false ? false : true
-    const result = await reindexPos(process.env, { clear })
-    res.status(result.ok ? 200 : 500).json(result)
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })
   }

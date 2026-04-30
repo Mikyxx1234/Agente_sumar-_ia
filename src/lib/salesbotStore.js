@@ -56,30 +56,3 @@ export async function runSalesbotForLead(leadId) {
   return { ok: res.ok && !data.error, ...data }
 }
 
-/**
- * Roda o reindex da tabela vetorial de pós-graduação.
- * Demora ~30-60s pra 277 cursos.
- */
-export async function reindexPosCursos() {
-  const res = await fetch('/api/salesbot/reindex-pos', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ clear: true }),
-  })
-  const data = await res.json().catch(() => ({}))
-  return { httpOk: res.ok, ...data }
-}
-
-/**
- * Reconstrói o catálogo cursos_salesbot_pos a partir da
- * documents_precos (mesma fonte que a IA principal usa).
- * Após rodar, é preciso reindexar (botão Reindexar pós).
- */
-export async function rebuildPosCatalog() {
-  const res = await fetch('/api/salesbot/rebuild-pos-catalog', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-  })
-  const data = await res.json().catch(() => ({}))
-  return { httpOk: res.ok, ...data }
-}
