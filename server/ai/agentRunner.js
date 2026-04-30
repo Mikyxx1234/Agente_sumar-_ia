@@ -119,6 +119,23 @@ export async function runAgent(env, input) {
     loadRecentHistoryMessages(env, telefone),
   ])
 
+  // Loga o histórico carregado pra cada execução. Antes não tínhamos
+  // visibilidade se a memória vinha vazia / curta — o agente parecia
+  // "esquecer" de turnos anteriores e era difícil diagnosticar.
+  const historyPreview = historyMessages.slice(-6).map((m) => ({
+    role: m.role === 'user' ? 'user' : m.role === 'assistant' ? 'assistant' : m.role,
+    content: String(m.content || '').slice(0, 200),
+  }))
+  console.log(
+    `[${executionId}] history loaded: ${historyMessages.length} msgs (telefone=${telefone || 'n/a'})`,
+  )
+  if (historyMessages.length > 0) {
+    for (const m of historyPreview) {
+      console.log(`  [${m.role}] ${m.content.replace(/\s+/g, ' ').slice(0, 120)}`)
+    }
+  }
+  ctx.recordHistorySnapshot?.({ count: historyMessages.length, preview: historyPreview })
+
   const systemMessage = buildSystemMessage(prompts)
   // Contexto do atendimento — telefone + id_lead vão p/ o LLM sempre
   // que disponíveis. Sem id_lead aqui, o LLM tendia a chamar tools

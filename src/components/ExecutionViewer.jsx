@@ -3,7 +3,7 @@ import {
   Search, Trash2, Clock, Bot, Database,
   ChevronRight, ChevronDown, AlertCircle,
   User, Cpu, Zap, Copy, RefreshCw,
-  Check, ListChecks, Wand2
+  Check, ListChecks, Wand2, BookOpen
 } from 'lucide-react'
 import { getAllExecutions, clearExecutions } from '../lib/executionStore'
 
@@ -75,6 +75,53 @@ function ExecutionDetail({ execution, onCopy }) {
         <FlowStep icon={User} iconKind="" title="Mensagem do usuário" defaultOpen>
           <div className="flow-content-text">{execution.userMessage}</div>
         </FlowStep>
+        {execution.aiMeta?.history && (
+          <FlowStep
+            icon={BookOpen}
+            iconKind={execution.aiMeta.history.count > 0 ? 'info' : 'warning'}
+            title={`Memória da conversa · ${execution.aiMeta.history.count} mensagens`}
+            headerBadge={
+              execution.aiMeta.history.count === 0 ? (
+                <span style={{ fontSize: 11, color: 'var(--warning, #f59e0b)' }}>
+                  ⚠️ histórico vazio
+                </span>
+              ) : null
+            }
+            defaultOpen={execution.aiMeta.history.count === 0}
+          >
+            {execution.aiMeta.history.count === 0 ? (
+              <div className="flow-content-text" style={{ color: 'var(--fg-3)' }}>
+                Nenhuma mensagem de conversa anterior foi injetada no prompt.
+                Verifique se a tabela <code>n8n_chat_histories</code> está sendo
+                populada (campo <code>session_id</code> = <code>&lt;digitos&gt;@s.whatsapp.net</code>).
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ fontSize: 11, color: 'var(--fg-3)' }}>
+                  Mostrando últimas {execution.aiMeta.history.preview?.length || 0} de{' '}
+                  {execution.aiMeta.history.count} mensagens injetadas no prompt do orquestrador:
+                </div>
+                {execution.aiMeta.history.preview?.map((m, idx) => (
+                  <div
+                    key={idx}
+                    style={{
+                      padding: '6px 8px',
+                      borderLeft: `3px solid ${m.role === 'user' ? 'var(--accent, #3b82f6)' : 'var(--success, #10b981)'}`,
+                      background: 'var(--bg-2, rgba(255,255,255,0.02))',
+                      borderRadius: 3,
+                      fontSize: 12,
+                    }}
+                  >
+                    <span style={{ fontWeight: 600, marginRight: 6, color: 'var(--fg-2)' }}>
+                      {m.role === 'user' ? '👤' : '🤖'} {m.role}:
+                    </span>
+                    <span style={{ color: 'var(--fg-1)' }}>{m.content}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </FlowStep>
+        )}
         <FlowStep icon={Bot} iconKind="info" title={`Orquestrador · ${execution.model}`}>
           <div className="flow-content-text">
             Rounds: {execution.steps?.filter(s => s.type === 'llm_call').length || 1}

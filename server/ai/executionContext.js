@@ -34,6 +34,10 @@ export function createExecutionContext() {
   // O agentRunner consome um item antes de gravar cada step do toolTrace,
   // permitindo ao ExecutionViewer mostrar "o que a reescrita fez".
   const toolTraceQueues = new Map()
+  // Snapshot do histórico de conversa que foi injetado no system
+  // prompt do orquestrador. Usado pelo ExecutionViewer pra mostrar
+  // "memória usada" e diagnosticar quando a IA "esquece" turnos.
+  let historySnapshot = null
 
   function pushUsage(arr, info) {
     if (!info || !info.model) return
@@ -84,12 +88,26 @@ export function createExecutionContext() {
       return q.shift()
     },
 
+    /**
+     * Registra o snapshot do histórico injetado no prompt do
+     * orquestrador. `count` total + `preview` com as últimas N
+     * mensagens (já truncadas em ~200 chars cada).
+     */
+    recordHistorySnapshot(snap) {
+      if (!snap) return
+      historySnapshot = {
+        count: Number(snap.count) || 0,
+        preview: Array.isArray(snap.preview) ? snap.preview.slice(0, 12) : [],
+      }
+    },
+
     /** Snapshot serializável para `mensagens_ia.ai_meta`. */
     toAiMeta() {
       return {
         queryRewriteUsage: queryRewriteUsage.slice(),
         toolUsage: toolUsage.slice(),
         embeddingsUsage: embeddingsUsage.slice(),
+        history: historySnapshot,
       }
     },
   }
@@ -103,8 +121,9 @@ export function createNoopExecutionContext() {
     recordEmbeddingsUsage() {},
     recordToolTrace() {},
     consumeToolTrace() { return null },
+    recordHistorySnapshot() {},
     toAiMeta() {
-      return { queryRewriteUsage: [], toolUsage: [], embeddingsUsage: [] }
+      return { queryRewriteUsage: [], toolUsage: [], embeddingsUsage: [], history: null }
     },
   }
 }
