@@ -4,7 +4,7 @@ import {
   AlertCircle, Cpu, Zap, Copy, RefreshCw, Check, Bot as BotIcon,
   Wand2, FileSearch, Tag, GraduationCap, BookMarked,
 } from 'lucide-react'
-import { getAllSalesbotExecutions, runSalesbotForLead } from '../lib/salesbotStore'
+import { getAllSalesbotExecutions, runSalesbotForLead, rebuildPosCatalog, reindexPosCursos } from '../lib/salesbotStore'
 
 function formatDuration(ms) {
   if (!ms || ms < 1000) return `${ms || 0}ms`
@@ -209,6 +209,8 @@ export default function SalesbotExecutions() {
   const [manualLeadId, setManualLeadId] = useState('')
   const [running, setRunning] = useState(false)
   const [nivelFilter, setNivelFilter] = useState('all') // all | grad | pos
+  const [posBusy, setPosBusy] = useState(null) // 'rebuild' | 'reindex' | 'dry'
+  const [posResult, setPosResult] = useState(null)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -257,6 +259,32 @@ export default function SalesbotExecutions() {
     refresh()
   }
 
+  const onDryRunPos = async () => {
+    setPosBusy('dry')
+    setPosResult(null)
+    const r = await rebuildPosCatalog({ dryRun: true })
+    setPosBusy(null)
+    setPosResult({ kind: 'dry', data: r })
+  }
+
+  const onRebuildPos = async () => {
+    if (!confirm('Apaga TODAS as linhas de cursos_salesbot_pos e recria a partir de documents_precos. Confirma?')) return
+    setPosBusy('rebuild')
+    setPosResult(null)
+    const r = await rebuildPosCatalog({ dryRun: false })
+    setPosBusy(null)
+    setPosResult({ kind: 'rebuild', data: r })
+  }
+
+  const onReindexPos = async () => {
+    if (!confirm('Apaga e regrava embeddings de pós (~$0.01 em OpenAI). Confirma?')) return
+    setPosBusy('reindex')
+    setPosResult(null)
+    const r = await reindexPosCursos()
+    setPosBusy(null)
+    setPosResult({ kind: 'reindex', data: r })
+  }
+
   return (
     <div className="page-container">
       <div className="page-header">
@@ -267,12 +295,117 @@ export default function SalesbotExecutions() {
             (<code>POST /api/salesbot/webhook</code> ou <code>POST /webhook/robocsv</code>)
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button
+            className="btn-secondary"
+            onClick={onDryRunPos}
+            disabled={posBusy !== null}
+            title="Lê documents_precos e mostra diagnóstico — não escreve nada"
+          >
+            <FileSearch size={14} /> {posBusy === 'dry' ? 'Analisando…' : 'Diagnóstico pós'}
+          </button>
+          <button
+            className="btn-secondary"
+            onClick={onRebuildPos}
+            disabled={posBusy !== null}
+            title="Reconstrói cursos_salesbot_pos a partir de documents_precos"
+          >
+            <Database size={14} /> {posBusy === 'rebuild' ? 'Reconstruindo…' : 'Reconstruir pós'}
+          </button>
+          <button
+            className="btn-secondary"
+            onClick={onReindexPos}
+            disabled={posBusy !== null}
+            title="Gera embeddings dos cursos pós (rodar depois do reconstruir)"
+          >
+            <BookMarked size={14} /> {posBusy === 'reindex' ? 'Indexando…' : 'Reindexar pós'}
+          </button>
           <button className="btn-secondary" onClick={refresh} disabled={loading}>
             <RefreshCw size={14} /> {loading ? 'Atualizando…' : 'Atualizar'}
           </button>
         </div>
       </div>
+
+      {posResult && (
+        <div
+          style={{
+            padding: '10px 14px',
+            background: posResult.data?.ok ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
+            border: `1px solid ${posResult.data?.ok ? 'var(--success, #10b981)' : 'var(--danger, #ef4444)'}`,
+            borderRadius: 6,
+            marginBottom: 14,
+            fontSize: 13,
+            color: 'var(--fg-1)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+          }}
+        >
+          {posResult.kind === 'dry' && posResult.data?.ok && (
+            <>
+              <div>
+                ✓ Diagnóstico OK — {posResult.data.cursosAgrupados} cursos pós (
+                {posResult.data.comDoisPacotes} com 2 pacotes, {posResult.data.comUmPacote} com 1) ·
+                {' '}{posResult.data.totalPos} linhas pós em {posResult.data.totalDocsLidos} totais ·
+                {' '}{((posResult.data.durationMs || 0) / 1000).toFixed(1)}s
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--fg-3)' }}>
+                Pra escrever no banco, clica <b>Reconstruir pós</b>.
+              </div>
+            </>
+          )}
+          {posResult.kind === 'dry' && !posResult.data?.ok && (
+            <>
+              <div>✗ Diagnóstico — nenhuma linha pós encontrada.</div>
+              <div style={{ fontSize: 11, color: 'var(--fg-3)' }}>
+                Lidos: {posResult.data?.totalDocsLidos} · Com metadata parseável:{' '}
+                {posResult.data?.comMetadataParseavel}
+              </div>
+              {posResult.data?.tiposVistos && (
+                <div style={{ fontSize: 11, color: 'var(--fg-3)' }}>
+                  Tipos vistos: {Object.entries(posResult.data.tiposVistos).map(([k, v]) => `"${k}" (${v})`).join(' · ')}
+                </div>
+              )}
+              {posResult.data?.sampleMetadata && (
+                <div style={{ fontSize: 11, color: 'var(--fg-3)' }}>
+                  Sample metadata: <code style={{ wordBreak: 'break-all' }}>{posResult.data.sampleMetadata}</code>
+                </div>
+              )}
+              {posResult.data?.sampleRowKeys && (
+                <div style={{ fontSize: 11, color: 'var(--fg-3)' }}>
+                  Colunas: {posResult.data.sampleRowKeys.join(', ')}
+                </div>
+              )}
+            </>
+          )}
+          {posResult.kind === 'rebuild' && posResult.data?.ok && (
+            <>
+              <div>
+                ✓ Catálogo reconstruído — {posResult.data.cursosAgrupados} cursos (
+                {posResult.data.comDoisPacotes} com 2 pacotes, {posResult.data.comUmPacote} com 1) ·
+                {' '}{((posResult.data.durationMs || 0) / 1000).toFixed(1)}s
+              </div>
+              {posResult.data.comUmPacote > 0 && (
+                <div style={{ fontSize: 12, color: 'var(--fg-3)' }}>
+                  Com 1 pacote só: {(posResult.data.exemplosUmPacote || []).join(' · ')}
+                </div>
+              )}
+              <div style={{ fontSize: 12, color: 'var(--fg-3)' }}>
+                Próximo passo: <b>Reindexar pós</b> pra recalcular embeddings.
+              </div>
+            </>
+          )}
+          {posResult.kind === 'reindex' && posResult.data?.ok && (
+            <>
+              ✓ Embeddings OK — {posResult.data.total} cursos · {posResult.data.batches} batches ·{' '}
+              {((posResult.data.durationMs || 0) / 1000).toFixed(1)}s · {posResult.data.usage?.total_tokens || 0} tokens
+            </>
+          )}
+          {!posResult.data?.ok && posResult.kind !== 'dry' && (
+            <>✗ Erro: {posResult.data?.error || 'falha desconhecida'}</>
+          )}
+        </div>
+      )}
 
       {/* Disparo manual */}
       <div
