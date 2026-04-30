@@ -148,8 +148,11 @@ function formatLocationResult(data) {
     `Endereço do polo: ${data.rua_do_polo}`,
     `Tempo estimado (${data.modo_transporte}): ${data.tempo_estimado}`,
     data.distancia ? `Distância: ${data.distancia}` : null,
-    `Rota: ${data.link_rota_google}`,
+    `Link da rota no Google Maps: ${data.link_rota_google}`,
     data.origem_endereco ? `Endereço reconhecido: ${data.origem_endereco}` : null,
+    '',
+    'INSTRUÇÃO PARA A RESPOSTA AO CLIENTE:',
+    `Inclua SEMPRE o link da rota acima (${data.link_rota_google}) na sua resposta — é assim que o cliente abre o trajeto no app de mapas. Nunca omita o link quando ele estiver disponível.`,
   ].filter(Boolean).join('\n')
 }
 

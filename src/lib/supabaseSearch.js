@@ -157,6 +157,9 @@ export async function executarLocalizacao(args) {
     data.distancia ? `Distância aproximada: ${data.distancia}` : null,
     `Link da rota no Google Maps: ${data.link_rota_google}`,
     data.origem_endereco ? `Endereço reconhecido do lead: ${data.origem_endereco}` : null,
+    '',
+    'INSTRUÇÃO PARA A RESPOSTA AO CLIENTE:',
+    `Inclua SEMPRE o link da rota acima (${data.link_rota_google}) na sua resposta — é assim que o cliente abre o trajeto no app de mapas. Nunca omita o link quando ele estiver disponível.`,
   ].filter(Boolean)
   return lines.join('\n')
 }
