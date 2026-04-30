@@ -39,7 +39,7 @@ const DEFAULTS = {
   query_rewrite: 'gpt-4.1-nano',         // ultra rápido + barato
   inscricao_summary: 'gpt-4.1-mini',
   distribuir_humano_summary: 'gpt-4.1-mini',
-  salesbot_curso: 'gpt-4.1-mini',        // correção de nome de curso (function calling)
+  salesbot_curso: 'gpt-4.1',             // melhor accuracy pra normalizar nome de curso (rara execução)
   feedback: 'gpt-4.1-mini',
   vision: 'gpt-4.1-mini',
   transcribe: 'whisper-1',               // gpt-4o-transcribe é mais caro
