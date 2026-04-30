@@ -29,22 +29,51 @@
 import { resolveModel } from './ai/modelRegistry.js'
 import { findLeadByPhone, listLeadCustomFields } from './kommoClient.js'
 
-// IDs dos campos "fixos" do Kommo (estáveis no projeto). Os IDs dos
-// campos da seção "Inscrição" (Curso Inscrição, Polo Inscrição etc.)
-// são descobertos em runtime via listLeadCustomFields() — assim,
-// quando os nomes batem, o lead é preenchido sem precisar hard-codar
-// IDs específicos por instância.
+// IDs dos campos "fixos" do Kommo. Para os campos da seção
+// "Inscrição" temos uma cascata: env > ID hardcodado conhecido >
+// descoberta dinâmica via listLeadCustomFields(). Assim o operador
+// pode sobrescrever via env sem mexer no código, e se ele não fizer
+// nada, a tool ainda funciona com os defaults da instância atual.
 const KOMMO_FIELD_CURSO = 31782 // "Curso" (campo do funil de vendas)
 const KOMMO_FIELD_NIVEL = 31786 // "Formação" / "Nível"
 const KOMMO_FIELD_NOME = 304628 // "Nome"
 
-// Aliases por nome — primeiro que bater na lista do Kommo é usado.
-// Cubrimos variações comuns de PT-BR (com/sem acento, com/sem
-// underscore) pra ser tolerante a renomeações no painel do CRM.
+// IDs descobertos pelo painel do Kommo / endpoint debug
+// /api/kommo/lead-fields. Esses defaults valem para a instância
+// admamoeduitcombr.kommo.com — em outras instâncias, sobrescrever
+// via env (KOMMO_FIELD_*_ID).
+const KOMMO_FIELD_CURSO_INSCRICAO_DEFAULT = 693835
+const KOMMO_FIELD_POLO_INSCRICAO_DEFAULT = 693837
+const KOMMO_FIELD_TIPO_INSCRICAO_DEFAULT = 693843
+
+// Aliases por nome — usados como fallback se o ID hardcoded não
+// funcionar. Cubrimos variações comuns de PT-BR (com/sem acento,
+// com/sem underscore) pra ser tolerante a renomeações no painel.
 const FIELD_NAME_ALIASES = {
   cursoInscricao: ['Curso Inscrição', 'Curso da Inscrição', 'Curso_Inscricao', 'Curso da Inscricao'],
   poloInscricao: ['Polo Inscrição', 'Polo da Inscrição', 'Polo_Inscricao', 'Polo da Inscricao'],
-  tipoInscricao: ['Tipo Inscrição', 'Tipo de Ingresso', 'Tipo_Inscricao', 'Tipo de Inscrição', 'Tipo da Inscrição'],
+  tipoInscricao: ['Tipo Inscrição', 'Tipo de Ingresso', 'Tipo_Inscricao', 'Tipo de Inscrição', 'Tipo da Inscrição', 'Tipo_Inscrição'],
+}
+
+// Pega o ID prioritário (env override > default hardcoded), e em
+// seguida resolve a definição completa (type + enums) consultando o
+// snapshot dos custom fields. Se nada bater, tenta descobrir pelo
+// nome via aliases.
+function resolveFieldDef(env, envVar, hardcodedId, aliases, fieldsByName, fieldsById) {
+  const candidates = []
+  const fromEnv = Number(env?.[envVar])
+  if (Number.isFinite(fromEnv) && fromEnv > 0) candidates.push(fromEnv)
+  if (Number.isFinite(hardcodedId) && hardcodedId > 0) candidates.push(hardcodedId)
+
+  for (const id of candidates) {
+    const def = fieldsById?.get?.(id)
+    if (def) return def
+    // Se não temos snapshot dos fields (descoberta falhou), usamos só
+    // o ID — sem saber se é text/select. Tratamos como text por padrão.
+    if (!fieldsByName) return { id, type: 'text', name: `unknown:${id}`, enums: null, _fromIdOnly: true }
+  }
+
+  return resolveFieldByAliases(fieldsByName, aliases)
 }
 
 function resolveFieldByAliases(fieldsByName, aliases) {
@@ -566,6 +595,12 @@ export async function runInscricao(env, body) {
   // mudava. Agora preenche os dois quando ambos existem.
   const fieldsLookup = await listLeadCustomFields(env).catch(() => ({ ok: false }))
   const fieldsByName = fieldsLookup.ok ? fieldsLookup.byName : null
+  // Index por ID (mesmo conteúdo, chaveado por id) — usado pelo
+  // resolveFieldDef quando temos um hardcode/env e queremos saber se
+  // o campo é text/select pra montar o PATCH corretamente.
+  const fieldsById = fieldsLookup.ok
+    ? new Map(Array.from(fieldsByName.values()).map((d) => [d.id, d]))
+    : null
   steps.push({
     step: 'kommo_lead_custom_fields',
     ok: fieldsLookup.ok,
@@ -573,9 +608,30 @@ export async function runInscricao(env, body) {
     total: fieldsLookup.raw?.length || 0,
   })
 
-  const cursoInscricaoDef = resolveFieldByAliases(fieldsByName, FIELD_NAME_ALIASES.cursoInscricao)
-  const poloInscricaoDef = resolveFieldByAliases(fieldsByName, FIELD_NAME_ALIASES.poloInscricao)
-  const tipoInscricaoDef = resolveFieldByAliases(fieldsByName, FIELD_NAME_ALIASES.tipoInscricao)
+  const cursoInscricaoDef = resolveFieldDef(
+    env,
+    'KOMMO_FIELD_CURSO_INSCRICAO_ID',
+    KOMMO_FIELD_CURSO_INSCRICAO_DEFAULT,
+    FIELD_NAME_ALIASES.cursoInscricao,
+    fieldsByName,
+    fieldsById,
+  )
+  const poloInscricaoDef = resolveFieldDef(
+    env,
+    'KOMMO_FIELD_POLO_INSCRICAO_ID',
+    KOMMO_FIELD_POLO_INSCRICAO_DEFAULT,
+    FIELD_NAME_ALIASES.poloInscricao,
+    fieldsByName,
+    fieldsById,
+  )
+  const tipoInscricaoDef = resolveFieldDef(
+    env,
+    'KOMMO_FIELD_TIPO_INSCRICAO_ID',
+    KOMMO_FIELD_TIPO_INSCRICAO_DEFAULT,
+    FIELD_NAME_ALIASES.tipoInscricao,
+    fieldsByName,
+    fieldsById,
+  )
 
   const customFields = [
     { field_id: KOMMO_FIELD_CURSO, values: [{ value: curso }] },
