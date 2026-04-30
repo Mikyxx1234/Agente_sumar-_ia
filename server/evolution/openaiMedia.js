@@ -6,6 +6,8 @@
  * Imagem → POST /v1/chat/completions     (gpt-4o-mini), content image_url data-URL.
  */
 
+import { resolveModel } from '../ai/modelRegistry.js'
+
 const TRANSCRIBE_URL = 'https://api.openai.com/v1/audio/transcriptions'
 const CHAT_URL = 'https://api.openai.com/v1/chat/completions'
 
@@ -26,7 +28,7 @@ function requireApiKey(env) {
 export async function transcribeAudioBase64(env, b64, opts = {}) {
   const apiKey = requireApiKey(env)
   const buf = b64ToBuffer(b64)
-  const model = opts.model || env.OPENAI_TRANSCRIBE_MODEL || 'whisper-1'
+  const model = opts.model || resolveModel(env, 'transcribe')
   const filename = opts.filename || 'file.ogg'
   const mimeType = opts.mimeType || 'audio/ogg'
 
@@ -51,7 +53,7 @@ export async function transcribeAudioBase64(env, b64, opts = {}) {
 
 export async function analyzeImageBase64(env, b64, opts = {}) {
   const apiKey = requireApiKey(env)
-  const model = opts.model || env.OPENAI_VISION_MODEL || 'gpt-4o-mini'
+  const model = opts.model || resolveModel(env, 'vision')
   const prompt = opts.prompt || DEFAULT_IMAGE_PROMPT
   const mimeType = opts.mimeType || 'image/png'
 

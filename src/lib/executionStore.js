@@ -45,6 +45,26 @@ export async function saveExecution(execution) {
   }
 }
 
+function mapRow(r) {
+  const usage = r.usage || {}
+  // aiMeta é guardado em usage._meta pra não exigir coluna nova na
+  // tabela. Aqui a gente extrai e devolve como propriedade top-level.
+  const aiMeta = usage && typeof usage === 'object' ? usage._meta || null : null
+  return {
+    id: r.id,
+    timestamp: r.created_at,
+    userMessage: r.user_message,
+    model: r.model,
+    steps: r.steps,
+    toolCalls: r.tool_calls,
+    response: r.response,
+    error: r.error,
+    totalDurationMs: r.total_duration_ms,
+    usage,
+    aiMeta,
+  }
+}
+
 export async function getAllExecutions() {
   try {
     const res = await fetch(
@@ -56,18 +76,7 @@ export async function getAllExecutions() {
       return []
     }
     const rows = await res.json()
-    return rows.map((r) => ({
-      id: r.id,
-      timestamp: r.created_at,
-      userMessage: r.user_message,
-      model: r.model,
-      steps: r.steps,
-      toolCalls: r.tool_calls,
-      response: r.response,
-      error: r.error,
-      totalDurationMs: r.total_duration_ms,
-      usage: r.usage || {},
-    }))
+    return rows.map(mapRow)
   } catch (e) {
     console.error('[ExecutionStore] Fetch error:', e.message)
     return []
@@ -83,18 +92,7 @@ export async function getExecutionsByRange(startDate, endDate) {
     )
     if (!res.ok) return []
     const rows = await res.json()
-    return rows.map((r) => ({
-      id: r.id,
-      timestamp: r.created_at,
-      userMessage: r.user_message,
-      model: r.model,
-      steps: r.steps,
-      toolCalls: r.tool_calls,
-      response: r.response,
-      error: r.error,
-      totalDurationMs: r.total_duration_ms,
-      usage: r.usage || {},
-    }))
+    return rows.map(mapRow)
   } catch (e) {
     console.error('[ExecutionStore] Fetch range error:', e.message)
     return []

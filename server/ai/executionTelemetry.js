@@ -56,6 +56,11 @@ export async function saveExecution(env, execution) {
   if (execution.telefone) usage.telefone = execution.telefone
   if (execution.leadId != null) usage.lead_id = execution.leadId
   if (execution.origem) usage.origem = execution.origem
+  // aiMeta vai dentro de `usage._meta` para não exigir coluna nova na
+  // tabela. O dashboard lê via executionStore.aiMeta = r.usage._meta.
+  if (execution.aiMeta && typeof execution.aiMeta === 'object') {
+    usage._meta = execution.aiMeta
+  }
 
   const row = {
     id: execution.id,

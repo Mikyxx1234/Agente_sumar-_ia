@@ -14,7 +14,8 @@
  *   Opcionais: KOMMO_DISTRIB_* (IDs abaixo têm default do fluxo n8n)
  */
 
-const OPENAI_MODEL = 'gpt-4o-mini'
+import { resolveModel } from './ai/modelRegistry.js'
+
 const WAIT_BEFORE_LLM_MS = 5000
 
 const DEFAULT_DISTRIB_PIPELINE_ID = 11685120
@@ -242,13 +243,18 @@ async function supabaseRest(url, key, method, pathAndQuery, body, extraPrefer) {
   }
 }
 
-async function openaiDistribuirResumo(apiKey, conversation) {
+/**
+ * Resume conversa para distribuir ao consultor humano.
+ * Retorna { content, model, usage } para acumular custo no aiMeta.
+ */
+async function openaiDistribuirResumo(env, apiKey, conversation) {
+  const model = resolveModel(env, 'distribuir_humano_summary')
   const prompt = DISTRIB_PROMPT_PREFIX + conversation + DISTRIB_PROMPT_SUFFIX
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
-      model: OPENAI_MODEL,
+      model,
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.2,
       max_tokens: 1200,
@@ -259,7 +265,11 @@ async function openaiDistribuirResumo(apiKey, conversation) {
     throw new Error(`OpenAI ${res.status}: ${err.slice(0, 200)}`)
   }
   const data = await res.json()
-  return data.choices?.[0]?.message?.content || ''
+  return {
+    content: data.choices?.[0]?.message?.content || '',
+    model,
+    usage: data.usage || null,
+  }
 }
 
 function parseLeadFromKommoGet(data) {
@@ -509,11 +519,15 @@ export async function runDistribuirHumano(env, body) {
 
   let summaryText = ''
   let parsed
+  /** @type {{ model: string, usage: object }|null} */
+  let summaryUsageInfo = null
   if (conversation.trim()) {
     try {
-      summaryText = await openaiDistribuirResumo(openaiKey, conversation)
+      const r = await openaiDistribuirResumo(env, openaiKey, conversation)
+      summaryText = r.content
+      summaryUsageInfo = { model: r.model, usage: r.usage }
       parsed = parseResumoCamposDistribuicao(summaryText)
-      steps.push({ step: 'openai_resumo', ok: true })
+      steps.push({ step: 'openai_resumo', ok: true, model: r.model })
     } catch (e) {
       warnings.push(`openai: ${e.message}`)
       steps.push({ step: 'openai_resumo', ok: false })
@@ -608,6 +622,9 @@ export async function runDistribuirHumano(env, body) {
     texto_resumo_ia: summaryText,
     warnings,
     steps,
+    _meta: summaryUsageInfo
+      ? { toolUsage: [{ tool: 'distribuir_humano', model: summaryUsageInfo.model, usage: summaryUsageInfo.usage }] }
+      : undefined,
   }
 }
 

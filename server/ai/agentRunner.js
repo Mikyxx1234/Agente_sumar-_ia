@@ -10,13 +10,11 @@ import { TOOL_DEFINITIONS } from './toolDefinitions.js'
 import { buildToolExecutors } from './toolExecutorsServer.js'
 import { runBuscarHistorico } from '../memoryTool.js'
 import { generateExecutionId } from './executionTelemetry.js'
+import { resolveModel } from './modelRegistry.js'
+import { createExecutionContext } from './executionContext.js'
 
 const MAX_TOOL_ROUNDS = 5
 const CHAT_URL = 'https://api.openai.com/v1/chat/completions'
-
-function resolveModel(env) {
-  return env.OPENAI_AGENT_MODEL || env.OPENAI_MODEL || 'gpt-4o-mini'
-}
 
 function resolveHistoryLimit(env) {
   const n = Number(env.AGENT_HISTORY_CONTEXT || 8)
@@ -41,14 +39,14 @@ async function loadRecentHistoryMessages(env, telefone) {
   }
 }
 
-async function callOpenAI(env, apiMessages) {
+async function callOpenAI(env, apiMessages, model) {
   const apiKey = env.OPENAI_API_KEY || env.VITE_OPENAI_API_KEY
   if (!apiKey) throw new Error('OPENAI_API_KEY não configurada')
   const res = await fetch(CHAT_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
-      model: resolveModel(env),
+      model,
       messages: apiMessages,
       tools: TOOL_DEFINITIONS,
       temperature: 0.7,
@@ -95,15 +93,18 @@ async function executeToolCalls(executors, toolCalls, trace) {
 /**
  * @param {object} env    process.env
  * @param {object} input  { telefone, userMessage, pushName, executionId? }
- * @returns { ok, reply, toolCalls[], usage, durationMs, executionId, model }
+ * @returns { ok, reply, toolCalls[], usage, durationMs, executionId, model, aiMeta }
+ *   `aiMeta` agrega usage de sub-chamadas (query rewrite, tools com LLM
+ *   próprio, embeddings) — usado pelo dashboard pra calcular custo real.
  */
 export async function runAgent(env, input) {
   const t0 = Date.now()
   const telefone = input?.telefone || ''
   const userMessage = (input?.userMessage || '').trim()
   const executionId = input?.executionId || generateExecutionId()
-  const model = resolveModel(env)
-  if (!userMessage) return { ok: false, error: 'Mensagem vazia', executionId, model }
+  const model = resolveModel(env, 'orchestrator')
+  const ctx = createExecutionContext()
+  if (!userMessage) return { ok: false, error: 'Mensagem vazia', executionId, model, aiMeta: ctx.toAiMeta() }
 
   const [prompts, historyMessages] = await Promise.all([
     loadPrompts(),
@@ -123,14 +124,14 @@ export async function runAgent(env, input) {
     { role: 'user', content: userMessage },
   ]
 
-  const executors = buildToolExecutors(env)
+  const executors = buildToolExecutors(env, ctx)
   const toolTrace = []
   const usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
 
   try {
     let round = 0
     while (round < MAX_TOOL_ROUNDS) {
-      const data = await callOpenAI(env, apiMessages)
+      const data = await callOpenAI(env, apiMessages, model)
       const choice = data.choices?.[0]
       const msg = choice?.message
       if (!msg) throw new Error('Sem resposta da API')
@@ -159,6 +160,7 @@ export async function runAgent(env, input) {
         historyLoaded: historyMessages.length,
         executionId,
         model,
+        aiMeta: ctx.toAiMeta(),
       }
     }
     return {
@@ -169,6 +171,7 @@ export async function runAgent(env, input) {
       durationMs: Date.now() - t0,
       executionId,
       model,
+      aiMeta: ctx.toAiMeta(),
     }
   } catch (err) {
     return {
@@ -179,6 +182,7 @@ export async function runAgent(env, input) {
       durationMs: Date.now() - t0,
       executionId,
       model,
+      aiMeta: ctx.toAiMeta(),
     }
   }
 }

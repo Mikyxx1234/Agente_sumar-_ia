@@ -23,7 +23,7 @@ import {
   makeCronHourSlotExecId,
 } from './feedbackHelpers.js'
 
-const DEFAULT_FEEDBACK_OPENAI_MODEL = 'gpt-4o-mini'
+import { resolveModel } from './ai/modelRegistry.js'
 
 /** Janela temporal na busca: sent_at >= since OU (sent_at nulo E created_at >= since). Inclui linhas antigas só com created_at. */
 function buildMensagensWindowAndEntityFilter(sinceIso) {
@@ -51,10 +51,9 @@ function formatInstantBrasilia(iso) {
 
 function getAIConfig(env) {
   const key = env.OPENAI_API_KEY || env.VITE_OPENAI_API_KEY || ''
-  const model =
-    env.FEEDBACK_JOB_OPENAI_MODEL ||
-    env.OPENAI_FEEDBACK_MODEL ||
-    DEFAULT_FEEDBACK_OPENAI_MODEL
+  // Resolve via registry: respeita OPENAI_MODEL_FEEDBACK e cai pra
+  // FEEDBACK_JOB_OPENAI_MODEL / OPENAI_FEEDBACK_MODEL legados.
+  const model = resolveModel(env, 'feedback')
   return { key, model }
 }
 

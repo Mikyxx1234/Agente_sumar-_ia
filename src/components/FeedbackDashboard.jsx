@@ -4,26 +4,19 @@ import {
   CheckCircle2, FileText, Calendar, RefreshCw, Hourglass, Layers,
 } from 'lucide-react'
 import { getJobRunsByRange } from '../lib/feedbackJobStore'
+import { calcCostBRL, USD_TO_BRL } from '../lib/openaiPricing'
 
-const TOKEN_COSTS_USD_PER_1M = {
-  'gemini-2.5-flash': { input: 0.30, output: 2.50 },
-  'gemini-2.5-pro':   { input: 1.25, output: 10.00 },
-  'gemini-2.0-flash': { input: 0.10, output: 0.40 },
-  'gemini-1.5-flash': { input: 0.075, output: 0.30 },
-  'gpt-4.1-mini':     { input: 0.40, output: 1.60 },
-  'gpt-4o-mini':      { input: 0.15, output: 0.60 },
-  'gpt-4.1':          { input: 2.00, output: 8.00 },
-  'gpt-4o':           { input: 2.50, output: 10.00 },
-}
 const DEFAULT_MODEL = 'gpt-4o-mini'
-const USD_TO_BRL = 5.70
 
 function calcRunCostBRL(run) {
   const model = run.model || DEFAULT_MODEL
-  const rates = TOKEN_COSTS_USD_PER_1M[model] || TOKEN_COSTS_USD_PER_1M[DEFAULT_MODEL]
-  const input = ((run.prompt_tokens || 0) / 1_000_000) * rates.input
-  const output = ((run.completion_tokens || 0) / 1_000_000) * rates.output
-  return (input + output) * USD_TO_BRL
+  return calcCostBRL(
+    {
+      prompt_tokens: run.prompt_tokens,
+      completion_tokens: run.completion_tokens,
+    },
+    model,
+  )
 }
 
 function formatBRL(v) {

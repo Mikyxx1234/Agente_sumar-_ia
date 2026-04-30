@@ -366,6 +366,7 @@ async function flushSessionInner(env, sessionId, opts = {}) {
     error: out?.ok ? null : out?.error || 'runAgent retornou null',
     totalDurationMs: out?.durationMs || 0,
     usage: out?.usage || {},
+    aiMeta: out?.aiMeta || null,
     telefone,
     leadId: idLead,
     origem: 'evolution',

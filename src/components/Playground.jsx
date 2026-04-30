@@ -2,8 +2,9 @@ import { useState, useRef, useEffect } from 'react'
 import { Send, Settings, Trash2, Bot, User, AlertCircle, Key, Sparkles, Check, DollarSign, FileText, MessageSquare, Phone, Clock } from 'lucide-react'
 import { TOOL_DEFINITIONS, TOOL_EXECUTORS } from '../lib/supabaseSearch'
 import { generateExecutionId, saveExecution } from '../lib/executionStore'
+import { OPENAI_CHAT_MODELS } from '../lib/openaiPricing'
 
-const MODELS = ['gpt-4o-mini', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4.1']
+const MODELS = OPENAI_CHAT_MODELS
 const DEFAULT_API_KEY = import.meta.env.VITE_OPENAI_API_KEY || ''
 const MAX_TOOL_ROUNDS = 5
 const DEFAULT_DEBOUNCE_MS = 15000

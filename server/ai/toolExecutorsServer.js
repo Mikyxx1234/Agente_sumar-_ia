@@ -1,34 +1,63 @@
 /**
  * Executores das tools no lado servidor — chamam direto os módulos locais
  * (sem HTTP). Use em conjunto com TOOL_DEFINITIONS.
+ *
+ * Recebem opcionalmente um `executionContext` (ver
+ * `./executionContext.js`) para empurrar usage de sub-chamadas LLM
+ * (query rewrite, resumo de inscrição, distribuir humano, embeddings)
+ * — assim o dashboard mostra o custo total honesto da execução.
  */
 
 import { runNearestPolo } from '../locationTool.js'
 import { runInscricao } from '../inscricaoTool.js'
 import { runDistribuirHumano } from '../distribuirHumanoTool.js'
 import { runBuscarHistorico } from '../memoryTool.js'
+import { resolveModel } from './modelRegistry.js'
+import { rewriteSearchQuery } from './queryRewrite.js'
+import { createNoopExecutionContext } from './executionContext.js'
 
-async function getEmbedding(env, text) {
+async function getEmbedding(env, text, ctx, toolName) {
   const apiKey = env.OPENAI_API_KEY || env.VITE_OPENAI_API_KEY
   if (!apiKey) throw new Error('OPENAI_API_KEY não configurada')
+  const model = resolveModel(env, 'embeddings')
   const res = await fetch('https://api.openai.com/v1/embeddings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ model: 'text-embedding-3-small', input: text }),
+    body: JSON.stringify({ model, input: text }),
   })
   if (!res.ok) {
     const body = await res.text().catch(() => '')
     throw new Error(`Embedding ${res.status}: ${body.slice(0, 200)}`)
   }
   const data = await res.json()
+  // Embeddings devolvem usage.prompt_tokens (e total_tokens), sem
+  // completion_tokens. Empurra no aiMeta pra contabilizar custo.
+  if (ctx && data.usage) {
+    ctx.recordEmbeddingsUsage({ model, tool: toolName, usage: data.usage })
+  }
   return data.data[0].embedding
 }
 
-async function vectorSearch(env, rpcName, query, matchCount = 10) {
+async function vectorSearch(env, ctx, toolName, rpcName, query, matchCount = 10) {
   const url = env.SUPABASE_URL || env.VITE_SUPABASE_URL
   const key = env.SUPABASE_KEY || env.VITE_SUPABASE_KEY
   if (!url || !key) return 'Supabase não configurado no servidor.'
-  const embedding = await getEmbedding(env, query)
+
+  // Etapa 1 — opcional: reescreve a pergunta do cliente em uma query
+  // melhor antes da busca vetorial. Conservadora: fallback p/ original
+  // em qualquer sinal de dúvida (ver server/ai/queryRewrite.js).
+  const rw = await rewriteSearchQuery(env, { rawQuery: query, toolName })
+  if (ctx && rw.usage) {
+    ctx.recordQueryRewriteUsage({ model: rw.model, tool: toolName, usage: rw.usage })
+  }
+  const finalQuery = rw.applied ? rw.query : query
+  if (rw.applied) {
+    console.log(`[tool/${toolName}] queryRewrite: "${query}" → "${finalQuery}"`)
+  } else if (rw.reason) {
+    console.log(`[tool/${toolName}] queryRewrite skip: ${rw.reason}`)
+  }
+
+  const embedding = await getEmbedding(env, finalQuery, ctx, toolName)
   const res = await fetch(`${url}/rest/v1/rpc/${rpcName}`, {
     method: 'POST',
     headers: {
@@ -91,15 +120,52 @@ function formatLocationResult(data) {
   ].filter(Boolean).join('\n')
 }
 
-export function buildToolExecutors(env) {
+/**
+ * Empurra os usages do `_meta` retornado por uma tool dentro do `ctx`.
+ * Hoje só `inscricao` e `distribuir_humano` retornam `_meta`.
+ */
+function absorbToolMeta(ctx, raw) {
+  if (!ctx || !raw || typeof raw !== 'object' || !raw._meta) return
+  const meta = raw._meta
+  if (Array.isArray(meta.toolUsage)) {
+    for (const u of meta.toolUsage) ctx.recordToolUsage(u)
+  }
+  if (Array.isArray(meta.queryRewriteUsage)) {
+    for (const u of meta.queryRewriteUsage) ctx.recordQueryRewriteUsage(u)
+  }
+  if (Array.isArray(meta.embeddingsUsage)) {
+    for (const u of meta.embeddingsUsage) ctx.recordEmbeddingsUsage(u)
+  }
+}
+
+/**
+ * @param {Record<string,string>} env
+ * @param {ReturnType<typeof import('./executionContext.js').createExecutionContext>} [ctx]
+ *   Opcional. Quando passado, sub-usages (query rewrite, embeddings,
+ *   resumos de tools) são acumulados pra dashboard. Sem ctx, vira no-op.
+ */
+export function buildToolExecutors(env, ctx) {
+  const safeCtx = ctx || createNoopExecutionContext()
   return {
-    buscar_precos: async ({ query }) => vectorSearch(env, 'match_documents_precos', query, 8),
-    buscar_informacoes: async ({ query }) => vectorSearch(env, 'match_documents', query, 15),
-    buscar_pos: async ({ query }) => vectorSearch(env, 'match_documents_pos', query, 8),
-    buscar_perguntas: async ({ query }) => vectorSearch(env, 'match_documents_perguntas', query, 6),
+    buscar_precos: async ({ query }) =>
+      vectorSearch(env, safeCtx, 'buscar_precos', 'match_documents_precos', query, 8),
+    buscar_informacoes: async ({ query }) =>
+      vectorSearch(env, safeCtx, 'buscar_informacoes', 'match_documents', query, 15),
+    buscar_pos: async ({ query }) =>
+      vectorSearch(env, safeCtx, 'buscar_pos', 'match_documents_pos', query, 8),
+    buscar_perguntas: async ({ query }) =>
+      vectorSearch(env, safeCtx, 'buscar_perguntas', 'match_documents_perguntas', query, 6),
     localizacao: async (args) => formatLocationResult(await runNearestPolo(env, args)),
-    inscricao: async (args) => formatInscricaoResult(await runInscricao(env, args)),
-    distribuir_humano: async (args) => formatDistribuirResult(await runDistribuirHumano(env, args)),
+    inscricao: async (args) => {
+      const r = await runInscricao(env, args)
+      absorbToolMeta(safeCtx, r)
+      return formatInscricaoResult(r)
+    },
+    distribuir_humano: async (args) => {
+      const r = await runDistribuirHumano(env, args)
+      absorbToolMeta(safeCtx, r)
+      return formatDistribuirResult(r)
+    },
     buscar_historico_conversa: async (args) => {
       const out = await runBuscarHistorico(env, args)
       if (!out.ok) return `Não foi possível recuperar o histórico: ${out.error || 'erro'}`

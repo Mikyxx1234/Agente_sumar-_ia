@@ -26,7 +26,7 @@
  * Tabelas Supabase usadas: inscricao_ab, dados_cliente, chat_messages, distribuicao_por_consultor
  */
 
-const OPENAI_SUMMARY_MODEL = 'gpt-4.1-mini'
+import { resolveModel } from './ai/modelRegistry.js'
 
 const KOMMO_FIELD_CURSO = 31782
 const KOMMO_FIELD_NIVEL = 31786
@@ -149,13 +149,18 @@ function buildConversationFromMessages(rows) {
     .join('\n\n')
 }
 
-async function openaiSummarize(apiKey, conversation) {
+/**
+ * Resume a conversa via OpenAI. Retorna { content, model, usage } para
+ * que o caller acumule custo no `executionContext` (aiMeta.toolUsage[]).
+ */
+async function openaiSummarize(env, apiKey, conversation) {
+  const model = resolveModel(env, 'inscricao_summary')
   const prompt = SUMMARY_PROMPT_PREFIX + conversation + SUMMARY_PROMPT_SUFFIX
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
-      model: OPENAI_SUMMARY_MODEL,
+      model,
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.3,
       max_tokens: 1200,
@@ -166,7 +171,11 @@ async function openaiSummarize(apiKey, conversation) {
     throw new Error(`OpenAI resumo ${res.status}: ${err.slice(0, 200)}`)
   }
   const data = await res.json()
-  return data.choices?.[0]?.message?.content || ''
+  return {
+    content: data.choices?.[0]?.message?.content || '',
+    model,
+    usage: data.usage || null,
+  }
 }
 
 async function kommoFetch(base, token, path, { method = 'GET', body } = {}) {
@@ -300,11 +309,15 @@ export async function runInscricao(env, body) {
   const conversation = buildConversationFromMessages(messages)
   let summaryText = ''
   let parsed = null
+  /** @type {{ model: string, usage: object }|null} */
+  let summaryUsageInfo = null
   if (conversation.trim()) {
     try {
-      summaryText = await openaiSummarize(openaiKey, conversation)
+      const r = await openaiSummarize(env, openaiKey, conversation)
+      summaryText = r.content
+      summaryUsageInfo = { model: r.model, usage: r.usage }
       parsed = parseResumoCampos(summaryText)
-      steps.push({ step: 'openai_resumo', ok: true })
+      steps.push({ step: 'openai_resumo', ok: true, model: r.model })
     } catch (e) {
       warnings.push(`resumo: ${e.message}`)
       steps.push({ step: 'openai_resumo', ok: false, error: e.message })
@@ -528,6 +541,11 @@ export async function runInscricao(env, body) {
     texto_resumo_ia: summaryText,
     warnings,
     steps,
+    // _meta: usado pelo executor (toolExecutorsServer) para empurrar
+    // o usage do LLM auxiliar no executionContext (custo total real).
+    _meta: summaryUsageInfo
+      ? { toolUsage: [{ tool: 'inscricao', model: summaryUsageInfo.model, usage: summaryUsageInfo.usage }] }
+      : undefined,
   }
 }
 

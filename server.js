@@ -16,6 +16,7 @@ import { sendTyping } from './server/evolution/typingIndicator.js'
 import { makeEvolutionWebhookHandler } from './server/evolution/webhookEvolution.js'
 import { recordWebhookIngress, getWebhookDiagnosticsSnapshot } from './server/evolution/webhookDiagnostics.js'
 import { getKommoPollSnapshot } from './server/kommoInboundDiagnostics.js'
+import { getModelRegistrySnapshot } from './server/ai/modelRegistry.js'
 import { listLeadNotes, listLeadEvents } from './server/kommoClient.js'
 import { getMessagesByLead as dispatcherGetMessagesByLead } from './server/kommoDispatcherClient.js'
 import { pingBackend, pushMessage, getMessages, clearMessages } from './server/evolution/messageBuffer.js'
@@ -396,6 +397,9 @@ app.get('/api/evolution/health', async (_req, res) => {
         configured: Boolean(process.env.KOMMO_DISPATCHER_URL),
         probeEndpoint: '/api/kommo-dispatcher/probe?path=/api/kommo/dashboard/stats',
       },
+      models: getModelRegistrySnapshot(process.env),
+      queryRewriteEnabled:
+        String(process.env.AI_QUERY_REWRITE_ENABLED ?? 'true').toLowerCase() !== 'false',
       debounceMs: getDebounceMs(process.env),
       scheduler: {
         running: isSchedulerRunning(),
@@ -901,6 +905,7 @@ app.post('/api/playground/flush', async (req, res) => {
         error: out?.ok ? null : out?.error || null,
         totalDurationMs: out?.durationMs || 0,
         usage: out?.usage || {},
+        aiMeta: out?.aiMeta || null,
         telefone: telefoneFinal,
         origem: 'playground',
       }).catch((err) => console.error(`[${executionId}] playground saveExecution exception:`, err.message))

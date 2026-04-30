@@ -4,14 +4,7 @@ import {
   TrendingUp, Database, Search, RefreshCw, Calendar, Filter, Tag
 } from 'lucide-react'
 import { getExecutionsByRange } from '../lib/executionStore'
-
-const TOKEN_COSTS = {
-  'gpt-4o-mini':  { input: 0.15,  output: 0.60  },
-  'gpt-4.1-mini': { input: 0.15,  output: 0.60  },
-  'gpt-4o':       { input: 2.50,  output: 10.00 },
-  'gpt-4.1':      { input: 2.00,  output: 8.00  },
-}
-const USD_TO_BRL = 5.70
+import { calcCostBRL } from '../lib/openaiPricing'
 
 const TOPIC_LABELS = {
   buscar_precos: 'Pediu preço',
@@ -42,11 +35,27 @@ function resolveTopicColor(label, index) {
   return TOPIC_COLORS[label] || FALLBACK_TOPIC_COLORS[index % FALLBACK_TOPIC_COLORS.length]
 }
 
-function calcCost(usage, model) {
-  const rates = TOKEN_COSTS[model] || TOKEN_COSTS['gpt-4o-mini']
-  const inputCost = ((usage?.prompt_tokens || 0) / 1_000_000) * rates.input
-  const outputCost = ((usage?.completion_tokens || 0) / 1_000_000) * rates.output
-  return (inputCost + outputCost) * USD_TO_BRL
+/**
+ * Custo da execução em BRL.
+ *
+ * Considera além do orquestrador:
+ *   - usage do query rewrite (ai_meta.queryRewriteUsage[])
+ *   - usage de tools auxiliares com LLM próprio
+ *     (ai_meta.toolUsage[]: inscricao, distribuir_humano)
+ *   - usage de embeddings RAG (ai_meta.embeddingsUsage[])
+ *
+ * Fallback gracioso: execuções antigas (sem ai_meta) são contadas só
+ * pelo usage do orquestrador, igual antes.
+ */
+function calcCost(usage, model, aiMeta) {
+  let total = calcCostBRL(usage, model)
+  const extras = [
+    ...((aiMeta?.queryRewriteUsage) || []),
+    ...((aiMeta?.toolUsage) || []),
+    ...((aiMeta?.embeddingsUsage) || []),
+  ]
+  for (const x of extras) total += calcCostBRL(x?.usage || {}, x?.model)
+  return total
 }
 
 function formatBRL(value) {
@@ -244,7 +253,7 @@ export default function Dashboard() {
     const totalDays = daysBetween(startDate, endDate)
 
     const tokens = executions.reduce((sum, e) => sum + (e.usage?.total_tokens || 0), 0)
-    const cost = executions.reduce((sum, e) => sum + calcCost(e.usage, e.model), 0)
+    const cost = executions.reduce((sum, e) => sum + calcCost(e.usage, e.model, e.aiMeta), 0)
     const errors = executions.filter((e) => e.error).length
     const avgTime = executions.length > 0
       ? Math.round(executions.reduce((sum, e) => sum + (e.totalDurationMs || 0), 0) / executions.length)
