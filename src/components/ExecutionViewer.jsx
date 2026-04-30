@@ -22,7 +22,7 @@ function truncate(text, max = 200) {
   return text.length > max ? text.substring(0, max) + '…' : text
 }
 
-function FlowStep({ icon: Icon, iconKind, title, duration, children, defaultOpen = false }) {
+function FlowStep({ icon: Icon, iconKind, title, duration, headerBadge, children, defaultOpen = false }) {
   const [open, setOpen] = useState(defaultOpen)
   const hasContent = !!children
   return (
@@ -32,7 +32,10 @@ function FlowStep({ icon: Icon, iconKind, title, duration, children, defaultOpen
       </div>
       <div className="flow-card">
         <div className="flow-card-head" onClick={() => hasContent && setOpen(!open)}>
-          <div className="flow-card-title">{title}</div>
+          <div className="flow-card-title" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span>{title}</span>
+            {headerBadge}
+          </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             {duration != null && (
               <span className="flow-card-duration">
@@ -79,8 +82,30 @@ function ExecutionDetail({ execution, onCopy }) {
           </div>
         </FlowStep>
         {execution.toolCalls?.map((tc, i) => (
-          <FlowStep key={i} icon={Database} iconKind={tc.error ? 'error' : 'success'}
-            title={tc.tool.replace('buscar_', 'Buscar ')} duration={tc.durationMs}>
+          <FlowStep
+            key={i}
+            icon={Database}
+            iconKind={tc.error ? 'error' : 'success'}
+            title={tc.tool.replace('buscar_', 'Buscar ')}
+            duration={tc.durationMs}
+            // Abre automaticamente quando tem reescrita ou erro pra
+            // facilitar a auditoria do LLM nano sem clicar.
+            defaultOpen={!!tc.queryRewrite || !!tc.error}
+            headerBadge={tc.queryRewrite ? (
+              <span
+                className={`badge ${tc.queryRewrite.applied ? 'success' : ''}`}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                title={tc.queryRewrite.applied
+                  ? `Reescrita: "${tc.queryRewrite.originalQuery}" → "${tc.queryRewrite.query}"`
+                  : `Reescrita pulada (${tc.queryRewrite.reason || 'skip'})`}
+              >
+                <Wand2 size={10} />
+                {tc.queryRewrite.applied
+                  ? <>reescrito → <code style={{ fontSize: 10 }}>{tc.queryRewrite.query}</code></>
+                  : <>sem reescrita ({tc.queryRewrite.reason || 'skip'})</>}
+              </span>
+            ) : null}
+          >
             <div>
               <div className="flow-section">
                 <div className="flow-label">Entrada</div>
