@@ -1,10 +1,11 @@
-import { Sparkles, LayoutDashboard, FileText, FlaskConical, ListChecks, Settings, Star, BarChart3 } from 'lucide-react'
+import { Sparkles, LayoutDashboard, FileText, FlaskConical, ListChecks, Settings, Star, BarChart3, Bot } from 'lucide-react'
 
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'prompts', label: 'Prompts', icon: FileText },
   { id: 'playground', label: 'Teste IA', icon: FlaskConical },
   { id: 'executions', label: 'Execuções', icon: ListChecks },
+  { id: 'salesbot-executions', label: 'Execuções Salesbot', icon: Bot },
   { id: 'feedback', label: 'Feedback Comercial', icon: Star },
   { id: 'feedback-dashboard', label: 'Dashboard Feedback', icon: BarChart3 },
 ]

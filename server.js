@@ -23,12 +23,18 @@ import { pingBackend, pushMessage, getMessages, clearMessages } from './server/e
 import { getDebounceMs } from './server/evolution/debouncer.js'
 import { runAgent } from './server/ai/agentRunner.js'
 import { startAgentScheduler, runSchedulerTick, isSchedulerRunning } from './server/agentScheduler.js'
+import { runSalesbotCsv, extractLeadIdFromWebhookBody } from './server/salesbot/csvSearch.js'
+import { saveSalesbotExecution } from './server/salesbot/telemetry.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const app = express()
 const PORT = process.env.PORT || 8000
 
 app.use(express.json({ limit: '5mb' }))
+// O webhook do amocrm/Kommo manda como application/x-www-form-urlencoded
+// com chaves em bracket notation (`leads[add][0][id]`). Precisamos de
+// `extended: true` pra Express desserializar isso em objeto aninhado.
+app.use(express.urlencoded({ extended: true, limit: '2mb' }))
 
 // ── Supabase proxy (principal - dados da IA) ──
 
@@ -684,6 +690,98 @@ app.get('/api/kommo/poll/events', async (req, res) => {
       requestUrl: out.requestUrl || null,
       events: slim,
     })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// ─────────────── Salesbot — Pesquisa de Curso ───────────────
+//
+// Webhook do Kommo (amocrm) → roda o fluxo "robocsv" que busca o
+// curso na base, normaliza e atualiza o lead.
+//
+// Aceita o path em duas variantes pra facilitar configuração:
+//   - POST /api/salesbot/webhook  (preferido, usa header convencional)
+//   - POST /webhook/robocsv       (compat com a URL antiga do n8n —
+//                                  útil se o operador não quiser mexer
+//                                  na config do amocrm)
+//
+// Resposta sempre 200 (mesmo em erro), pra que o amocrm não tente
+// reentregar e gerar duplicação. Os erros ficam visíveis em
+// /Execuções Salesbot.
+async function handleSalesbotWebhook(req, res) {
+  const leadId = extractLeadIdFromWebhookBody(req.body)
+  if (!leadId) {
+    res.status(200).json({
+      ok: false,
+      error: 'leadId ausente no payload (esperado leads[add][0][id] ou leads[update][0][id])',
+      receivedKeys: Object.keys(req.body || {}).slice(0, 12),
+    })
+    return
+  }
+  // Roda assíncrono — mas devolvemos imediato pro amocrm não esperar.
+  ;(async () => {
+    const exec = await runSalesbotCsv(process.env, { leadId })
+    const save = await saveSalesbotExecution(process.env, exec)
+    if (!save.ok) {
+      console.warn(`[salesbot] saveSalesbotExecution falhou: ${save.error || save.status}`)
+    }
+    if (exec.error) {
+      console.warn(`[salesbot] ${exec.executionId} lead=${leadId} ERRO: ${exec.error}`)
+    } else {
+      console.log(
+        `[salesbot] ${exec.executionId} lead=${leadId} ${exec.encontrado ? 'OK' : 'NAO_ENCONTRADO'} curso="${exec.cursoCorrigido || exec.cursoOriginal}" (${exec.durationMs}ms)`,
+      )
+    }
+  })().catch((e) => {
+    console.error('[salesbot] exception não tratada:', e.message)
+  })
+
+  res.status(200).json({ ok: true, accepted: true, leadId })
+}
+
+app.post('/api/salesbot/webhook', handleSalesbotWebhook)
+// Compat com URL antiga do n8n (POST /webhook/robocsv).
+app.post('/webhook/robocsv', handleSalesbotWebhook)
+
+// Endpoint manual pra forçar uma execução do salesbot pra testar
+// um lead específico, sem precisar disparar via amocrm:
+//   POST /api/salesbot/run  body: { leadId: 12345 }
+// Resposta vem síncrona com o resultado completo.
+app.post('/api/salesbot/run', async (req, res) => {
+  try {
+    const leadId = Number(req.body?.leadId)
+    if (!Number.isFinite(leadId) || leadId <= 0) {
+      res.status(400).json({ ok: false, error: 'body.leadId é obrigatório' })
+      return
+    }
+    const exec = await runSalesbotCsv(process.env, { leadId })
+    await saveSalesbotExecution(process.env, exec).catch(() => {})
+    res.json(exec)
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// Lista das execuções do salesbot (proxy direto ao Supabase pra
+// não precisar replicar lógica no client).
+app.get('/api/salesbot/executions', async (req, res) => {
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
+    res.status(500).json({ error: 'SUPABASE_URL/SUPABASE_KEY não configurado' })
+    return
+  }
+  try {
+    const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200))
+    const url = `${SUPABASE_URL}/rest/v1/salesbot_execucoes?select=*&order=created_at.desc&limit=${limit}`
+    const r = await fetch(url, {
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
+    })
+    const text = await r.text()
+    if (!r.ok) {
+      res.status(r.status).type('application/json').send(text)
+      return
+    }
+    res.type('application/json').send(text)
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })
   }

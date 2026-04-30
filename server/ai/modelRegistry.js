@@ -39,6 +39,7 @@ const DEFAULTS = {
   query_rewrite: 'gpt-4.1-nano',         // ultra rápido + barato
   inscricao_summary: 'gpt-4.1-mini',
   distribuir_humano_summary: 'gpt-4.1-mini',
+  salesbot_curso: 'gpt-4.1-mini',        // correção de nome de curso (function calling)
   feedback: 'gpt-4.1-mini',
   vision: 'gpt-4.1-mini',
   transcribe: 'whisper-1',               // gpt-4o-transcribe é mais caro
@@ -54,6 +55,7 @@ const ROLE_ENVS = {
   query_rewrite: 'OPENAI_MODEL_QUERY_REWRITE',
   inscricao_summary: 'OPENAI_MODEL_INSCRICAO',
   distribuir_humano_summary: 'OPENAI_MODEL_DISTRIBUIR_HUMANO',
+  salesbot_curso: 'OPENAI_MODEL_SALESBOT_CURSO',
   feedback: 'OPENAI_MODEL_FEEDBACK',
   vision: 'OPENAI_MODEL_VISION',
   transcribe: 'OPENAI_MODEL_TRANSCRIBE',
