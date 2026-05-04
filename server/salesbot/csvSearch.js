@@ -353,11 +353,11 @@ function normalizeCursoBusca(output) {
  *   reaproveitar `buildKommoCustomFieldsFromRowPos` sem mudança.
  */
 async function buscarLinhaCurso(env, cursoBusca, nivel = 'graduacao') {
+  if (nivel === 'pos') return buscarLinhaCursoPos(env, cursoBusca)
+
   const url = env.SUPABASE_URL || env.VITE_SUPABASE_URL
   const key = env.SUPABASE_KEY || env.VITE_SUPABASE_KEY
   if (!url || !key) throw new Error('SUPABASE_URL/KEY não configurados')
-
-  if (nivel === 'pos') return buscarLinhaCursoPos({ url, key }, cursoBusca)
 
   const tableName = (NIVEL_TABLES[nivel] || NIVEL_TABLES.graduacao).catalog
   const enc = encodeURIComponent(cursoBusca)
@@ -382,44 +382,64 @@ async function buscarLinhaCurso(env, cursoBusca, nivel = 'graduacao') {
   }
 }
 
-async function buscarLinhaCursoPos({ url, key }, cursoBusca) {
-  const enc = encodeURIComponent(cursoBusca)
-  // Tenta match exato em content; cai pra fuzzy (com espaços) se nada
-  // bater. Limit=5 pra escolher a melhor pelo tamanho do nome.
-  const orParts = [
-    `content.ilike.${enc}`,
-    `content.ilike.*${enc}*`,
-  ].join(',')
-  const path = `cursos_salesbot_pos_nome?or=(${orParts})&select=content,metadata&limit=5`
-  const res = await fetch(`${url.replace(/\/$/, '')}/rest/v1/${path}`, {
-    headers: { apikey: key, Authorization: `Bearer ${key}` },
-  })
-  const text = await res.text()
-  if (!res.ok) {
-    throw new Error(`Supabase ${res.status}: ${text.slice(0, 200)}`)
+/**
+ * Pra pós: usa vector search (não ILIKE) porque o ILIKE do Postgres
+ * é case-insensitive mas NÃO ignora acentos — o normalize tira acentos
+ * ('saude publica') e nunca casa com 'Saúde Pública' no DB. Como já
+ * temos embeddings gerados, vector search é mais barato (1 chamada à
+ * RPC) e mais tolerante a grafias variantes.
+ *
+ * Threshold de 0.55 evita falso positivo: queries totalmente fora
+ * (ex: "engenharia mecânica" sendo nivel pós) caem em "não encontrado"
+ * em vez de pegar qualquer curso aleatório. Pelo probe, matches
+ * legítimos ficam em 0.80+.
+ */
+async function buscarLinhaCursoPos(env, cursoBusca) {
+  const apiKey = env.OPENAI_API_KEY || env.VITE_OPENAI_API_KEY
+  const url = (env.SUPABASE_URL || env.VITE_SUPABASE_URL || '').replace(/\/$/, '')
+  const key = env.SUPABASE_KEY || env.VITE_SUPABASE_KEY
+  if (!apiKey || !url || !key) {
+    throw new Error('OPENAI_API_KEY / SUPABASE_URL / SUPABASE_KEY não configurados')
   }
-  let rows = []
-  try { rows = JSON.parse(text) } catch {}
-  if (!Array.isArray(rows) || rows.length === 0) return null
+  const embModel = resolveModel(env, 'embeddings')
+  const embRes = await fetch('https://api.openai.com/v1/embeddings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ model: embModel, input: String(cursoBusca || '').trim() }),
+  })
+  if (!embRes.ok) {
+    const t = await embRes.text().catch(() => '')
+    throw new Error(`OpenAI embeddings ${embRes.status}: ${t.slice(0, 200)}`)
+  }
+  const embData = await embRes.json()
+  const embedding = embData.data?.[0]?.embedding
+  if (!embedding) return null
 
-  // Prefere a linha cujo nome mais se aproxima da query (por tamanho).
-  const target = cursoBusca.length
-  const best = rows.slice().sort((a, b) => {
-    const da = Math.abs(String(a.content || '').length - target)
-    const db = Math.abs(String(b.content || '').length - target)
-    return da - db
-  })[0]
-  const meta = best.metadata || {}
+  const rpcRes = await fetch(`${url}/rest/v1/rpc/match_cursos_salesbot_pos_nome`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}` },
+    body: JSON.stringify({ query_embedding: embedding, match_count: 1 }),
+  })
+  if (!rpcRes.ok) {
+    const t = await rpcRes.text().catch(() => '')
+    throw new Error(`Supabase RPC ${rpcRes.status}: ${t.slice(0, 200)}`)
+  }
+  const rows = await rpcRes.json()
+  const top = Array.isArray(rows) && rows.length > 0 ? rows[0] : null
+  if (!top) return null
+  const sim = typeof top.similarity === 'number' ? top.similarity : 0
+  if (sim < 0.55) return null
 
-  // Achata num "row" compatível com buildKommoCustomFieldsFromRowPos.
+  const meta = top.metadata || {}
   return {
-    Curso: meta.curso || best.content,
+    Curso: meta.curso || top.content,
     modalidade: meta.modalidade || 'EAD',
     duracao_1: meta.duracao_1 || null,
     preco_1: meta.preco_1 || null,
     duracao_2: meta.duracao_2 || null,
     preco_2: meta.preco_2 || null,
     contagem: meta.contagem || (meta.duracao_2 ? '2' : '1'),
+    _similarity: sim,
   }
 }
 
