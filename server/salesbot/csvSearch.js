@@ -415,7 +415,7 @@ function normalizeCursoBusca(output) {
  * top3 (só pra pós) = top 3 candidatos do vector search com similarity
  *                     pra entender no debug por que algo não casou
  */
-async function buscarLinhaCurso(env, cursoBusca, nivel = 'graduacao') {
+async function buscarLinhaCurso(env, cursoBusca, nivel = 'graduacao', agentContent = null) {
   if (nivel === 'pos') return buscarLinhaCursoPos(env, cursoBusca)
 
   const url = env.SUPABASE_URL || env.VITE_SUPABASE_URL
@@ -424,18 +424,32 @@ async function buscarLinhaCurso(env, cursoBusca, nivel = 'graduacao') {
 
   const tableName = (NIVEL_TABLES[nivel] || NIVEL_TABLES.graduacao).catalog
   const enc = encodeURIComponent(cursoBusca)
-  // Mantém os 3 critérios originais (espelham o n8n) + variantes mais
-  // permissivas como fallback. PostgREST avalia em OR; o LIMIT 1 pega
-  // a primeira linha que casar — então o critério mais específico
-  // tende a ganhar quando há match exato.
+  // Critérios em OR — PostgREST pega a 1ª linha que casar (limit=1).
+  //
+  // 1-3: critérios originais do n8n robocsv. Funcionam quando o
+  //      `curso_sinonimo` foi pré-normalizado (sem acento, sem prefixo
+  //      "Gestão de") — caso da maioria dos cursos antigos.
+  //
+  // 4-5: wildcards no início/fim. Cobre quando o curso_sinonimo tem
+  //      prefixo (ex: "Gestao de Seguranca Privada" e a query é
+  //      "seguranca privada").
+  //
+  // 6-7: usa o agent.content ORIGINAL (com acento). Cobre quando o
+  //      `Curso` no banco tem acento e nenhum sinonimo normalizado
+  //      foi cadastrado — case do "Gestão de Segurança Privada".
   const orParts = [
-    `curso_sinonimo.ilike.${enc}`,            // exato
-    `Curso.ilike.${enc}`,                     // exato no Curso
-    `curso_sinonimo.ilike.* ${enc} *`,        // contém com espaços ao redor (n8n original)
-    `curso_sinonimo.ilike.*${enc}*`,          // contém em qualquer posição (cobre prefixos tipo "Gestão de")
-    `Curso.ilike.*${enc}*`,                   // idem no Curso
-  ].join(',')
-  const path = `${tableName}?or=(${orParts})&select=*&limit=1`
+    `curso_sinonimo.ilike.${enc}`,
+    `Curso.ilike.${enc}`,
+    `curso_sinonimo.ilike.* ${enc} *`,
+    `curso_sinonimo.ilike.*${enc}*`,
+    `Curso.ilike.*${enc}*`,
+  ]
+  if (agentContent && agentContent.trim() && agentContent.trim() !== cursoBusca) {
+    const encOrig = encodeURIComponent(agentContent.trim())
+    orParts.push(`Curso.ilike.*${encOrig}*`)
+    orParts.push(`curso_sinonimo.ilike.*${encOrig}*`)
+  }
+  const path = `${tableName}?or=(${orParts.join(',')})&select=*&limit=1`
   const res = await fetch(`${url.replace(/\/$/, '')}/rest/v1/${path}`, {
     headers: { apikey: key, Authorization: `Bearer ${key}` },
   })
@@ -727,7 +741,10 @@ export async function runSalesbotCsv(env, input) {
     steps.push({ step: 'normalize', cursoBusca })
 
     // 5) SQL/Vector search no Supabase (tabela do nível inferido).
-    const search = await buscarLinhaCurso(env, cursoBusca, nivel)
+    //    Pra graduação, passa também o agent.content (com acentos
+    //    preservados) pra ter um fallback caso o curso_sinonimo não
+    //    esteja pré-normalizado.
+    const search = await buscarLinhaCurso(env, cursoBusca, nivel, agent.content)
     const row = search?.row || null
     out.rowCurso = row
     out.encontrado = !!row
