@@ -866,6 +866,7 @@ export async function probePos(env, { query, topN = 3 } = {}) {
       ok: true,
       query: q,
       embModel,
+      threshold: POS_MATCH_THRESHOLD,
       results,
       durationMs: Date.now() - t0,
       usage: embData.usage || null,

@@ -58,15 +58,27 @@ export async function runSalesbotForLead(leadId) {
 
 /**
  * Gera embeddings dos cursos pós (text-embedding-3-small).
- * Lê todas as linhas de cursos_salesbot_pos_nome onde os dados já
- * foram populados via SQL e faz PATCH atualizando só a coluna
- * `embedding`. Demora ~30-60s pra 280+ cursos.
+ * Por padrão só processa linhas com embedding NULL (ideal depois de
+ * inserir sinônimos novos). Use { force: true } pra regenerar tudo.
  */
-export async function reindexPosEmbeddings() {
+export async function reindexPosEmbeddings({ force = false } = {}) {
   const res = await fetch('/api/salesbot/reindex-pos', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ force }),
   })
+  const data = await res.json().catch(() => ({}))
+  return { httpOk: res.ok, ...data }
+}
+
+/**
+ * Probe da busca vetorial em cursos_salesbot_pos_nome. Read-only —
+ * não dispara agente IA nem PATCHa Kommo. Retorna os top N cursos
+ * mais próximos do termo com similarity pra debug.
+ */
+export async function probePosCurso(query, topN = 5) {
+  const params = new URLSearchParams({ q: String(query || ''), n: String(topN) })
+  const res = await fetch(`/api/salesbot/probe-pos?${params.toString()}`)
   const data = await res.json().catch(() => ({}))
   return { httpOk: res.ok, ...data }
 }

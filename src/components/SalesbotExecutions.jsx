@@ -4,7 +4,7 @@ import {
   AlertCircle, Cpu, Zap, Copy, RefreshCw, Check, Bot as BotIcon,
   Wand2, FileSearch, Tag, GraduationCap, BookMarked,
 } from 'lucide-react'
-import { getAllSalesbotExecutions, runSalesbotForLead, reindexPosEmbeddings } from '../lib/salesbotStore'
+import { getAllSalesbotExecutions, runSalesbotForLead, reindexPosEmbeddings, probePosCurso } from '../lib/salesbotStore'
 
 function formatDuration(ms) {
   if (!ms || ms < 1000) return `${ms || 0}ms`
@@ -211,6 +211,9 @@ export default function SalesbotExecutions() {
   const [nivelFilter, setNivelFilter] = useState('all') // all | grad | pos
   const [reindexing, setReindexing] = useState(false)
   const [reindexResult, setReindexResult] = useState(null)
+  const [probeQuery, setProbeQuery] = useState('')
+  const [probing, setProbing] = useState(false)
+  const [probeResult, setProbeResult] = useState(null)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -260,7 +263,7 @@ export default function SalesbotExecutions() {
   }
 
   const onReindexPos = async () => {
-    if (!confirm('Gera embeddings de todos os cursos pós (~$0.01 em OpenAI). Demora 30-60s. Confirma?')) return
+    if (!confirm('Gera embeddings dos cursos pós que ainda não têm (linhas novas/sinônimos). Demora uns segundos. Confirma?')) return
     setReindexing(true)
     setReindexResult(null)
     try {
@@ -270,6 +273,21 @@ export default function SalesbotExecutions() {
       setReindexResult({ ok: false, error: e?.message || 'falhou' })
     } finally {
       setReindexing(false)
+    }
+  }
+
+  const onProbe = async () => {
+    const q = probeQuery.trim()
+    if (!q) return
+    setProbing(true)
+    setProbeResult(null)
+    try {
+      const r = await probePosCurso(q, 5)
+      setProbeResult(r)
+    } catch (e) {
+      setProbeResult({ ok: false, error: e?.message || 'falhou' })
+    } finally {
+      setProbing(false)
     }
   }
 
@@ -358,6 +376,110 @@ export default function SalesbotExecutions() {
           {running ? 'Executando…' : 'Disparar'}
         </button>
       </div>
+
+      {/* Probe curso pós (read-only) */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          padding: '10px 14px',
+          background: 'var(--bg-2, rgba(255,255,255,0.03))',
+          border: '1px solid var(--border-1, rgba(255,255,255,0.06))',
+          borderRadius: 6,
+          marginBottom: 16,
+        }}
+      >
+        <span style={{ fontSize: 13, color: 'var(--fg-2)', whiteSpace: 'nowrap' }}>
+          Testar curso pós:
+        </span>
+        <input
+          type="text"
+          placeholder="ex: Gestão de Recursos Humanos, RH, MBA Finanças…"
+          value={probeQuery}
+          onChange={(e) => setProbeQuery(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !probing && probeQuery.trim()) onProbe() }}
+          style={{
+            flex: 1,
+            padding: '6px 10px',
+            background: 'var(--bg-1)',
+            border: '1px solid var(--border-1)',
+            borderRadius: 4,
+            color: 'var(--fg-1)',
+            fontSize: 13,
+          }}
+          disabled={probing}
+        />
+        <button className="btn-primary" onClick={onProbe} disabled={probing || !probeQuery.trim()}>
+          {probing ? 'Buscando…' : 'Testar'}
+        </button>
+      </div>
+
+      {probeResult && (
+        <div
+          style={{
+            padding: '10px 14px',
+            background: probeResult.httpOk
+              ? 'rgba(34,197,94,0.08)'
+              : 'rgba(239,68,68,0.08)',
+            border: `1px solid ${probeResult.httpOk ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}`,
+            borderRadius: 6,
+            marginBottom: 16,
+            fontSize: 12,
+            color: 'var(--fg-1)',
+          }}
+        >
+          {probeResult.httpOk && probeResult.ok ? (
+            <>
+              <div style={{ marginBottom: 6 }}>
+                <strong>Query:</strong> {probeResult.query} · threshold: {probeResult.threshold ?? '—'} · {probeResult.durationMs}ms
+              </div>
+              {Array.isArray(probeResult.results) && probeResult.results.length > 0 ? (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ color: 'var(--fg-3)', textAlign: 'left' }}>
+                      <th style={{ padding: '4px 6px' }}>#</th>
+                      <th style={{ padding: '4px 6px' }}>similarity</th>
+                      <th style={{ padding: '4px 6px' }}>curso</th>
+                      <th style={{ padding: '4px 6px' }}>durações</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {probeResult.results.map((row, idx) => {
+                      const threshold = probeResult.threshold ?? 0.7
+                      const passa = (row.similarity ?? 0) >= threshold
+                      return (
+                        <tr
+                          key={idx}
+                          style={{
+                            borderTop: '1px solid var(--border-1, rgba(255,255,255,0.06))',
+                            background: passa ? 'rgba(34,197,94,0.06)' : 'transparent',
+                          }}
+                        >
+                          <td style={{ padding: '4px 6px' }}>
+                            {passa ? '✓' : idx + 1}
+                          </td>
+                          <td style={{ padding: '4px 6px', fontFamily: 'monospace' }}>
+                            {Number(row.similarity || 0).toFixed(4)}
+                          </td>
+                          <td style={{ padding: '4px 6px' }}>{row.curso || '—'}</td>
+                          <td style={{ padding: '4px 6px', color: 'var(--fg-3)' }}>
+                            {[row.duracao_1, row.duracao_2].filter(Boolean).join(' / ') || '—'}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              ) : (
+                <div>Nenhum resultado.</div>
+              )}
+            </>
+          ) : (
+            <>✗ Erro: {probeResult.error || 'falha desconhecida'}</>
+          )}
+        </div>
+      )}
 
       {/* Busca + filtros */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
