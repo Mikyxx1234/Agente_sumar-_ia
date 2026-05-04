@@ -23,7 +23,7 @@ import { pingBackend, pushMessage, getMessages, clearMessages } from './server/e
 import { getDebounceMs } from './server/evolution/debouncer.js'
 import { runAgent } from './server/ai/agentRunner.js'
 import { startAgentScheduler, runSchedulerTick, isSchedulerRunning } from './server/agentScheduler.js'
-import { runSalesbotCsv, extractLeadIdFromWebhookBody } from './server/salesbot/csvSearch.js'
+import { runSalesbotCsv, extractLeadIdFromWebhookBody, probePos } from './server/salesbot/csvSearch.js'
 import { saveSalesbotExecution } from './server/salesbot/telemetry.js'
 import { reindexPos } from './server/salesbot/reindexPos.js'
 
@@ -833,6 +833,21 @@ app.post('/api/salesbot/reindex-pos', async (req, res) => {
     const clear = req.body?.clear === false ? false : true
     const result = await reindexPos(process.env, { clear })
     res.status(result.ok ? 200 : 500).json(result)
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// Probe da busca vetorial em cursos_salesbot_pos_nome — sem efeito
+// colateral (não chama agente IA, não PATCHa Kommo). Útil pra
+// validar visualmente se um termo acha o curso certo.
+//   GET /api/salesbot/probe-pos?q=gestao publica&n=5
+app.get('/api/salesbot/probe-pos', async (req, res) => {
+  try {
+    const query = String(req.query?.q || req.query?.query || '').trim()
+    const topN = Number(req.query?.n || req.query?.topN || 3)
+    const result = await probePos(process.env, { query, topN })
+    res.status(200).json(result)
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })
   }

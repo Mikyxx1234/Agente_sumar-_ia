@@ -637,6 +637,99 @@ export async function runSalesbotCsv(env, input) {
 }
 
 /**
+ * Probe de busca de pós — usado pelo endpoint /api/salesbot/probe-pos
+ * pra testar se a vector search está achando o curso certo, sem
+ * efeito colateral no Kommo (não dispara agente, não PATCHa lead).
+ *
+ * @param {Record<string,string>} env
+ * @param {{ query: string, topN?: number }} input
+ */
+export async function probePos(env, { query, topN = 3 } = {}) {
+  const t0 = Date.now()
+  const q = String(query || '').trim()
+  if (!q) {
+    return { ok: false, query: q, results: [], durationMs: 0, error: 'query vazia' }
+  }
+  const apiKey = env.OPENAI_API_KEY || env.VITE_OPENAI_API_KEY
+  const supaUrl = env.SUPABASE_URL || env.VITE_SUPABASE_URL
+  const supaKey = env.SUPABASE_KEY || env.VITE_SUPABASE_KEY
+  if (!apiKey || !supaUrl || !supaKey) {
+    return {
+      ok: false,
+      query: q,
+      results: [],
+      durationMs: Date.now() - t0,
+      error: 'config faltando (OPENAI_API_KEY/SUPABASE_URL/SUPABASE_KEY)',
+    }
+  }
+  try {
+    const embModel = resolveModel(env, 'embeddings')
+    const embRes = await fetch('https://api.openai.com/v1/embeddings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ model: embModel, input: q }),
+    })
+    if (!embRes.ok) {
+      const t = await embRes.text().catch(() => '')
+      throw new Error(`OpenAI embeddings ${embRes.status}: ${t.slice(0, 200)}`)
+    }
+    const embData = await embRes.json()
+    const embedding = embData.data?.[0]?.embedding
+    if (!embedding) throw new Error('OpenAI não devolveu embedding')
+
+    const rpcRes = await fetch(
+      `${supaUrl.replace(/\/$/, '')}/rest/v1/rpc/match_cursos_salesbot_pos_nome`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: supaKey,
+          Authorization: `Bearer ${supaKey}`,
+        },
+        body: JSON.stringify({
+          query_embedding: embedding,
+          match_count: Math.max(1, Math.min(10, topN)),
+        }),
+      },
+    )
+    if (!rpcRes.ok) {
+      const t = await rpcRes.text().catch(() => '')
+      throw new Error(`Supabase RPC ${rpcRes.status}: ${t.slice(0, 200)}`)
+    }
+    const rows = await rpcRes.json()
+    const results = (Array.isArray(rows) ? rows : []).map((r) => {
+      const m = r.metadata || {}
+      return {
+        curso: m.curso || r.content,
+        modalidade: m.modalidade || 'EAD',
+        duracao_1: m.duracao_1 || null,
+        preco_1: m.preco_1 || null,
+        duracao_2: m.duracao_2 || null,
+        preco_2: m.preco_2 || null,
+        contagem: m.contagem || null,
+        similarity: typeof r.similarity === 'number' ? Number(r.similarity.toFixed(4)) : null,
+      }
+    })
+    return {
+      ok: true,
+      query: q,
+      embModel,
+      results,
+      durationMs: Date.now() - t0,
+      usage: embData.usage || null,
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      query: q,
+      results: [],
+      durationMs: Date.now() - t0,
+      error: err.message || String(err),
+    }
+  }
+}
+
+/**
  * Helper: parser do payload amocrm webhook.
  *
  * O amocrm manda como `application/x-www-form-urlencoded`, com chaves
