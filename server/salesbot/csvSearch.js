@@ -213,7 +213,7 @@ async function buscarCursosTool(env, query, nivel = 'graduacao') {
   const rpcRes = await fetch(`${supaUrl.replace(/\/$/, '')}/rest/v1/rpc/${tables.rpc}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', apikey: supaKey, Authorization: `Bearer ${supaKey}` },
-    body: JSON.stringify({ query_embedding: embedding, match_count: 2 }),
+    body: JSON.stringify({ query_embedding: embedding, match_count: 3 }),
   })
   if (!rpcRes.ok) {
     const t = await rpcRes.text().catch(() => '')
@@ -228,17 +228,44 @@ async function buscarCursosTool(env, query, nivel = 'graduacao') {
 }
 
 const AGENT_SYSTEM_PROMPT = (curso) =>
-  `Utilize a tool 'buscar_cursos' para achar o curso: ${curso}\n` +
+  `Você normaliza nomes de cursos para uma base de dados.\n` +
   `\n` +
-  `Se estiver abreviado (ex: RH, TI, ADM), expanda para o nome completo no output.\n` +
-  `Se tiver erro gramatical, corrija.\n` +
-  `Se estiver correto, mantenha como está.\n` +
+  `Curso recebido: "${curso}"\n` +
   `\n` +
-  `No output, aplique Title Case (primeira letra de cada palavra em maiúscula), exceto as palavras "de", "em" e "da", que devem estar sempre em minúsculas (a menos que sejam a primeira palavra do nome).\n` +
+  `REGRAS (em ordem de prioridade):\n` +
   `\n` +
-  `Retorne APENAS o nome do curso corrigido, sem explicações ou demais informações. Somente o curso encontrado na TOOL. Não retorne mais nada fora isso.\n` +
+  `1) ABREVIAÇÕES — expanda quando óbvio:\n` +
+  `   • RH → "Recursos Humanos"\n` +
+  `   • TI → "Tecnologia da Informação"\n` +
+  `   • ADM → "Administração"\n` +
+  `   • MBA → mantenha "MBA" + área se tiver\n` +
   `\n` +
-  `Retorne somente o nome do curso, sem "-" ou a modalidade junto.`
+  `2) ⚠ NÃO SUBSTITUA O NOME DO CURSO POR OUTRO. A tool retorna os ` +
+  `cursos mais SEMELHANTES da base — eles são apenas REFERÊNCIA pra ` +
+  `você confirmar a grafia oficial. Se a tool não retornou o curso ` +
+  `que o usuário pediu, MANTENHA o nome do usuário (não invente nem ` +
+  `escolha um curso aleatório dos resultados).\n` +
+  `   Exemplo: input "Gestão de Recursos Humanos", tool retorna ` +
+  `"Gestão de Investimentos" e "Gestão de Contratos" — você DEVE ` +
+  `responder "Gestão de Recursos Humanos" (o input original), NÃO um ` +
+  `dos resultados da tool.\n` +
+  `\n` +
+  `3) Use a tool 'buscar_cursos' UMA vez para confirmar a grafia. Se ` +
+  `algum resultado da tool for IDÊNTICO (ignorando case/acento) ao ` +
+  `input, use a grafia oficial da tool. Caso contrário, use o input.\n` +
+  `\n` +
+  `4) Se houver erro gramatical claro (ex: "Administracao" sem cedilha, ` +
+  `"saude publica" sem acento), corrija a ortografia mantendo o sentido.\n` +
+  `\n` +
+  `5) FORMATO: Title Case (primeira letra de cada palavra maiúscula), ` +
+  `exceto "de", "em", "da", "do", "para", "com" — sempre minúsculos, ` +
+  `salvo se forem a primeira palavra.\n` +
+  `\n` +
+  `6) NÃO inclua "EAD", "Curso de", "Graduação em", "Pós em", hífens ` +
+  `nem modalidade. Só o nome do curso.\n` +
+  `\n` +
+  `OUTPUT: apenas o nome do curso normalizado, em uma linha, sem ` +
+  `explicação ou comentário.`
 
 const AGENT_TOOLS = [
   {
@@ -246,7 +273,7 @@ const AGENT_TOOLS = [
     function: {
       name: 'buscar_cursos',
       description:
-        'Pesquisa o curso na base vetorial cursos_salesbot_nome (top 2 resultados). Use para confirmar a grafia oficial do curso.',
+        'Pesquisa o curso na base vetorial (top 3 mais semelhantes). Use APENAS para confirmar grafia oficial — não substitua o nome do usuário por um resultado da tool a menos que seja o MESMO curso (ignorando case/acento).',
       parameters: {
         type: 'object',
         properties: {
@@ -389,10 +416,12 @@ async function buscarLinhaCurso(env, cursoBusca, nivel = 'graduacao') {
  * temos embeddings gerados, vector search é mais barato (1 chamada à
  * RPC) e mais tolerante a grafias variantes.
  *
- * Threshold de 0.40 evita falso positivo total (queries nonsense
- * tipo "engenharia mecânica" pra nível pós), mas deixa passar
- * matches reais de português que costumam ficar em 0.60-0.90 com
- * text-embedding-3-small.
+ * Threshold de 0.55: evita matches duvidosos (similarity baixa
+ * geralmente significa que o curso pedido não existe na base ou que
+ * o agente IA mandou um nome inadequado). Antes de "achar um curso
+ * qualquer", é melhor cair em "Não Encontrado" pra um humano cuidar.
+ * Matches genuínos com text-embedding-3-small em PT ficam em
+ * 0.65-0.95.
  */
 async function buscarLinhaCursoPos(env, cursoBusca) {
   const apiKey = env.OPENAI_API_KEY || env.VITE_OPENAI_API_KEY
@@ -428,7 +457,7 @@ async function buscarLinhaCursoPos(env, cursoBusca) {
   const top = Array.isArray(rows) && rows.length > 0 ? rows[0] : null
   if (!top) return null
   const sim = typeof top.similarity === 'number' ? top.similarity : 0
-  if (sim < 0.40) return null
+  if (sim < 0.55) return null
 
   const meta = top.metadata || {}
   return {
