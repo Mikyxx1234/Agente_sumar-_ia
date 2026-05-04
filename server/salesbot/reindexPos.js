@@ -20,9 +20,17 @@ function ensureConfig(env) {
   return { apiKey, url: url.replace(/\/$/, ''), key }
 }
 
-async function fetchAllRows({ url, key }) {
+/**
+ * Lê linhas da cursos_salesbot_pos_nome.
+ *  - onlyMissing=true (default): só linhas SEM embedding ainda. Ideal
+ *    quando você adicionou sinônimos novos via SQL — só processa eles.
+ *  - onlyMissing=false: todas as linhas (re-gera todos os embeddings,
+ *    mais caro).
+ */
+async function fetchAllRows({ url, key }, { onlyMissing = true } = {}) {
+  const filter = onlyMissing ? 'embedding=is.null&' : ''
   const r = await fetch(
-    `${url}/rest/v1/cursos_salesbot_pos_nome?select=id,content&order=id.asc&limit=2000`,
+    `${url}/rest/v1/cursos_salesbot_pos_nome?${filter}select=id,content&order=id.asc&limit=5000`,
     { headers: { apikey: key, Authorization: `Bearer ${key}`, Accept: 'application/json' } },
   )
   if (!r.ok) {
@@ -70,18 +78,21 @@ export async function reindexPos(env, opts = {}) {
   const t0 = Date.now()
   const cfg = ensureConfig(env)
   const model = resolveModel(env, 'embeddings')
-  // `clear` está aqui só por compat com o endpoint antigo — no schema
-  // novo a gente sempre regrava o embedding (PATCH é idempotente).
-  void opts.clear
 
-  const rows = await fetchAllRows(cfg)
+  // force=true (body ou query) → re-embedda TUDO (caso edite linhas
+  // existentes). Default: só processa linhas com embedding NULL —
+  // perfeito pra adicionar sinônimos em batch sem custo extra.
+  const force = opts.force === true || opts.clear === true
+
+  const rows = await fetchAllRows(cfg, { onlyMissing: !force })
   if (!Array.isArray(rows) || rows.length === 0) {
     return {
-      ok: false,
+      ok: true,
       total: 0,
       batches: 0,
-      error:
-        'Tabela cursos_salesbot_pos_nome vazia. Rode primeiro o SQL de SCHEMA_POS.sql (parte 6) que popula content+metadata a partir de documents_precos.',
+      message: force
+        ? 'cursos_salesbot_pos_nome vazia. Rode o SQL de SCHEMA_POS.sql primeiro.'
+        : 'Nada a processar — todas as linhas já têm embedding. Use { force: true } pra re-embeddar tudo.',
       durationMs: Date.now() - t0,
       model,
     }
