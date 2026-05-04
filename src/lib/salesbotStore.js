@@ -57,27 +57,15 @@ export async function runSalesbotForLead(leadId) {
 }
 
 /**
- * Reconstrói cursos_salesbot_pos a partir de documents_precos.
- * Se dryRun=true, só devolve diagnóstico (não toca no banco).
+ * Gera embeddings dos cursos pós (text-embedding-3-small).
+ * Lê todas as linhas de cursos_salesbot_pos_nome onde os dados já
+ * foram populados via SQL e faz PATCH atualizando só a coluna
+ * `embedding`. Demora ~30-60s pra 280+ cursos.
  */
-export async function rebuildPosCatalog({ dryRun = false } = {}) {
-  const url = dryRun ? '/api/salesbot/rebuild-pos-catalog?dry_run=1' : '/api/salesbot/rebuild-pos-catalog'
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-  })
-  const data = await res.json().catch(() => ({}))
-  return { httpOk: res.ok, ...data }
-}
-
-/**
- * Roda o reindex (gera embeddings dos cursos pós).
- */
-export async function reindexPosCursos() {
+export async function reindexPosEmbeddings() {
   const res = await fetch('/api/salesbot/reindex-pos', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ clear: true }),
   })
   const data = await res.json().catch(() => ({}))
   return { httpOk: res.ok, ...data }

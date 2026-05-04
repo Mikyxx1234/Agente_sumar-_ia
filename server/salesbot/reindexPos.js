@@ -1,11 +1,12 @@
 /**
  * Reindex one-shot da tabela `cursos_salesbot_pos_nome`.
  *
- * Lê todos os cursos da `cursos_salesbot_pos`, gera embedding pra cada
- * nome (via OpenAI text-embedding-3-small), e faz upsert na tabela
- * vetorial. Idempotente: pode ser rodado múltiplas vezes.
+ * As linhas (content + metadata) são populadas por SQL direto no
+ * Supabase a partir de documents_precos (veja SCHEMA_POS.sql). Aqui
+ * só geramos o embedding pra cada `content` e fazemos PATCH na linha.
  *
- * Disparado por POST /api/salesbot/reindex-pos.
+ * Disparado por POST /api/salesbot/reindex-pos. Idempotente: pode
+ * rodar quantas vezes quiser.
  */
 
 import { resolveModel } from '../ai/modelRegistry.js'
@@ -19,26 +20,16 @@ function ensureConfig(env) {
   return { apiKey, url: url.replace(/\/$/, ''), key }
 }
 
-async function fetchAllCursos({ url, key }) {
-  const r = await fetch(`${url}/rest/v1/cursos_salesbot_pos?select=id,Curso&order=id.asc&limit=2000`, {
-    headers: { apikey: key, Authorization: `Bearer ${key}`, Accept: 'application/json' },
-  })
+async function fetchAllRows({ url, key }) {
+  const r = await fetch(
+    `${url}/rest/v1/cursos_salesbot_pos_nome?select=id,content&order=id.asc&limit=2000`,
+    { headers: { apikey: key, Authorization: `Bearer ${key}`, Accept: 'application/json' } },
+  )
   if (!r.ok) {
     const t = await r.text().catch(() => '')
-    throw new Error(`GET cursos_salesbot_pos ${r.status}: ${t.slice(0, 200)}`)
+    throw new Error(`GET cursos_salesbot_pos_nome ${r.status}: ${t.slice(0, 200)}`)
   }
   return r.json()
-}
-
-async function clearVectorTable({ url, key }) {
-  const r = await fetch(`${url}/rest/v1/cursos_salesbot_pos_nome?id=gte.0`, {
-    method: 'DELETE',
-    headers: { apikey: key, Authorization: `Bearer ${key}`, Prefer: 'return=minimal' },
-  })
-  if (!r.ok) {
-    const t = await r.text().catch(() => '')
-    throw new Error(`DELETE vetor ${r.status}: ${t.slice(0, 200)}`)
-  }
 }
 
 async function embedBatch({ apiKey, model }, texts) {
@@ -58,20 +49,20 @@ async function embedBatch({ apiKey, model }, texts) {
   }
 }
 
-async function insertVectorRows({ url, key }, rows) {
-  const r = await fetch(`${url}/rest/v1/cursos_salesbot_pos_nome`, {
-    method: 'POST',
+async function patchEmbedding({ url, key }, id, vector) {
+  const r = await fetch(`${url}/rest/v1/cursos_salesbot_pos_nome?id=eq.${id}`, {
+    method: 'PATCH',
     headers: {
       'Content-Type': 'application/json',
       apikey: key,
       Authorization: `Bearer ${key}`,
       Prefer: 'return=minimal',
     },
-    body: JSON.stringify(rows),
+    body: JSON.stringify({ embedding: vector }),
   })
   if (!r.ok) {
     const t = await r.text().catch(() => '')
-    throw new Error(`POST vetor ${r.status}: ${t.slice(0, 300)}`)
+    throw new Error(`PATCH ${id} ${r.status}: ${t.slice(0, 200)}`)
   }
 }
 
@@ -79,45 +70,53 @@ export async function reindexPos(env, opts = {}) {
   const t0 = Date.now()
   const cfg = ensureConfig(env)
   const model = resolveModel(env, 'embeddings')
-  const clear = opts.clear !== false
+  // `clear` está aqui só por compat com o endpoint antigo — no schema
+  // novo a gente sempre regrava o embedding (PATCH é idempotente).
+  void opts.clear
 
-  const cursos = await fetchAllCursos(cfg)
-  if (!Array.isArray(cursos) || cursos.length === 0) {
+  const rows = await fetchAllRows(cfg)
+  if (!Array.isArray(rows) || rows.length === 0) {
     return {
       ok: false,
       total: 0,
       batches: 0,
-      error: 'Tabela cursos_salesbot_pos vazia — rode "Reconstruir catálogo pós" antes.',
+      error:
+        'Tabela cursos_salesbot_pos_nome vazia. Rode primeiro o SQL de SCHEMA_POS.sql (parte 6) que popula content+metadata a partir de documents_precos.',
       durationMs: Date.now() - t0,
       model,
     }
   }
 
-  if (clear) await clearVectorTable(cfg)
-
   const BATCH = 50
+  const PARALLEL_PATCH = 10
   const usage = { prompt_tokens: 0, total_tokens: 0 }
   let batches = 0
-  let inserted = 0
+  let updated = 0
 
-  for (let i = 0; i < cursos.length; i += BATCH) {
-    const slice = cursos.slice(i, i + BATCH)
-    const texts = slice.map((c) => String(c.Curso || '').trim())
+  for (let i = 0; i < rows.length; i += BATCH) {
+    const slice = rows.slice(i, i + BATCH)
+    const texts = slice.map((r) => String(r.content || '').trim() || '(sem nome)')
     const { vectors, usage: u } = await embedBatch({ apiKey: cfg.apiKey, model }, texts)
     if (u) {
       usage.prompt_tokens += u.prompt_tokens || u.input_tokens || 0
       usage.total_tokens += u.total_tokens || 0
     }
-    const rows = slice.map((c, idx) => ({
-      curso_id: c.id,
-      content: c.Curso || '',
-      metadata: { tipo: 'pos-graduacao', curso_id: c.id, curso: c.Curso || '' },
-      embedding: vectors[idx],
-    }))
-    await insertVectorRows(cfg, rows)
+    for (let j = 0; j < slice.length; j += PARALLEL_PATCH) {
+      const chunk = slice.slice(j, j + PARALLEL_PATCH)
+      await Promise.all(
+        chunk.map((row, kk) => patchEmbedding(cfg, row.id, vectors[j + kk])),
+      )
+    }
     batches += 1
-    inserted += rows.length
+    updated += slice.length
   }
 
-  return { ok: true, total: inserted, batches, durationMs: Date.now() - t0, usage, model }
+  return {
+    ok: true,
+    total: updated,
+    batches,
+    durationMs: Date.now() - t0,
+    usage,
+    model,
+  }
 }

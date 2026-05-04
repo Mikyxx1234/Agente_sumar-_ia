@@ -25,7 +25,6 @@ import { runAgent } from './server/ai/agentRunner.js'
 import { startAgentScheduler, runSchedulerTick, isSchedulerRunning } from './server/agentScheduler.js'
 import { runSalesbotCsv, extractLeadIdFromWebhookBody } from './server/salesbot/csvSearch.js'
 import { saveSalesbotExecution } from './server/salesbot/telemetry.js'
-import { rebuildPosFromDocumentsPrecos } from './server/salesbot/rebuildPos.js'
 import { reindexPos } from './server/salesbot/reindexPos.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -825,26 +824,10 @@ app.post('/api/salesbot/run', async (req, res) => {
   }
 })
 
-// Reconstrói o catálogo cursos_salesbot_pos a partir de documents_precos.
-// Use ?dry_run=1 pra ver diagnóstico (tipos vistos, sample do
-// metadata) sem tocar no banco — útil quando o filtro retorna 0.
-app.post('/api/salesbot/rebuild-pos-catalog', async (req, res) => {
-  try {
-    const dryRun =
-      String(req.query?.dry_run || '').toLowerCase() === '1'
-      || String(req.query?.dry_run || '').toLowerCase() === 'true'
-      || req.body?.dryRun === true
-    const result = await rebuildPosFromDocumentsPrecos(process.env, { dryRun })
-    res.status(result.ok ? 200 : 200).json(result)
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message })
-  }
-})
-
 // Reindex one-shot da tabela vetorial cursos_salesbot_pos_nome.
-//   POST /api/salesbot/reindex-pos
-//   body opcional: { clear: true|false }
-// Default: clear=true (apaga tudo e regrava — evita duplicatas).
+// Sem UI — dispara via curl depois de inserir os cursos via SQL:
+//   curl -X POST https://<host>/api/salesbot/reindex-pos
+// Default: clear=true (apaga embeddings antigos pra evitar duplicata).
 app.post('/api/salesbot/reindex-pos', async (req, res) => {
   try {
     const clear = req.body?.clear === false ? false : true

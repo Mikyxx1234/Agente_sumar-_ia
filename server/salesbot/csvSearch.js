@@ -163,11 +163,12 @@ function inferNivel(grauStr) {
 }
 
 /**
- * Tabelas e RPCs por nível. Pra "pos" precisa que existam:
- *   - cursos_salesbot_pos
- *   - cursos_salesbot_pos_nome  (vetorial)
- *   - match_cursos_salesbot_pos_nome (RPC)
- * Veja server/salesbot/SCHEMA_POS.sql.
+ * Tabelas e RPCs por nível.
+ *
+ * Graduação tem duas tabelas (cursos_salesbot pra dados + cursos_salesbot_nome
+ * pra busca vetorial). Pós usa UMA tabela só: cursos_salesbot_pos_nome —
+ * o nome do curso fica em `content` e o resto (modalidade, duração, preço)
+ * fica no `metadata` jsonb. Veja server/salesbot/SCHEMA_POS.sql.
  */
 const NIVEL_TABLES = {
   graduacao: {
@@ -175,7 +176,7 @@ const NIVEL_TABLES = {
     rpc: 'match_cursos_salesbot_nome',
   },
   pos: {
-    catalog: 'cursos_salesbot_pos',
+    catalog: 'cursos_salesbot_pos_nome',
     rpc: 'match_cursos_salesbot_pos_nome',
   },
 }
@@ -343,15 +344,20 @@ function normalizeCursoBusca(output) {
 }
 
 /**
- * Query SQL espelhando o "Execute a SQL query" do n8n. Mantemos o
- * mesmo critério: case-insensitive em curso_sinonimo + Curso, com
- * fallback ILIKE com espaços (`% % `). A tabela é determinada pelo
- * nível (`graduacao` ou `pos`).
+ * Query SQL espelhando o "Execute a SQL query" do n8n.
+ *
+ * - Graduação: tabela `cursos_salesbot` com colunas dedicadas
+ *   (curso_sinonimo, Curso, etc.). Mantém o critério ILIKE original.
+ * - Pós: tabela `cursos_salesbot_pos_nome` com `content` (nome do curso)
+ *   e `metadata` jsonb. Achatamos o jsonb num row pseudo-compatível pra
+ *   reaproveitar `buildKommoCustomFieldsFromRowPos` sem mudança.
  */
 async function buscarLinhaCurso(env, cursoBusca, nivel = 'graduacao') {
   const url = env.SUPABASE_URL || env.VITE_SUPABASE_URL
   const key = env.SUPABASE_KEY || env.VITE_SUPABASE_KEY
   if (!url || !key) throw new Error('SUPABASE_URL/KEY não configurados')
+
+  if (nivel === 'pos') return buscarLinhaCursoPos({ url, key }, cursoBusca)
 
   const tableName = (NIVEL_TABLES[nivel] || NIVEL_TABLES.graduacao).catalog
   const enc = encodeURIComponent(cursoBusca)
@@ -373,6 +379,47 @@ async function buscarLinhaCurso(env, cursoBusca, nivel = 'graduacao') {
     return Array.isArray(rows) && rows.length > 0 ? rows[0] : null
   } catch {
     return null
+  }
+}
+
+async function buscarLinhaCursoPos({ url, key }, cursoBusca) {
+  const enc = encodeURIComponent(cursoBusca)
+  // Tenta match exato em content; cai pra fuzzy (com espaços) se nada
+  // bater. Limit=5 pra escolher a melhor pelo tamanho do nome.
+  const orParts = [
+    `content.ilike.${enc}`,
+    `content.ilike.*${enc}*`,
+  ].join(',')
+  const path = `cursos_salesbot_pos_nome?or=(${orParts})&select=content,metadata&limit=5`
+  const res = await fetch(`${url.replace(/\/$/, '')}/rest/v1/${path}`, {
+    headers: { apikey: key, Authorization: `Bearer ${key}` },
+  })
+  const text = await res.text()
+  if (!res.ok) {
+    throw new Error(`Supabase ${res.status}: ${text.slice(0, 200)}`)
+  }
+  let rows = []
+  try { rows = JSON.parse(text) } catch {}
+  if (!Array.isArray(rows) || rows.length === 0) return null
+
+  // Prefere a linha cujo nome mais se aproxima da query (por tamanho).
+  const target = cursoBusca.length
+  const best = rows.slice().sort((a, b) => {
+    const da = Math.abs(String(a.content || '').length - target)
+    const db = Math.abs(String(b.content || '').length - target)
+    return da - db
+  })[0]
+  const meta = best.metadata || {}
+
+  // Achata num "row" compatível com buildKommoCustomFieldsFromRowPos.
+  return {
+    Curso: meta.curso || best.content,
+    modalidade: meta.modalidade || 'EAD',
+    duracao_1: meta.duracao_1 || null,
+    preco_1: meta.preco_1 || null,
+    duracao_2: meta.duracao_2 || null,
+    preco_2: meta.preco_2 || null,
+    contagem: meta.contagem || (meta.duracao_2 ? '2' : '1'),
   }
 }
 
