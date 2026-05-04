@@ -262,12 +262,16 @@ export default function SalesbotExecutions() {
     refresh()
   }
 
-  const onReindexPos = async () => {
-    if (!confirm('Gera embeddings dos cursos pós que ainda não têm (linhas novas/sinônimos). Demora uns segundos. Confirma?')) return
+  const onReindexPos = async (opts = {}) => {
+    const force = opts.force === true
+    const msg = force
+      ? 'FORÇA a regeneração de TODOS os embeddings pós (~$0.01, 30-60s). Use depois de mudar a normalização do texto. Confirma?'
+      : 'Gera embeddings dos cursos pós que ainda não têm (linhas novas/sinônimos). Demora uns segundos. Confirma?'
+    if (!confirm(msg)) return
     setReindexing(true)
     setReindexResult(null)
     try {
-      const r = await reindexPosEmbeddings()
+      const r = await reindexPosEmbeddings({ force })
       setReindexResult(r)
     } catch (e) {
       setReindexResult({ ok: false, error: e?.message || 'falhou' })
@@ -304,11 +308,19 @@ export default function SalesbotExecutions() {
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button
             className="btn-secondary"
-            onClick={onReindexPos}
+            onClick={() => onReindexPos({ force: false })}
             disabled={reindexing}
-            title="Gera os embeddings dos cursos pós em cursos_salesbot_pos_nome (rodar 1x depois de popular via SQL)"
+            title="Gera embedding só das linhas novas (embedding NULL). Use depois de inserir sinônimos via SQL."
           >
-            <BookMarked size={14} /> {reindexing ? 'Indexando…' : 'Reindexar pós'}
+            <BookMarked size={14} /> {reindexing ? 'Indexando…' : 'Reindexar pós (novos)'}
+          </button>
+          <button
+            className="btn-secondary"
+            onClick={() => onReindexPos({ force: true })}
+            disabled={reindexing}
+            title="FORÇA reindex de TODAS as linhas. Use quando mudar a normalização do texto (lowercase/sem acento)."
+          >
+            <BookMarked size={14} /> {reindexing ? 'Forçando…' : 'Reindexar tudo (forçar)'}
           </button>
           <button className="btn-secondary" onClick={refresh} disabled={loading}>
             <RefreshCw size={14} /> {loading ? 'Atualizando…' : 'Atualizar'}

@@ -11,6 +11,25 @@
 
 import { resolveModel } from '../ai/modelRegistry.js'
 
+/**
+ * Normalização aplicada ao texto ANTES de gerar embedding.
+ * Lowercase + sem acento. Usada tanto aqui (DB) quanto no probePos
+ * e no fluxo principal (query do usuário) — garante que "Libras",
+ * "libras", "Saúde Pública" e "saude publica" caiam no mesmo
+ * espaço vetorial.
+ *
+ * IMPORTANTE: se mexer aqui, mexa também em normalizeForEmbedding
+ * em csvSearch.js. As duas funções precisam fazer EXATAMENTE a
+ * mesma coisa.
+ */
+export function normalizeForEmbedding(s) {
+  return String(s || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+}
+
 function ensureConfig(env) {
   const apiKey = env.OPENAI_API_KEY || env.VITE_OPENAI_API_KEY
   const url = env.SUPABASE_URL || env.VITE_SUPABASE_URL
@@ -106,7 +125,7 @@ export async function reindexPos(env, opts = {}) {
 
   for (let i = 0; i < rows.length; i += BATCH) {
     const slice = rows.slice(i, i + BATCH)
-    const texts = slice.map((r) => String(r.content || '').trim() || '(sem nome)')
+    const texts = slice.map((r) => normalizeForEmbedding(r.content) || '(sem nome)')
     const { vectors, usage: u } = await embedBatch({ apiKey: cfg.apiKey, model }, texts)
     if (u) {
       usage.prompt_tokens += u.prompt_tokens || u.input_tokens || 0

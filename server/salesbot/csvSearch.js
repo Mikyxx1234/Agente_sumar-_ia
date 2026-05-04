@@ -24,6 +24,7 @@
 
 import { resolveModel } from '../ai/modelRegistry.js'
 import { listLeadCustomFields } from '../kommoClient.js'
+import { normalizeForEmbedding } from './reindexPos.js'
 
 // IDs dos custom fields do Kommo (Cruzeiro do Sul). Override via env
 // se algum dia trocarem.
@@ -198,7 +199,7 @@ async function buscarCursosTool(env, query, nivel = 'graduacao') {
   const embRes = await fetch('https://api.openai.com/v1/embeddings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ model: embModel, input: String(query || '') }),
+    body: JSON.stringify({ model: embModel, input: normalizeForEmbedding(query) }),
   })
   if (!embRes.ok) {
     const t = await embRes.text().catch(() => '')
@@ -502,7 +503,7 @@ async function buscarLinhaCursoPos(env, cursoBusca) {
   const embRes = await fetch('https://api.openai.com/v1/embeddings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ model: embModel, input: String(cursoBusca || '').trim() }),
+    body: JSON.stringify({ model: embModel, input: normalizeForEmbedding(cursoBusca) }),
   })
   if (!embRes.ok) {
     const t = await embRes.text().catch(() => '')
@@ -819,7 +820,7 @@ export async function probePos(env, { query, topN = 3 } = {}) {
     const embRes = await fetch('https://api.openai.com/v1/embeddings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({ model: embModel, input: q }),
+      body: JSON.stringify({ model: embModel, input: normalizeForEmbedding(q) }),
     })
     if (!embRes.ok) {
       const t = await embRes.text().catch(() => '')
