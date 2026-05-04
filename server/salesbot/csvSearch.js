@@ -210,10 +210,14 @@ async function buscarCursosTool(env, query, nivel = 'graduacao') {
 
   const usageEmb = embData.usage || null
 
+  // Pra pós, top 3 ajuda o agente a ver mais opções (ex: "RH" puro
+  // pode mostrar "Gestão de RH", "Administração de RH" etc.). Pra
+  // graduação mantém top 2 (comportamento histórico).
+  const matchCount = nivel === 'pos' ? 3 : 2
   const rpcRes = await fetch(`${supaUrl.replace(/\/$/, '')}/rest/v1/rpc/${tables.rpc}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', apikey: supaKey, Authorization: `Bearer ${supaKey}` },
-    body: JSON.stringify({ query_embedding: embedding, match_count: 3 }),
+    body: JSON.stringify({ query_embedding: embedding, match_count: matchCount }),
   })
   if (!rpcRes.ok) {
     const t = await rpcRes.text().catch(() => '')
@@ -227,8 +231,26 @@ async function buscarCursosTool(env, query, nivel = 'graduacao') {
   return { text, usage: usageEmb, embModel }
 }
 
-const AGENT_SYSTEM_PROMPT = (curso) =>
-  `Você normaliza nomes de cursos para uma base de dados.\n` +
+// Prompt original do n8n robocsv — usado pra GRADUAÇÃO (que já estava
+// funcionando). Não mexer aqui sem testar todos os cursos.
+const AGENT_SYSTEM_PROMPT_GRAD = (curso) =>
+  `Utilize a tool 'buscar_cursos' para achar o curso: ${curso}\n` +
+  `\n` +
+  `Se estiver abreviado (ex: RH, TI, ADM), expanda para o nome completo no output.\n` +
+  `Se tiver erro gramatical, corrija.\n` +
+  `Se estiver correto, mantenha como está.\n` +
+  `\n` +
+  `No output, aplique Title Case (primeira letra de cada palavra em maiúscula), exceto as palavras "de", "em" e "da", que devem estar sempre em minúsculas (a menos que sejam a primeira palavra do nome).\n` +
+  `\n` +
+  `Retorne APENAS o nome do curso corrigido, sem explicações ou demais informações. Somente o curso encontrado na TOOL. Não retorne mais nada fora isso.\n` +
+  `\n` +
+  `Retorne somente o nome do curso, sem "-" ou a modalidade junto.`
+
+// Prompt de PÓS — proíbe explicitamente substituir o input por outro
+// curso só porque ele apareceu na tool (caso "Gestão de Recursos
+// Humanos" virando "Gestão de Contratos").
+const AGENT_SYSTEM_PROMPT_POS = (curso) =>
+  `Você normaliza nomes de cursos de PÓS-GRADUAÇÃO para uma base de dados.\n` +
   `\n` +
   `Curso recebido: "${curso}"\n` +
   `\n` +
@@ -273,7 +295,7 @@ const AGENT_TOOLS = [
     function: {
       name: 'buscar_cursos',
       description:
-        'Pesquisa o curso na base vetorial (top 3 mais semelhantes). Use APENAS para confirmar grafia oficial — não substitua o nome do usuário por um resultado da tool a menos que seja o MESMO curso (ignorando case/acento).',
+        'Pesquisa o curso na base vetorial (top resultados). Use para confirmar a grafia oficial do curso.',
       parameters: {
         type: 'object',
         properties: {
@@ -290,8 +312,14 @@ async function runAgentCorrigeCurso(env, cursoBruto, nivel = 'graduacao') {
   if (!apiKey) throw new Error('OPENAI_API_KEY não configurada')
   const model = resolveModel(env, 'salesbot_curso')
 
+  // Prompts diferentes por nível: graduação usa o original do n8n
+  // (que já está em produção e funciona). Pós usa o reforçado pra
+  // não substituir nomes válidos por cursos aleatórios.
+  const systemPrompt = nivel === 'pos'
+    ? AGENT_SYSTEM_PROMPT_POS(cursoBruto)
+    : AGENT_SYSTEM_PROMPT_GRAD(cursoBruto)
   const messages = [
-    { role: 'system', content: AGENT_SYSTEM_PROMPT(cursoBruto) },
+    { role: 'system', content: systemPrompt },
     { role: 'user', content: `Corrija o nome deste curso se necessário: ${cursoBruto}` },
   ]
   const usageTotal = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
@@ -396,10 +424,16 @@ async function buscarLinhaCurso(env, cursoBusca, nivel = 'graduacao') {
 
   const tableName = (NIVEL_TABLES[nivel] || NIVEL_TABLES.graduacao).catalog
   const enc = encodeURIComponent(cursoBusca)
+  // Mantém os 3 critérios originais (espelham o n8n) + variantes mais
+  // permissivas como fallback. PostgREST avalia em OR; o LIMIT 1 pega
+  // a primeira linha que casar — então o critério mais específico
+  // tende a ganhar quando há match exato.
   const orParts = [
-    `curso_sinonimo.ilike.${enc}`,
-    `Curso.ilike.${enc}`,
-    `curso_sinonimo.ilike.* ${enc} *`,
+    `curso_sinonimo.ilike.${enc}`,            // exato
+    `Curso.ilike.${enc}`,                     // exato no Curso
+    `curso_sinonimo.ilike.* ${enc} *`,        // contém com espaços ao redor (n8n original)
+    `curso_sinonimo.ilike.*${enc}*`,          // contém em qualquer posição (cobre prefixos tipo "Gestão de")
+    `Curso.ilike.*${enc}*`,                   // idem no Curso
   ].join(',')
   const path = `${tableName}?or=(${orParts})&select=*&limit=1`
   const res = await fetch(`${url.replace(/\/$/, '')}/rest/v1/${path}`, {
