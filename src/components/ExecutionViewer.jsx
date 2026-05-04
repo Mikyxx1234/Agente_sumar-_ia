@@ -3,7 +3,8 @@ import {
   Search, Trash2, Clock, Bot, Database,
   ChevronRight, ChevronDown, AlertCircle,
   User, Cpu, Zap, Copy, RefreshCw,
-  Check, ListChecks, Wand2, BookOpen
+  Check, ListChecks, Wand2, BookOpen,
+  Send, MessageSquare, Tag,
 } from 'lucide-react'
 import { getAllExecutions, clearExecutions } from '../lib/executionStore'
 
@@ -193,7 +194,92 @@ Tokens LLM  : prompt=${tc.queryRewrite.usage.prompt_tokens || 0}, completion=${t
             <div className="flow-content-text">{execution.response}</div>
           </FlowStep>
         )}
-        {execution.error && !execution.response && (
+        {(() => {
+          // Renderiza os steps de pós-resposta: kommo lookup, envio WhatsApp,
+          // persistência da conversa. Se algum deles falhou, abre automático
+          // pra ficar visível.
+          const steps = Array.isArray(execution.steps) ? execution.steps : []
+          const lookupStep = steps.find((s) => s?.tool === 'kommo.findLeadByPhone')
+          const sendStep = steps.find((s) => s?.tool === 'whatsapp.sendMessageWithNote')
+          const histStep = steps.find((s) => s?.tool === 'history.saveConversation')
+          const out = []
+          if (lookupStep) {
+            out.push(
+              <FlowStep
+                key="kommoLookup"
+                icon={Tag}
+                iconKind="info"
+                title={`Lead Kommo · ${lookupStep.result?.leadId || 'não encontrado'}`}
+              >
+                <div className="flow-content-text" style={{ fontSize: 12 }}>
+                  ID resolvido pra criar nota e referenciar nas tools:{' '}
+                  <code>{lookupStep.result?.leadId ?? '—'}</code>
+                </div>
+              </FlowStep>,
+            )
+          }
+          if (sendStep) {
+            const r = sendStep.result || {}
+            const failed = r.ok === false
+            out.push(
+              <FlowStep
+                key="sendWA"
+                icon={Send}
+                iconKind={failed ? 'error' : 'success'}
+                title={`Envio WhatsApp · ${r.sent || 0}/${r.total || 0} partes`}
+                defaultOpen={failed}
+                headerBadge={
+                  failed ? (
+                    <span style={{ fontSize: 11, color: 'var(--danger, #ef4444)' }}>✗ falhou</span>
+                  ) : (
+                    <span style={{ fontSize: 11, color: 'var(--success, #10b981)' }}>✓ enviado</span>
+                  )
+                }
+              >
+                {failed ? (
+                  <div className="flow-content-text" style={{ color: 'var(--danger)' }}>
+                    {r.error || 'Erro desconhecido — verifique WHATSAPP_PHONE_NUMBER_ID e WHATSAPP_ACCESS_TOKEN. Teste em /api/whatsapp/health.'}
+                  </div>
+                ) : (
+                  <div className="flow-content-text" style={{ fontSize: 12 }}>
+                    Mensagem entregue ao WhatsApp Cloud API ({r.sent} parte{r.sent === 1 ? '' : 's'}).
+                    Deve ter aparecido como nota no Kommo.
+                  </div>
+                )}
+              </FlowStep>,
+            )
+          }
+          if (histStep) {
+            const r = histStep.result || {}
+            const failed = r.ok === false
+            out.push(
+              <FlowStep
+                key="hist"
+                icon={MessageSquare}
+                iconKind={failed ? 'warning' : 'success'}
+                title="Memória da conversa salva"
+                defaultOpen={failed}
+                headerBadge={
+                  failed ? (
+                    <span style={{ fontSize: 11, color: 'var(--warning, #f59e0b)' }}>⚠ falhas</span>
+                  ) : null
+                }
+              >
+                {failed ? (
+                  <div className="flow-content-text" style={{ color: 'var(--warning)' }}>
+                    Substeps com falha: {(r.failedSubsteps || []).join(', ') || '(desconhecido)'}
+                  </div>
+                ) : (
+                  <div className="flow-content-text" style={{ fontSize: 12 }}>
+                    Mensagem do user + resposta da IA gravadas em <code>n8n_chat_histories</code>.
+                  </div>
+                )}
+              </FlowStep>,
+            )
+          }
+          return out
+        })()}
+        {execution.error && (
           <FlowStep icon={AlertCircle} iconKind="error" title="Erro" defaultOpen>
             <div className="flow-content-text" style={{ color: 'var(--danger)' }}>{execution.error}</div>
           </FlowStep>

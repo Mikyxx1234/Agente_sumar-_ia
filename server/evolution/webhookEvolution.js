@@ -376,6 +376,25 @@ async function flushSessionInner(env, sessionId, opts = {}) {
     }
   }
 
+  // O erro a registrar precisa cobrir 3 cenários distintos pra o
+  // operador conseguir diagnosticar pelo painel:
+  //  1. agente nem rodou / falhou → out?.error
+  //  2. agente rodou mas envio do WhatsApp falhou → ainda mostra
+  //     "Sucesso" no badge se a gente não setar error aqui (foi o
+  //     bug que motivou esta mudança).
+  //  3. tudo ok → null
+  let executionError = null
+  if (!out?.ok) {
+    executionError = out?.error || 'runAgent retornou null'
+  } else if (out.reply && sendResult && !sendResult.ok) {
+    executionError = `WhatsApp falhou: ${sendResult.error || sendResult.code || 'erro desconhecido'} (enviou ${sendResult.sent || 0}/${sendResult.total || 0} partes)`
+    console.error(`[${executionId}] envio WhatsApp falhou — registrando como erro: ${executionError}`)
+  } else if (out.reply && !sendResult) {
+    // Esse caso só acontece se o envio deu exception não capturada;
+    // o code path normal sempre devolve um objeto.
+    executionError = 'WhatsApp não retornou — provável exception silenciosa'
+  }
+
   saveExecution(env, {
     id: executionId,
     timestamp: startedAt,
@@ -384,7 +403,7 @@ async function flushSessionInner(env, sessionId, opts = {}) {
     steps: buildSteps({ sendResult, histResult, idLead }),
     toolCalls: out?.toolCalls || [],
     response: out?.ok ? out.reply : null,
-    error: out?.ok ? null : out?.error || 'runAgent retornou null',
+    error: executionError,
     totalDurationMs: out?.durationMs || 0,
     usage: out?.usage || {},
     aiMeta: out?.aiMeta || null,

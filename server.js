@@ -392,6 +392,66 @@ function evolutionWebhookIngress(req, res, next) {
 
 app.post('/api/evolution/webhook', evolutionWebhookIngress, makeEvolutionWebhookHandler(process.env))
 
+// Health-check da WhatsApp Cloud API (Meta). Faz uma chamada GET
+// no endpoint da Graph API só pra validar que o phone_number_id e o
+// access_token estão corretos — sem enviar mensagem.
+//
+//   GET /api/whatsapp/health
+//
+// Retorna:
+//   - configured: true se as 2 envs estão setadas
+//   - reachable: true se o endpoint Meta respondeu 200
+//   - displayPhoneNumber, qualityRating, verifiedName: dados do número
+//   - error: mensagem específica quando algo dá errado (token vencido,
+//            número errado, etc.)
+//
+// A Meta não tem endpoint "ping" oficial — usamos o GET no
+// /<phone_number_id>?fields=display_phone_number,quality_rating,
+// verified_name que retorna metadata do número e valida o token.
+app.get('/api/whatsapp/health', async (_req, res) => {
+  const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID || ''
+  const token = process.env.WHATSAPP_ACCESS_TOKEN || ''
+  const apiVersion = process.env.WHATSAPP_API_VERSION || 'v19.0'
+  const out = {
+    configured: Boolean(phoneId && token),
+    phoneNumberIdMasked: phoneId ? `${phoneId.slice(0, 4)}…${phoneId.slice(-4)}` : null,
+    accessTokenMasked: token ? `${token.slice(0, 6)}…${token.slice(-4)} (${token.length} chars)` : null,
+    apiVersion,
+    reachable: false,
+    error: null,
+  }
+  if (!out.configured) {
+    out.error = 'WHATSAPP_PHONE_NUMBER_ID ou WHATSAPP_ACCESS_TOKEN ausentes no .env'
+    res.status(200).json(out)
+    return
+  }
+  try {
+    const url = `https://graph.facebook.com/${apiVersion}/${encodeURIComponent(phoneId)}?fields=display_phone_number,quality_rating,verified_name,name_status`
+    const r = await fetch(url, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    const text = await r.text()
+    let data = null
+    try { data = text ? JSON.parse(text) : null } catch { data = text }
+    if (!r.ok) {
+      out.error = `Meta ${r.status}: ${typeof data === 'string' ? data.slice(0, 400) : JSON.stringify(data?.error || data || {}).slice(0, 400)}`
+      out.metaResponse = data?.error || data || null
+      res.status(200).json(out)
+      return
+    }
+    out.reachable = true
+    out.displayPhoneNumber = data?.display_phone_number || null
+    out.qualityRating = data?.quality_rating || null
+    out.verifiedName = data?.verified_name || null
+    out.nameStatus = data?.name_status || null
+    res.status(200).json(out)
+  } catch (e) {
+    out.error = e.message
+    res.status(200).json(out)
+  }
+})
+
 app.get('/api/evolution/health', async (_req, res) => {
   try {
     const ping = await pingBackend(process.env)
