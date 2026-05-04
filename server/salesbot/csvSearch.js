@@ -389,10 +389,10 @@ async function buscarLinhaCurso(env, cursoBusca, nivel = 'graduacao') {
  * temos embeddings gerados, vector search é mais barato (1 chamada à
  * RPC) e mais tolerante a grafias variantes.
  *
- * Threshold de 0.55 evita falso positivo: queries totalmente fora
- * (ex: "engenharia mecânica" sendo nivel pós) caem em "não encontrado"
- * em vez de pegar qualquer curso aleatório. Pelo probe, matches
- * legítimos ficam em 0.80+.
+ * Threshold de 0.40 evita falso positivo total (queries nonsense
+ * tipo "engenharia mecânica" pra nível pós), mas deixa passar
+ * matches reais de português que costumam ficar em 0.60-0.90 com
+ * text-embedding-3-small.
  */
 async function buscarLinhaCursoPos(env, cursoBusca) {
   const apiKey = env.OPENAI_API_KEY || env.VITE_OPENAI_API_KEY
@@ -428,7 +428,7 @@ async function buscarLinhaCursoPos(env, cursoBusca) {
   const top = Array.isArray(rows) && rows.length > 0 ? rows[0] : null
   if (!top) return null
   const sim = typeof top.similarity === 'number' ? top.similarity : 0
-  if (sim < 0.55) return null
+  if (sim < 0.40) return null
 
   const meta = top.metadata || {}
   return {
@@ -615,7 +615,18 @@ export async function runSalesbotCsv(env, input) {
     steps.push({ step: 'ai_corrige_curso', model: agent.model, content: agent.content })
 
     // 4) Normalização para SQL.
-    const cursoBusca = normalizeCursoBusca(agent.content || cursoBruto)
+    //
+    // Graduação: aplica normalize (lowercase, sem acento, remove
+    // prefixos tipo "Gestão de", "Curso de") porque a cursos_salesbot
+    // tem coluna curso_sinonimo já normalizada — o ILIKE vai casar.
+    //
+    // Pós: NÃO normaliza. "Gestão de Recursos Humanos", "Gestão
+    // Pública" etc são nomes completos no DB. Tirar "gestao de" da
+    // query quebrava o vector search (similarity caía pra ~0.4).
+    // Vector search já é tolerante a caso/acento/espaço.
+    const cursoBusca = nivel === 'pos'
+      ? String(agent.content || cursoBruto).trim()
+      : normalizeCursoBusca(agent.content || cursoBruto)
     out.cursoBusca = cursoBusca
     steps.push({ step: 'normalize', cursoBusca })
 
