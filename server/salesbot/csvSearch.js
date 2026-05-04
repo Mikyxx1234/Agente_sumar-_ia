@@ -379,6 +379,14 @@ function normalizeCursoBusca(output) {
  *   e `metadata` jsonb. Achatamos o jsonb num row pseudo-compatível pra
  *   reaproveitar `buildKommoCustomFieldsFromRowPos` sem mudança.
  */
+/**
+ * Faz a busca da linha do curso. Devolve:
+ *   { row: object|null, top3?: Array, threshold?: number }
+ *
+ * row = linha "achatada" pronta pro buildKommoCustomFieldsFromRow
+ * top3 (só pra pós) = top 3 candidatos do vector search com similarity
+ *                     pra entender no debug por que algo não casou
+ */
 async function buscarLinhaCurso(env, cursoBusca, nivel = 'graduacao') {
   if (nivel === 'pos') return buscarLinhaCursoPos(env, cursoBusca)
 
@@ -403,9 +411,10 @@ async function buscarLinhaCurso(env, cursoBusca, nivel = 'graduacao') {
   }
   try {
     const rows = JSON.parse(text)
-    return Array.isArray(rows) && rows.length > 0 ? rows[0] : null
+    const row = Array.isArray(rows) && rows.length > 0 ? rows[0] : null
+    return { row }
   } catch {
-    return null
+    return { row: null }
   }
 }
 
@@ -416,13 +425,24 @@ async function buscarLinhaCurso(env, cursoBusca, nivel = 'graduacao') {
  * temos embeddings gerados, vector search é mais barato (1 chamada à
  * RPC) e mais tolerante a grafias variantes.
  *
- * Threshold de 0.55: evita matches duvidosos (similarity baixa
- * geralmente significa que o curso pedido não existe na base ou que
- * o agente IA mandou um nome inadequado). Antes de "achar um curso
- * qualquer", é melhor cair em "Não Encontrado" pra um humano cuidar.
- * Matches genuínos com text-embedding-3-small em PT ficam em
- * 0.65-0.95.
+ * Threshold de 0.70: evita matches duvidosos. "Chutar é pior que
+ * retornar Não Encontrado" — se a similarity é < 0.70 quase sempre
+ * é uma das três coisas:
+ *   (a) curso pedido não existe na base (ex: "MBA" sozinho — a
+ *       pessoa precisa especificar a área),
+ *   (b) o agente IA mandou um nome ruim ou incompleto,
+ *   (c) é uma abreviação ambígua que mereceria intervenção humana.
+ * Em qualquer um dos 3 casos, é melhor o humano cuidar do que
+ * popular o lead com um curso aleatório.
+ *
+ * Matches genuínos (input bate com curso real da base) com
+ * text-embedding-3-small em PT ficam em 0.80-0.97.
+ *
+ * Devolve null e o caller registra o resultado no debug — top_similarity
+ * fica visível em steps pra entender o motivo do "Não Encontrado".
  */
+const POS_MATCH_THRESHOLD = 0.70
+
 async function buscarLinhaCursoPos(env, cursoBusca) {
   const apiKey = env.OPENAI_API_KEY || env.VITE_OPENAI_API_KEY
   const url = (env.SUPABASE_URL || env.VITE_SUPABASE_URL || '').replace(/\/$/, '')
@@ -447,28 +467,41 @@ async function buscarLinhaCursoPos(env, cursoBusca) {
   const rpcRes = await fetch(`${url}/rest/v1/rpc/match_cursos_salesbot_pos_nome`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}` },
-    body: JSON.stringify({ query_embedding: embedding, match_count: 1 }),
+    body: JSON.stringify({ query_embedding: embedding, match_count: 3 }),
   })
   if (!rpcRes.ok) {
     const t = await rpcRes.text().catch(() => '')
     throw new Error(`Supabase RPC ${rpcRes.status}: ${t.slice(0, 200)}`)
   }
   const rows = await rpcRes.json()
-  const top = Array.isArray(rows) && rows.length > 0 ? rows[0] : null
-  if (!top) return null
-  const sim = typeof top.similarity === 'number' ? top.similarity : 0
-  if (sim < 0.55) return null
+  const list = Array.isArray(rows) ? rows : []
+  const top = list[0] || null
+  const sim = top && typeof top.similarity === 'number' ? top.similarity : 0
+
+  // Resumo dos top 3 pra ficar visível no debug, com ou sem match.
+  const top3 = list.slice(0, 3).map((r) => ({
+    curso: r.metadata?.curso || r.content,
+    similarity: typeof r.similarity === 'number' ? Number(r.similarity.toFixed(4)) : null,
+  }))
+
+  if (!top || sim < POS_MATCH_THRESHOLD) {
+    return { row: null, top3, threshold: POS_MATCH_THRESHOLD }
+  }
 
   const meta = top.metadata || {}
   return {
-    Curso: meta.curso || top.content,
-    modalidade: meta.modalidade || 'EAD',
-    duracao_1: meta.duracao_1 || null,
-    preco_1: meta.preco_1 || null,
-    duracao_2: meta.duracao_2 || null,
-    preco_2: meta.preco_2 || null,
-    contagem: meta.contagem || (meta.duracao_2 ? '2' : '1'),
-    _similarity: sim,
+    row: {
+      Curso: meta.curso || top.content,
+      modalidade: meta.modalidade || 'EAD',
+      duracao_1: meta.duracao_1 || null,
+      preco_1: meta.preco_1 || null,
+      duracao_2: meta.duracao_2 || null,
+      preco_2: meta.preco_2 || null,
+      contagem: meta.contagem || (meta.duracao_2 ? '2' : '1'),
+      _similarity: Number(sim.toFixed(4)),
+    },
+    top3,
+    threshold: POS_MATCH_THRESHOLD,
   }
 }
 
@@ -659,16 +692,24 @@ export async function runSalesbotCsv(env, input) {
     out.cursoBusca = cursoBusca
     steps.push({ step: 'normalize', cursoBusca })
 
-    // 5) SQL no Supabase (tabela do nível inferido).
-    const row = await buscarLinhaCurso(env, cursoBusca, nivel)
+    // 5) SQL/Vector search no Supabase (tabela do nível inferido).
+    const search = await buscarLinhaCurso(env, cursoBusca, nivel)
+    const row = search?.row || null
     out.rowCurso = row
     out.encontrado = !!row
-    steps.push({
+    const sqlStep = {
       step: 'sql_query',
       tabela: (NIVEL_TABLES[nivel] || NIVEL_TABLES.graduacao).catalog,
       encontrado: out.encontrado,
       columns: row ? Object.keys(row).length : 0,
-    })
+    }
+    // Pra pós, sempre mostra os top 3 candidatos no debug — facilita
+    // entender por que algo casou ou não.
+    if (search?.top3) {
+      sqlStep.top3 = search.top3
+      sqlStep.threshold = search.threshold
+    }
+    steps.push(sqlStep)
 
     // 6) PATCH no lead.
     const customFields = out.encontrado
