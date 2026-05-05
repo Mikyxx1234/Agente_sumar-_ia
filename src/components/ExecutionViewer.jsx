@@ -4,9 +4,9 @@ import {
   ChevronRight, ChevronDown, AlertCircle,
   User, Cpu, Zap, Copy, RefreshCw,
   Check, ListChecks, Wand2, BookOpen,
-  Send, MessageSquare, Tag,
+  Send, MessageSquare, Tag, BookMarked,
 } from 'lucide-react'
-import { getAllExecutions, clearExecutions } from '../lib/executionStore'
+import { getAllExecutions, clearExecutions, reindexPerguntasEmbeddings } from '../lib/executionStore'
 
 function formatDuration(ms) {
   if (ms < 1000) return `${ms}ms`
@@ -427,6 +427,8 @@ export default function ExecutionViewer() {
   const [executions, setExecutions] = useState([])
   const [loading, setLoading] = useState(true)
   const [copyToast, setCopyToast] = useState(false)
+  const [reindexing, setReindexing] = useState(false)
+  const [reindexResult, setReindexResult] = useState(null)
 
   const fetchExecutions = useCallback(async () => {
     setLoading(true)
@@ -448,6 +450,24 @@ export default function ExecutionViewer() {
   const showCopyToast = () => {
     setCopyToast(true)
     setTimeout(() => setCopyToast(false), 1500)
+  }
+
+  const onReindexPerguntas = async (opts = {}) => {
+    const force = opts.force === true
+    const msg = force
+      ? 'FORÇA o reindex de TODAS as linhas do FAQ. Use depois de mudar a normalização. Confirma?'
+      : 'Gera embedding só das linhas novas do FAQ (embedding NULL). Use depois de inserir uma pergunta via SQL. Confirma?'
+    if (!window.confirm(msg)) return
+    setReindexing(true)
+    setReindexResult(null)
+    try {
+      const r = await reindexPerguntasEmbeddings({ force })
+      setReindexResult(r)
+    } catch (e) {
+      setReindexResult({ ok: false, error: e?.message || 'falhou' })
+    } finally {
+      setReindexing(false)
+    }
   }
 
   const filtered = useMemo(() => {
@@ -479,6 +499,22 @@ export default function ExecutionViewer() {
           <span className="badge">{executions.length} registradas</span>
         </div>
         <div className="page-actions">
+          <button
+            className="btn btn-ghost"
+            onClick={() => onReindexPerguntas({ force: false })}
+            disabled={reindexing}
+            title="Gera embedding das linhas novas do FAQ (documents_perguntas) — use depois de inserir uma pergunta via SQL"
+          >
+            <BookMarked size={14} /> <span>{reindexing ? 'Indexando…' : 'Reindexar FAQ'}</span>
+          </button>
+          <button
+            className="btn btn-ghost"
+            onClick={() => onReindexPerguntas({ force: true })}
+            disabled={reindexing}
+            title="FORÇA reindex de TODAS as linhas do FAQ — use quando mudar a normalização"
+          >
+            <BookMarked size={14} /> <span>{reindexing ? 'Forçando…' : 'Reindexar FAQ (forçar)'}</span>
+          </button>
           <button className="btn btn-ghost" onClick={fetchExecutions}>
             <RefreshCw size={14} /> <span>Atualizar</span>
           </button>
@@ -487,6 +523,32 @@ export default function ExecutionViewer() {
           </button>
         </div>
       </div>
+
+      {reindexResult && (
+        <div
+          style={{
+            padding: '8px 12px',
+            background: reindexResult.ok
+              ? 'rgba(34,197,94,0.08)'
+              : 'rgba(239,68,68,0.08)',
+            border: `1px solid ${reindexResult.ok ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}`,
+            borderRadius: 6,
+            marginBottom: 12,
+            fontSize: 12,
+          }}
+        >
+          {reindexResult.ok ? (
+            <>
+              ✓ Reindex FAQ ok · {reindexResult.total} linha{reindexResult.total === 1 ? '' : 's'} processada{reindexResult.total === 1 ? '' : 's'}
+              {' '}({reindexResult.batches} batch{reindexResult.batches === 1 ? '' : 'es'}, {reindexResult.durationMs}ms,{' '}
+              {reindexResult.usage?.total_tokens || 0} tokens)
+              {reindexResult.message ? ` · ${reindexResult.message}` : ''}
+            </>
+          ) : (
+            <>✗ Erro: {reindexResult.error || 'falha desconhecida'}</>
+          )}
+        </div>
+      )}
 
       <div className="exec-layout">
         <div className="exec-list-panel">

@@ -108,3 +108,19 @@ export async function clearExecutions() {
     console.error('[ExecutionStore] Clear error:', e.message)
   }
 }
+
+/**
+ * Gera embeddings da tabela documents_perguntas (FAQ usado pela tool
+ * buscar_perguntas). Por padrão só processa linhas com embedding NULL
+ * — útil depois de inserir uma pergunta nova via SQL. Use { force: true }
+ * pra regenerar tudo (custa ~$0.001 por algumas dezenas de linhas).
+ */
+export async function reindexPerguntasEmbeddings({ force = false } = {}) {
+  const res = await fetch('/api/ai/reindex-perguntas', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ force }),
+  })
+  const data = await res.json().catch(() => ({}))
+  return { httpOk: res.ok, ...data }
+}

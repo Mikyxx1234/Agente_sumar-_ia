@@ -26,6 +26,7 @@ import { startAgentScheduler, runSchedulerTick, isSchedulerRunning } from './ser
 import { runSalesbotCsv, extractLeadIdFromWebhookBody, probePos } from './server/salesbot/csvSearch.js'
 import { saveSalesbotExecution } from './server/salesbot/telemetry.js'
 import { reindexPos } from './server/salesbot/reindexPos.js'
+import { reindexPerguntas } from './server/ai/reindexPerguntas.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -832,6 +833,21 @@ app.post('/api/salesbot/reindex-pos', async (req, res) => {
   try {
     const clear = req.body?.clear === false ? false : true
     const result = await reindexPos(process.env, { clear })
+    res.status(result.ok ? 200 : 500).json(result)
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// Reindex do FAQ — gera embedding pra cada linha em documents_perguntas.
+// Default: só linhas com embedding NULL (perfeito depois de inserir
+// uma pergunta nova via SQL). Com { force: true } regenera tudo.
+//   curl -X POST https://<host>/api/ai/reindex-perguntas
+//   curl -X POST https://<host>/api/ai/reindex-perguntas -H 'Content-Type: application/json' -d '{"force":true}'
+app.post('/api/ai/reindex-perguntas', async (req, res) => {
+  try {
+    const force = req.body?.force === true || req.body?.clear === true
+    const result = await reindexPerguntas(process.env, { force })
     res.status(result.ok ? 200 : 500).json(result)
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })
