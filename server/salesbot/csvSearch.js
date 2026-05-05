@@ -450,7 +450,10 @@ async function buscarLinhaCurso(env, cursoBusca, nivel = 'graduacao', agentConte
     orParts.push(`Curso.ilike.*${encOrig}*`)
     orParts.push(`curso_sinonimo.ilike.*${encOrig}*`)
   }
-  const path = `${tableName}?or=(${orParts.join(',')})&select=*&limit=1`
+  // limit=20 (não 1!) — vamos ranquear no JS pra priorizar match
+  // exato sobre substring. Sem isso, "pedagogia" pega "Psicopedagogia"
+  // antes de "Pedagogia", já que o OR do PostgREST não tem ordem.
+  const path = `${tableName}?or=(${orParts.join(',')})&select=*&limit=20`
   const res = await fetch(`${url.replace(/\/$/, '')}/rest/v1/${path}`, {
     headers: { apikey: key, Authorization: `Bearer ${key}` },
   })
@@ -458,13 +461,47 @@ async function buscarLinhaCurso(env, cursoBusca, nivel = 'graduacao', agentConte
   if (!res.ok) {
     throw new Error(`Supabase ${res.status}: ${text.slice(0, 200)}`)
   }
+  let rows
   try {
-    const rows = JSON.parse(text)
-    const row = Array.isArray(rows) && rows.length > 0 ? rows[0] : null
-    return { row }
+    rows = JSON.parse(text)
   } catch {
     return { row: null }
   }
+  if (!Array.isArray(rows) || rows.length === 0) return { row: null }
+  if (rows.length === 1) return { row: rows[0] }
+
+  // Ranking: exato > word-boundary > prefixo > substring. Resolve o
+  // caso clássico "pedagogia" pegando "Psicopedagogia" porque ILIKE
+  // com wildcard considera substring puro.
+  const norm = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim()
+  const target = norm(cursoBusca)
+  const targetOrig = agentContent ? norm(agentContent) : null
+  const candidatos = targetOrig && targetOrig !== target ? [target, targetOrig] : [target]
+  const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+  function scoreRow(row) {
+    const sin = norm(row.curso_sinonimo)
+    const cur = norm(row.Curso)
+    let best = 0
+    for (const q of candidatos) {
+      if (!q) continue
+      if (sin === q) best = Math.max(best, 100)
+      if (cur === q) best = Math.max(best, 95)
+      const wb = new RegExp(`(^|\\s|-)${escapeRe(q)}(\\s|-|$)`)
+      if (wb.test(sin)) best = Math.max(best, 80)
+      if (wb.test(cur)) best = Math.max(best, 75)
+      if (sin.startsWith(q)) best = Math.max(best, 60)
+      if (cur.startsWith(q)) best = Math.max(best, 55)
+      if (sin.includes(q)) best = Math.max(best, 30)
+      if (cur.includes(q)) best = Math.max(best, 25)
+    }
+    return best
+  }
+
+  const ranked = rows
+    .map((r) => ({ row: r, score: scoreRow(r) }))
+    .sort((a, b) => b.score - a.score)
+  return { row: ranked[0]?.row || null }
 }
 
 /**
