@@ -217,8 +217,21 @@ export function buildToolExecutors(env, ctx) {
       vectorSearch(env, safeCtx, 'buscar_informacoes', 'match_documents', query, 15),
     buscar_pos: async ({ query }) =>
       vectorSearch(env, safeCtx, 'buscar_pos', 'match_documents_pos', query, 8),
-    buscar_perguntas: async ({ query }) =>
-      vectorSearch(env, safeCtx, 'buscar_perguntas', 'match_documents_perguntas', query, 6),
+    buscar_perguntas: async ({ query }) => {
+      const out = await vectorSearch(env, safeCtx, 'buscar_perguntas', 'match_documents_perguntas', query, 6)
+      // Quando o RAG não acha nada, dá pra IA uma instrução explícita
+      // pra DISTRIBUIR pra humano em vez de inventar resposta sobre
+      // processos internos da empresa (matrícula, dispensa, etc.).
+      if (out === 'Nenhum resultado encontrado na base.') {
+        return [
+          'Nenhum resultado encontrado na base de FAQ para esta pergunta.',
+          '',
+          'INSTRUÇÃO OBRIGATÓRIA: NÃO invente resposta sobre processos da empresa. NÃO mande o cliente "procurar a faculdade", "ligar para a coordenação", "consultar a secretaria", "verificar com o polo". Quem analisa esse tipo de caso somos NÓS.',
+          'Em vez disso, chame a tool distribuir_humano (passando o telefone do Contexto) e responda ao cliente que um consultor entrará em contato em breve para ajudar.',
+        ].join('\n')
+      }
+      return out
+    },
     localizacao: async (args) => formatLocationResult(await runNearestPolo(env, args)),
     inscricao: async (args) => {
       const r = await runInscricao(env, args)
