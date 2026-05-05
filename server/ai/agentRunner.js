@@ -158,21 +158,92 @@ export async function runAgent(env, input) {
   const toolTrace = []
   const usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
 
+  // Snapshot inicial do "contexto" enviado pro LLM no round 1. Útil
+  // pra debug — sem isso era cego se o prompt mudou ou se o Contexto
+  // (telefone/leadId) estava chegando.
+  const ctxSnapshot = {
+    systemPromptChars: systemMessage.length,
+    contextPreamble: contextPreamble || null,
+    historyCount: historyMessages.length,
+    toolsAvailable: TOOL_DEFINITIONS.map((t) => t.function?.name).filter(Boolean),
+    userMessage,
+  }
+
+  // Steps granulares por round do orquestrador — espelha o que o
+  // SalesbotExecutions já mostra.  Cada round vira um step com:
+  //   - decisão do LLM (respondeu vs chamou tools)
+  //   - tokens consumidos
+  //   - mensagens enviadas (resumido pra não estourar o JSONB)
+  //   - resposta crua do LLM (content + tool_calls + finish_reason)
+  const orchestratorSteps = []
+
+  function summarizeMessage(m) {
+    if (!m || typeof m !== 'object') return null
+    const out = { role: m.role }
+    if (typeof m.content === 'string') {
+      out.content = m.content.length > 400 ? `${m.content.slice(0, 400)}…` : m.content
+    } else if (m.content == null) {
+      out.content = null
+    } else {
+      out.content = '[non-string]'
+    }
+    if (Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+      out.tool_calls = m.tool_calls.map((tc) => ({
+        id: tc.id,
+        name: tc.function?.name,
+        arguments: tc.function?.arguments,
+      }))
+    }
+    if (m.tool_call_id) out.tool_call_id = m.tool_call_id
+    if (m.name) out.name = m.name
+    return out
+  }
+
   try {
     let round = 0
     while (round < MAX_TOOL_ROUNDS) {
+      const roundT0 = Date.now()
       const data = await callOpenAI(env, apiMessages, model)
+      const roundDurationMs = Date.now() - roundT0
       const choice = data.choices?.[0]
       const msg = choice?.message
       if (!msg) throw new Error('Sem resposta da API')
 
-      if (data.usage) {
-        usage.prompt_tokens += data.usage.prompt_tokens || 0
-        usage.completion_tokens += data.usage.completion_tokens || 0
-        usage.total_tokens += data.usage.total_tokens || 0
+      const roundUsage = data.usage
+        ? {
+            prompt_tokens: data.usage.prompt_tokens || 0,
+            completion_tokens: data.usage.completion_tokens || 0,
+            total_tokens: data.usage.total_tokens || 0,
+          }
+        : null
+      if (roundUsage) {
+        usage.prompt_tokens += roundUsage.prompt_tokens
+        usage.completion_tokens += roundUsage.completion_tokens
+        usage.total_tokens += roundUsage.total_tokens
       }
 
-      if (choice.finish_reason === 'tool_calls' || (msg.tool_calls && msg.tool_calls.length > 0)) {
+      const wantsTools = choice.finish_reason === 'tool_calls' || (msg.tool_calls && msg.tool_calls.length > 0)
+      // Cada round salva: o que o LLM "viu" + o que decidiu fazer.
+      // messagesSent fica resumido (primeiras 3 e últimas 6) pra não
+      // explodir o JSONB no Supabase em conversas longas.
+      const sent = apiMessages.map(summarizeMessage)
+      const messagesSent = sent.length > 9
+        ? [...sent.slice(0, 3), { role: 'system', content: `[…cortadas ${sent.length - 9} mensagens do meio…]` }, ...sent.slice(-6)]
+        : sent
+      orchestratorSteps.push({
+        type: 'llm_call',
+        round: round + 1,
+        model,
+        durationMs: roundDurationMs,
+        usage: roundUsage,
+        decision: wantsTools ? 'tool_calls' : 'reply',
+        finishReason: choice.finish_reason || null,
+        messagesSentCount: apiMessages.length,
+        messagesSent,
+        llmResponse: summarizeMessage(msg),
+      })
+
+      if (wantsTools) {
         apiMessages.push(msg)
         const toolResults = await executeToolCalls(executors, msg.tool_calls, toolTrace, ctx)
         apiMessages.push(...toolResults)
@@ -185,6 +256,8 @@ export async function runAgent(env, input) {
         ok: true,
         reply,
         toolCalls: toolTrace,
+        orchestratorSteps,
+        ctxSnapshot,
         usage,
         durationMs: Date.now() - t0,
         historyLoaded: historyMessages.length,
@@ -197,6 +270,8 @@ export async function runAgent(env, input) {
       ok: false,
       error: 'Limite de rodadas de tools atingido.',
       toolCalls: toolTrace,
+      orchestratorSteps,
+      ctxSnapshot,
       usage,
       durationMs: Date.now() - t0,
       executionId,
@@ -208,6 +283,8 @@ export async function runAgent(env, input) {
       ok: false,
       error: err.message,
       toolCalls: toolTrace,
+      orchestratorSteps,
+      ctxSnapshot,
       usage,
       durationMs: Date.now() - t0,
       executionId,

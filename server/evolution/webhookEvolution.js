@@ -400,7 +400,7 @@ async function flushSessionInner(env, sessionId, opts = {}) {
     timestamp: startedAt,
     userMessage: mensagemCompleta,
     model: out?.model || null,
-    steps: buildSteps({ sendResult, histResult, idLead }),
+    steps: buildSteps({ sendResult, histResult, idLead, agentOut: out }),
     toolCalls: out?.toolCalls || [],
     response: out?.ok ? out.reply : null,
     error: executionError,
@@ -418,12 +418,21 @@ async function flushSessionInner(env, sessionId, opts = {}) {
 }
 
 /**
- * Converte o resultado de envio/histórico em "steps" (mesmo conceito do
- * executionStore/ExecutionViewer) para debugar rapidamente o que aconteceu
- * depois que o agente respondeu.
+ * Converte o resultado de envio/histórico + os passos do orquestrador
+ * em "steps" (mesmo conceito do executionStore/ExecutionViewer) para
+ * debugar rapidamente o que aconteceu depois que o agente respondeu.
+ *
+ * Inclui também os steps por round do agentRunner (decisão LLM, tokens,
+ * mensagens enviadas, resposta crua) — mesmo padrão usado pelo Salesbot.
  */
-function buildSteps({ sendResult, histResult, idLead }) {
+function buildSteps({ sendResult, histResult, idLead, agentOut }) {
   const steps = []
+  if (agentOut?.ctxSnapshot) {
+    steps.push({ type: 'ctx_snapshot', tool: 'agent.ctx_snapshot', result: agentOut.ctxSnapshot })
+  }
+  if (Array.isArray(agentOut?.orchestratorSteps)) {
+    for (const s of agentOut.orchestratorSteps) steps.push(s)
+  }
   if (idLead != null) steps.push({ tool: 'kommo.findLeadByPhone', result: { leadId: idLead } })
   if (sendResult) {
     steps.push({

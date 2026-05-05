@@ -1115,12 +1115,19 @@ app.post('/api/playground/flush', async (req, res) => {
           })
           .catch((err) => console.error(`[${executionId}] playground history exception:`, err.message))
       }
+      const playgroundSteps = []
+      if (out?.ctxSnapshot) {
+        playgroundSteps.push({ type: 'ctx_snapshot', tool: 'agent.ctx_snapshot', result: out.ctxSnapshot })
+      }
+      if (Array.isArray(out?.orchestratorSteps)) {
+        for (const s of out.orchestratorSteps) playgroundSteps.push(s)
+      }
       saveExecution(process.env, {
         id: executionId,
         timestamp: startedAt,
         userMessage: joined,
         model: out?.model || null,
-        steps: [],
+        steps: playgroundSteps,
         toolCalls: out?.toolCalls || [],
         response: out?.ok ? out.reply : null,
         error: out?.ok ? null : out?.error || null,

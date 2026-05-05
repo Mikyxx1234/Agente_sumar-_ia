@@ -23,6 +23,96 @@ function truncate(text, max = 200) {
   return text.length > max ? text.substring(0, max) + '…' : text
 }
 
+function RoundDetail({ round }) {
+  const [open, setOpen] = useState(false)
+  const [showMsgs, setShowMsgs] = useState(false)
+  const decisionLabel = round.decision === 'tool_calls' ? 'chamou tools' : 'respondeu'
+  const toolsSolicitadas = (round.llmResponse?.tool_calls || []).map((tc) => tc.name).join(', ')
+  return (
+    <div
+      style={{
+        marginTop: 8,
+        padding: 8,
+        background: 'var(--bg-2, rgba(255,255,255,0.03))',
+        border: '1px solid var(--border-1, rgba(255,255,255,0.06))',
+        borderRadius: 4,
+      }}
+    >
+      <div
+        style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 12 }}
+        onClick={() => setOpen(!open)}
+      >
+        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        <span style={{ fontWeight: 600 }}>Round {round.round}</span>
+        <span
+          className={`badge ${round.decision === 'tool_calls' ? '' : 'success'}`}
+          style={{ fontSize: 10 }}
+        >
+          {decisionLabel}
+          {toolsSolicitadas ? ` (${toolsSolicitadas})` : ''}
+        </span>
+        <span style={{ marginLeft: 'auto', color: 'var(--fg-3)', fontSize: 11, display: 'flex', gap: 8 }}>
+          <span><Clock size={10} /> {round.durationMs}ms</span>
+          {round.usage && (
+            <span>
+              <Zap size={10} /> {round.usage.total_tokens || 0} tok
+              <span style={{ color: 'var(--fg-3)' }}>
+                {' '}
+                ({round.usage.prompt_tokens || 0}→{round.usage.completion_tokens || 0})
+              </span>
+            </span>
+          )}
+          {round.finishReason && <span style={{ opacity: 0.7 }}>{round.finishReason}</span>}
+        </span>
+      </div>
+      {open && (
+        <div style={{ marginTop: 8, fontSize: 12 }}>
+          <div style={{ marginBottom: 6, color: 'var(--fg-3)' }}>
+            Mensagens enviadas: {round.messagesSentCount}
+            {' · '}
+            <button
+              type="button"
+              onClick={() => setShowMsgs(!showMsgs)}
+              style={{
+                background: 'transparent',
+                border: '1px solid var(--border-1)',
+                color: 'var(--fg-2)',
+                padding: '2px 6px',
+                fontSize: 11,
+                borderRadius: 3,
+                cursor: 'pointer',
+              }}
+            >
+              {showMsgs ? 'ocultar resumo' : 'ver resumo'}
+            </button>
+          </div>
+          {showMsgs && (
+            <pre className="flow-content-pre" style={{ maxHeight: 280, overflowY: 'auto' }}>
+              {(round.messagesSent || []).map((m, idx) => {
+                const tcs = (m.tool_calls || []).map((tc) => `${tc.name}(${tc.arguments || '{}'})`).join(', ')
+                const body = m.content == null ? '' : `: ${m.content}`
+                const tail = tcs ? ` · tool_calls=[${tcs}]` : ''
+                return `[${idx + 1}] ${m.role}${body}${tail}`
+              }).join('\n')}
+            </pre>
+          )}
+          <div className="flow-label" style={{ marginTop: 6 }}>Resposta crua do LLM</div>
+          <pre className="flow-content-pre" style={{ maxHeight: 240, overflowY: 'auto' }}>
+{`role          : ${round.llmResponse?.role || '—'}
+finish_reason : ${round.finishReason || '—'}
+content       : ${round.llmResponse?.content == null ? '—' : round.llmResponse.content}
+${(round.llmResponse?.tool_calls || []).length > 0
+  ? `tool_calls    :\n${round.llmResponse.tool_calls.map((tc, i) =>
+      `  ${i + 1}. ${tc.name}\n     args: ${tc.arguments || '{}'}`,
+    ).join('\n')}`
+  : 'tool_calls    : —'}`}
+          </pre>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function FlowStep({ icon: Icon, iconKind, title, duration, headerBadge, children, defaultOpen = false }) {
   const [open, setOpen] = useState(defaultOpen)
   const hasContent = !!children
@@ -123,12 +213,54 @@ function ExecutionDetail({ execution, onCopy }) {
             )}
           </FlowStep>
         )}
-        <FlowStep icon={Bot} iconKind="info" title={`Orquestrador · ${execution.model}`}>
-          <div className="flow-content-text">
-            Rounds: {execution.steps?.filter(s => s.type === 'llm_call').length || 1}
-            {hasTools && <><br />Tools: {execution.toolCalls.map(t => t.tool).join(', ')}</>}
-          </div>
-        </FlowStep>
+        {(() => {
+          const ctxStep = (execution.steps || []).find((s) => s?.type === 'ctx_snapshot')
+          const ctx = ctxStep?.result
+          if (!ctx) return null
+          return (
+            <FlowStep
+              icon={ListChecks}
+              iconKind="info"
+              title="Contexto enviado ao orquestrador"
+              defaultOpen={false}
+            >
+              <pre className="flow-content-pre">{`System prompt : ${ctx.systemPromptChars} chars
+Tools         : ${(ctx.toolsAvailable || []).join(', ') || '—'}
+Histórico     : ${ctx.historyCount} msg${ctx.historyCount === 1 ? '' : 's'} injetadas
+${ctx.contextPreamble ? `Preâmbulo:\n${ctx.contextPreamble}` : 'Preâmbulo: (vazio)'}
+
+Mensagem do user:
+${ctx.userMessage || '—'}`}</pre>
+            </FlowStep>
+          )
+        })()}
+        {(() => {
+          const rounds = (execution.steps || []).filter((s) => s?.type === 'llm_call')
+          const totalTokens = rounds.reduce((acc, r) => acc + (r.usage?.total_tokens || 0), 0)
+          return (
+            <FlowStep
+              icon={Bot}
+              iconKind="info"
+              title={`Orquestrador · ${execution.model}`}
+              headerBadge={
+                rounds.length > 0 ? (
+                  <span style={{ fontSize: 11, color: 'var(--fg-3)' }}>
+                    {rounds.length} round{rounds.length === 1 ? '' : 's'} · {totalTokens} tokens
+                  </span>
+                ) : null
+              }
+              defaultOpen={rounds.length > 1}
+            >
+              <div className="flow-content-text">
+                Rounds: {rounds.length || 1}
+                {hasTools && <><br />Tools chamadas: {execution.toolCalls.map(t => t.tool).join(', ')}</>}
+              </div>
+              {rounds.map((r, idx) => (
+                <RoundDetail key={idx} round={r} />
+              ))}
+            </FlowStep>
+          )
+        })()}
         {execution.toolCalls?.map((tc, i) => (
           <FlowStep
             key={i}
