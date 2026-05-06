@@ -97,6 +97,7 @@ export function createExecutionContext() {
       if (!snap) return
       historySnapshot = {
         count: Number(snap.count) || 0,
+        source: typeof snap.source === 'string' ? snap.source : null,
         preview: Array.isArray(snap.preview) ? snap.preview.slice(0, 12) : [],
       }
     },

@@ -176,6 +176,10 @@ function ExecutionDetail({ execution, onCopy }) {
                 <span style={{ fontSize: 11, color: 'var(--warning, #f59e0b)' }}>
                   ⚠️ histórico vazio
                 </span>
+              ) : execution.aiMeta.history.source === 'chat_messages_fallback' ? (
+                <span style={{ fontSize: 11, color: 'var(--warning, #f59e0b)' }}>
+                  ⚠️ via fallback (chat_messages)
+                </span>
               ) : null
             }
             defaultOpen={execution.aiMeta.history.count === 0}
@@ -185,6 +189,10 @@ function ExecutionDetail({ execution, onCopy }) {
                 Nenhuma mensagem de conversa anterior foi injetada no prompt.
                 Verifique se a tabela <code>n8n_chat_histories</code> está sendo
                 populada (campo <code>session_id</code> = <code>&lt;digitos&gt;@s.whatsapp.net</code>).
+                <br />
+                Quando isso acontecer com mensagem curta do lead ("Sim", "Ok"),
+                o orquestrador agora recebe um aviso explícito para NÃO inventar
+                cursos e perguntar o interesse do lead.
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -226,7 +234,7 @@ function ExecutionDetail({ execution, onCopy }) {
             >
               <pre className="flow-content-pre">{`System prompt : ${ctx.systemPromptChars} chars
 Tools         : ${(ctx.toolsAvailable || []).join(', ') || '—'}
-Histórico     : ${ctx.historyCount} msg${ctx.historyCount === 1 ? '' : 's'} injetadas
+Histórico     : ${ctx.historyCount} msg${ctx.historyCount === 1 ? '' : 's'} injetadas${ctx.historySource ? ` (fonte: ${ctx.historySource})` : ''}${ctx.noContextWarning ? '\nBackstop     : ⚠️ aviso "sem contexto + msg ambígua" injetado no system' : ''}
 ${ctx.contextPreamble ? `Preâmbulo:\n${ctx.contextPreamble}` : 'Preâmbulo: (vazio)'}
 
 Mensagem do user:

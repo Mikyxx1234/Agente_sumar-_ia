@@ -166,6 +166,44 @@ export async function insertChatMessage(env, {
 }
 
 /**
+ * Lê os últimos turnos da tabela `chat_messages` e converte pro formato do
+ * orquestrador ([{role: 'user', content}, {role: 'assistant', content}]).
+ *
+ * É um FALLBACK pra quando `n8n_chat_histories` vier vazio. Cobre dois
+ * casos reais:
+ *   1) Turno anterior foi gerado pelo n8n legado, que populou
+ *      chat_messages mas pode não ter populado n8n_chat_histories.
+ *   2) `appendChatMemory` falhou silenciosamente em paralelo no turno
+ *      anterior, mas `insertChatMessage` (escrito antes) gravou.
+ *
+ * Cada linha de chat_messages contém um par (user_message, bot_message),
+ * então expandimos em 2 mensagens — primeiro user, depois assistant.
+ */
+export async function readChatMessages(env, telefone, limit = 8) {
+  const cfg = getConfig(env)
+  if (!cfg.url || !cfg.key) return []
+  const fone = normalizeTelefone(telefone)
+  if (!fone) return []
+  const enc = encodeURIComponent(fone)
+  const path =
+    `${encodeURIComponent(cfg.messagesTable)}` +
+    `?phone=eq.${enc}&select=user_message,bot_message,created_at` +
+    `&order=created_at.desc&limit=${Math.max(1, Math.min(50, Number(limit) || 8))}`
+  const r = await sbRequest(cfg.url, cfg.key, 'GET', path)
+  if (!r.ok || !Array.isArray(r.data) || r.data.length === 0) return []
+  // Veio do mais recente pro mais antigo — invertemos pra ordem cronológica.
+  const rows = r.data.slice().reverse()
+  const out = []
+  for (const row of rows) {
+    const u = String(row?.user_message || '').trim()
+    const b = String(row?.bot_message || '').trim()
+    if (u) out.push({ role: 'user', content: u })
+    if (b) out.push({ role: 'assistant', content: b })
+  }
+  return out
+}
+
+/**
  * Apêndice de memória: grava as 2 mensagens (human + ai) em n8n_chat_histories
  * no formato esperado pelo LangChain (PostgresChatMemory). É o que o agente lê
  * automaticamente em `runAgent` via `runBuscarHistorico`.

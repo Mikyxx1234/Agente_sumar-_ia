@@ -9,6 +9,7 @@ import { loadPrompts, buildSystemMessage } from './promptsLoader.js'
 import { TOOL_DEFINITIONS } from './toolDefinitions.js'
 import { buildToolExecutors } from './toolExecutorsServer.js'
 import { runBuscarHistorico } from '../memoryTool.js'
+import { readChatMessages } from '../historyStore.js'
 import { generateExecutionId } from './executionTelemetry.js'
 import { resolveModel } from './modelRegistry.js'
 import { createExecutionContext } from './executionContext.js'
@@ -21,22 +22,67 @@ function resolveHistoryLimit(env) {
   return Number.isFinite(n) && n > 0 ? Math.min(50, Math.floor(n)) : 8
 }
 
+/**
+ * Carrega histórico recente da conversa.
+ *
+ * Tenta `n8n_chat_histories` primeiro (formato LangChain, fonte canônica).
+ * Se vier vazio, faz fallback pra `chat_messages` — que é populada pelo
+ * nosso webhook E pelo n8n legado, e cobre o cenário "turno anterior
+ * existe mas não está em n8n_chat_histories" (n8n antigo, falha
+ * silenciosa do appendChatMemory etc).
+ *
+ * Sem isso, a IA ficava sem contexto e alucinava cursos quando o lead
+ * mandava só "Sim"/"Ok" — caso real visto em EX-260506-1702-057.
+ *
+ * Retorna { messages, source } pra dar visibilidade no debug.
+ */
 async function loadRecentHistoryMessages(env, telefone) {
-  if (!telefone) return []
+  if (!telefone) return { messages: [], source: 'none' }
+  const limit = resolveHistoryLimit(env)
   try {
-    const out = await runBuscarHistorico(env, { telefone, limit: resolveHistoryLimit(env) })
-    if (!out.ok || !Array.isArray(out.mensagens)) return []
-    return out.mensagens
-      .map((m) => {
-        if (m.role === 'lead') return { role: 'user', content: m.content }
-        if (m.role === 'assistente') return { role: 'assistant', content: m.content }
-        return null
-      })
-      .filter(Boolean)
+    const out = await runBuscarHistorico(env, { telefone, limit })
+    if (out.ok && Array.isArray(out.mensagens) && out.mensagens.length > 0) {
+      const messages = out.mensagens
+        .map((m) => {
+          if (m.role === 'lead') return { role: 'user', content: m.content }
+          if (m.role === 'assistente') return { role: 'assistant', content: m.content }
+          return null
+        })
+        .filter(Boolean)
+      if (messages.length > 0) return { messages, source: 'n8n_chat_histories' }
+    }
   } catch (err) {
-    console.warn('[agentRunner] histórico indisponível:', err.message)
-    return []
+    console.warn('[agentRunner] histórico (n8n_chat_histories) indisponível:', err.message)
   }
+
+  try {
+    const fallback = await readChatMessages(env, telefone, limit)
+    if (fallback.length > 0) {
+      return { messages: fallback, source: 'chat_messages_fallback' }
+    }
+  } catch (err) {
+    console.warn('[agentRunner] histórico (chat_messages fallback) indisponível:', err.message)
+  }
+
+  return { messages: [], source: 'empty' }
+}
+
+// Confirmações curtas/ambíguas — quando o lead manda só isso e a memória
+// está vazia, a IA tendia a ALUCINAR um curso (caso "Administração" da
+// EX-260506-1702-057). Lista mantida estreita pra não bloquear respostas
+// legítimas.
+const AMBIGUOUS_SHORT_REPLIES = new Set([
+  'sim', 's', 'isso', 'claro', 'ok', 'okay', 'beleza', 'pode ser',
+  'tá', 'ta', 'ta bom', 'ta bem', 'tá bom', 'tá bem',
+  'não', 'nao', 'n', 'não entendi', 'nao entendi',
+  '?', '??', '???',
+])
+
+function isAmbiguousShortReply(text) {
+  const t = String(text || '').trim().toLowerCase().replace(/[.!?]+$/, '')
+  if (!t) return false
+  if (t.length > 18) return false
+  return AMBIGUOUS_SHORT_REPLIES.has(t)
 }
 
 async function callOpenAI(env, apiMessages, model) {
@@ -114,10 +160,12 @@ export async function runAgent(env, input) {
   const ctx = createExecutionContext()
   if (!userMessage) return { ok: false, error: 'Mensagem vazia', executionId, model, aiMeta: ctx.toAiMeta() }
 
-  const [prompts, historyMessages] = await Promise.all([
+  const [prompts, historyResult] = await Promise.all([
     loadPrompts(),
     loadRecentHistoryMessages(env, telefone),
   ])
+  const historyMessages = historyResult.messages
+  const historySource = historyResult.source
 
   // Loga o histórico carregado pra cada execução. Antes não tínhamos
   // visibilidade se a memória vinha vazia / curta — o agente parecia
@@ -127,14 +175,18 @@ export async function runAgent(env, input) {
     content: String(m.content || '').slice(0, 200),
   }))
   console.log(
-    `[${executionId}] history loaded: ${historyMessages.length} msgs (telefone=${telefone || 'n/a'})`,
+    `[${executionId}] history loaded: ${historyMessages.length} msgs from ${historySource} (telefone=${telefone || 'n/a'})`,
   )
   if (historyMessages.length > 0) {
     for (const m of historyPreview) {
       console.log(`  [${m.role}] ${m.content.replace(/\s+/g, ' ').slice(0, 120)}`)
     }
   }
-  ctx.recordHistorySnapshot?.({ count: historyMessages.length, preview: historyPreview })
+  ctx.recordHistorySnapshot?.({
+    count: historyMessages.length,
+    source: historySource,
+    preview: historyPreview,
+  })
 
   const systemMessage = buildSystemMessage(prompts)
   // Contexto do atendimento — telefone + id_lead vão p/ o LLM sempre
@@ -147,9 +199,28 @@ export async function runAgent(env, input) {
   if (input?.pushName) contextLines.push(`- Nome (pushName): ${input.pushName}`)
   const contextPreamble = contextLines.length > 0 ? `Contexto do atendimento:\n${contextLines.join('\n')}` : ''
 
+  // BACKSTOP CRÍTICO — sem histórico + msg ambígua ("Sim", "Ok", "?")
+  // a IA tende a alucinar curso (caso "Administração" do EX-260506-1702-057).
+  // Injetamos system extra deixando MUITO claro que o LLM não pode inventar
+  // nem mencionar nomes de cursos que o lead não falou.
+  const ambiguousNoContext = historyMessages.length === 0 && isAmbiguousShortReply(userMessage)
+  const noContextWarning = ambiguousNoContext
+    ? {
+        role: 'system',
+        content:
+          '⚠️ AVISO CRÍTICO — VOCÊ NÃO TEM HISTÓRICO DESTA CONVERSA E O LEAD ENVIOU APENAS UMA CONFIRMAÇÃO CURTA OU AMBÍGUA. ' +
+          'Você NÃO sabe sobre o que ele está confirmando. ' +
+          'É TERMINANTEMENTE PROIBIDO: (a) mencionar qualquer nome de curso (Administração, Direito, Pedagogia, RH, etc.) que o lead não escreveu nesta mensagem; ' +
+          '(b) propor inscrição em qualquer curso específico; (c) dar continuidade a um suposto fluxo anterior. ' +
+          'AÇÃO OBRIGATÓRIA: pergunte gentilmente em qual curso ou assunto ele tem interesse, ou peça pra ele reformular a mensagem. ' +
+          'Exemplo de resposta correta: "Oi! Para te ajudar melhor, em qual curso você tem interesse?"',
+      }
+    : null
+
   const apiMessages = [
     { role: 'system', content: systemMessage },
     ...(contextPreamble ? [{ role: 'system', content: contextPreamble }] : []),
+    ...(noContextWarning ? [noContextWarning] : []),
     ...historyMessages,
     { role: 'user', content: userMessage },
   ]
@@ -165,6 +236,8 @@ export async function runAgent(env, input) {
     systemPromptChars: systemMessage.length,
     contextPreamble: contextPreamble || null,
     historyCount: historyMessages.length,
+    historySource,
+    noContextWarning: ambiguousNoContext,
     toolsAvailable: TOOL_DEFINITIONS.map((t) => t.function?.name).filter(Boolean),
     userMessage,
   }
