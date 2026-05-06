@@ -2,6 +2,7 @@ import express from 'express'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { startScheduler, getStatus } from './server/feedbackJobRunner.js'
+import { reapStaleFeedbackRuns } from './server/feedbackJob.js'
 import { runNearestPolo } from './server/locationTool.js'
 import { runInscricao } from './server/inscricaoTool.js'
 import { runDistribuirHumano } from './server/distribuirHumanoTool.js'
@@ -144,6 +145,18 @@ app.get('/api/feedback-job/status', async (_req, res) => {
     res.json(status)
   } catch (e) {
     res.status(500).json({ error: e.message })
+  }
+})
+
+// Marca como erro qualquer run preso em 'Executando...' há mais de
+// `max_age_minutes` (default 90 min). Útil quando a UI mostra runs
+// antigos que ficaram travados por crash do processo / deploy.
+app.post('/api/feedback-job/reap-stale', async (req, res) => {
+  try {
+    const out = await reapStaleFeedbackRuns(process.env, req.body?.max_age_minutes)
+    res.json({ ok: true, ...out })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
   }
 })
 

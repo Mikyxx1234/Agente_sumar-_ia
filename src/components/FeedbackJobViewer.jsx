@@ -3,9 +3,9 @@ import {
   Search, Clock, RefreshCw, Copy, Check,
   MessageSquare, Zap, Users, FileCheck, AlertTriangle,
   Bot, PauseCircle, TrendingUp, List, ChevronRight, ChevronDown,
-  AlertCircle, ListChecks, Play, Star,
+  AlertCircle, ListChecks, Play, Star, Trash2,
 } from 'lucide-react'
-import { getAllJobRuns, getFeedbacksByExecutionId, getJobStatus } from '../lib/feedbackJobStore'
+import { getAllJobRuns, getFeedbacksByExecutionId, getJobStatus, reapStaleRuns } from '../lib/feedbackJobStore'
 
 function formatDuration(ms) {
   if (!ms) return '-'
@@ -363,6 +363,8 @@ export default function FeedbackJobViewer() {
   const [copyToast, setCopyToast] = useState(false)
   const [status, setStatus] = useState(null)
   const [nowMs, setNowMs] = useState(() => Date.now())
+  const [reaping, setReaping] = useState(false)
+  const [reapMsg, setReapMsg] = useState('')
 
   const fetchRuns = useCallback(async () => {
     setLoading(true)
@@ -425,7 +427,34 @@ export default function FeedbackJobViewer() {
           <span className="badge">{stats.total} execuções</span>
           {stats.errors > 0 && <span className="badge danger">{stats.errors} erros</span>}
         </div>
-        <div className="page-actions">
+        <div className="page-actions" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {reapMsg && (
+            <span style={{ fontSize: 12, color: 'var(--muted)' }}>{reapMsg}</span>
+          )}
+          <button
+            className="btn btn-ghost"
+            disabled={reaping}
+            title="Marca como erro execuções que ficaram presas em 'Executando...' há mais de 90 minutos"
+            onClick={async () => {
+              if (reaping) return
+              setReaping(true)
+              setReapMsg('')
+              const out = await reapStaleRuns()
+              if (out?.ok) {
+                setReapMsg(out.reaped > 0
+                  ? `${out.reaped} execução(ões) presa(s) liberada(s)`
+                  : 'Nenhuma execução presa encontrada')
+                await fetchRuns()
+                await fetchStatus()
+              } else {
+                setReapMsg(`Falha: ${out?.error || 'erro desconhecido'}`)
+              }
+              setReaping(false)
+              setTimeout(() => setReapMsg(''), 5000)
+            }}
+          >
+            <Trash2 size={14} /> <span>{reaping ? 'Limpando...' : 'Limpar presas'}</span>
+          </button>
           <button className="btn btn-ghost" onClick={() => { fetchRuns(); fetchStatus() }}>
             <RefreshCw size={14} /> <span>Atualizar</span>
           </button>

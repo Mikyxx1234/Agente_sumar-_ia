@@ -59,7 +59,28 @@ function getAIConfig(env) {
 
 /* ───────────── Supabase REST wrapper ───────────── */
 
-function makeSupabaseClient(url, key) {
+/**
+ * Fetch com timeout via AbortController. Sem isso o fetch pode pendurar
+ * indefinidamente se o destino travar — foi uma das causas dos runs do
+ * feedback ficarem 'Executando pra sempre'.
+ */
+async function fetchWithTimeout(url, options = {}, timeoutMs = 60_000) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return fetch(url, options)
+  const controller = new AbortController()
+  const t = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(url, { ...options, signal: controller.signal })
+  } catch (e) {
+    if (e?.name === 'AbortError') {
+      throw new Error(`Timeout: ${options.method || 'GET'} ${url} não respondeu em ${timeoutMs}ms`)
+    }
+    throw e
+  } finally {
+    clearTimeout(t)
+  }
+}
+
+function makeSupabaseClient(url, key, { timeoutMs = 60_000 } = {}) {
   const baseHeaders = {
     'apikey': key,
     'Authorization': `Bearer ${key}`,
@@ -67,11 +88,15 @@ function makeSupabaseClient(url, key) {
   }
 
   async function request(method, path, body, extraHeaders = {}) {
-    const res = await fetch(`${url}${path}`, {
-      method,
-      headers: { ...baseHeaders, ...extraHeaders },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    })
+    const res = await fetchWithTimeout(
+      `${url}${path}`,
+      {
+        method,
+        headers: { ...baseHeaders, ...extraHeaders },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      },
+      timeoutMs,
+    )
     const text = await res.text()
     if (!res.ok) {
       throw new Error(`Supabase ${method} ${path} ${res.status}: ${text.slice(0, 300)}`)
@@ -95,6 +120,26 @@ function makeSupabaseClient(url, key) {
 /* ───────────── Preview do status / janela atual ───────────── */
 
 // Conta quantas mensagens "estariam" na próxima execução, sem rodar nada.
+/**
+ * Roda o reaper manualmente — útil pra desbloquear a UI quando há runs
+ * presos em 'Executando...' sem precisar esperar a próxima execução do
+ * cron. Exposto via endpoint POST /api/feedback-job/reap-stale.
+ */
+export async function reapStaleFeedbackRuns(env, maxAgeMinutes) {
+  const { SUPABASE_URL_FEEDBACK, SUPABASE_KEY_FEEDBACK } = env
+  if (!SUPABASE_URL_FEEDBACK || !SUPABASE_KEY_FEEDBACK) {
+    throw new Error('feedback supabase não configurado')
+  }
+  const sb = makeSupabaseClient(SUPABASE_URL_FEEDBACK, SUPABASE_KEY_FEEDBACK, {
+    timeoutMs: Number(env.FEEDBACK_JOB_SUPABASE_TIMEOUT_MS || 60_000),
+  })
+  const minAge = Number.isFinite(Number(maxAgeMinutes))
+    ? Number(maxAgeMinutes)
+    : Number(env.FEEDBACK_JOB_REAP_AFTER_MINUTES || 90)
+  const count = await reapStaleRuns(sb, minAge)
+  return { reaped: count, max_age_minutes: minAge }
+}
+
 export async function getFeedbackJobPreview(env) {
   const {
     SUPABASE_URL_FEEDBACK, SUPABASE_KEY_FEEDBACK,
@@ -222,6 +267,49 @@ async function reclaimHourSlotIfPreviousFailed(sb, execId, startedAtIso, trigger
     return true
   } catch {
     return false
+  }
+}
+
+/**
+ * Marca como 'error' qualquer run anterior que ainda esteja com status
+ * 'running' há mais de `maxAgeMinutes` minutos (default 90). Resolve o
+ * caso clássico de "ficou Executando pra sempre" — o processo Node morreu
+ * (deploy, OOM, restart) entre o INSERT inicial e o UPDATE final, deixando
+ * a linha presa em 'running' indefinidamente.
+ *
+ * Roda na entrada de cada execução. Idempotente — se não houver runs
+ * presos, retorna 0. Configurável via FEEDBACK_JOB_REAP_AFTER_MINUTES.
+ */
+async function reapStaleRuns(sb, maxAgeMinutes = 90) {
+  if (!Number.isFinite(maxAgeMinutes) || maxAgeMinutes <= 0) return 0
+  const cutoffIso = new Date(Date.now() - maxAgeMinutes * 60 * 1000).toISOString()
+  try {
+    const stale = await sb.select(
+      'feedback_job_runs',
+      `select=id,started_at&status=eq.running&started_at=lt.${encodeURIComponent(cutoffIso)}&finished_at=is.null&order=started_at.asc&limit=50`,
+    )
+    if (!Array.isArray(stale) || stale.length === 0) return 0
+    const finishedAt = new Date().toISOString()
+    for (const r of stale) {
+      try {
+        await sb.update(
+          'feedback_job_runs',
+          `id=eq.${encodeURIComponent(r.id)}&status=eq.running`,
+          {
+            status: 'error',
+            error_message: `Run abandonado: status='running' há mais de ${maxAgeMinutes} min sem finalizar (provavel crash do processo, deploy ou timeout). Marcado pelo reaper.`,
+            finished_at: finishedAt,
+          },
+        )
+      } catch (e) {
+        console.warn(`[FeedbackJob] reaper: falha ao marcar ${r.id}:`, e.message)
+      }
+    }
+    console.log(`[FeedbackJob] Reaper: ${stale.length} run(s) preso(s) marcado(s) como erro.`)
+    return stale.length
+  } catch (e) {
+    console.warn('[FeedbackJob] reaper falhou:', e.message)
+    return 0
   }
 }
 
@@ -1100,16 +1188,34 @@ async function callOpenAIFeedback(env, base) {
     ],
   }
 
+  // Timeout pra cada attempt da OpenAI. Default 90s — chat-completions
+  // raramente passa de 30s mas conexões TCP penduradas existiam antes
+  // do AbortController e foi uma das causas dos runs ficarem presos.
+  const openaiTimeoutMs = Number(env.FEEDBACK_JOB_OPENAI_TIMEOUT_MS || 90_000)
   let lastErr = null
   for (let attempt = 0; attempt < 2; attempt++) {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${key}`,
-      },
-      body: JSON.stringify(body),
-    })
+    let res
+    try {
+      res = await fetchWithTimeout(
+        url,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${key}`,
+          },
+          body: JSON.stringify(body),
+        },
+        openaiTimeoutMs,
+      )
+    } catch (e) {
+      lastErr = e
+      if (attempt < 1) {
+        await new Promise((r) => setTimeout(r, 1500 + attempt * 2000))
+        continue
+      }
+      throw e
+    }
     if (res.ok) {
       const data = await res.json()
       const content = String(data?.choices?.[0]?.message?.content || '').trim()
@@ -1227,7 +1333,10 @@ export async function runFeedbackJob(env, trigger = 'cron') {
     )
   }
 
-  const sb = makeSupabaseClient(SUPABASE_URL_FEEDBACK, SUPABASE_KEY_FEEDBACK)
+  const supabaseTimeoutMs = Number(env.FEEDBACK_JOB_SUPABASE_TIMEOUT_MS || 60_000)
+  const sb = makeSupabaseClient(SUPABASE_URL_FEEDBACK, SUPABASE_KEY_FEEDBACK, {
+    timeoutMs: supabaseTimeoutMs,
+  })
   const startedAt = new Date()
   const useHourSlot =
     String(env.FEEDBACK_JOB_USE_HOUR_SLOT_LOCK ?? 'true').toLowerCase() !== 'false' &&
@@ -1235,6 +1344,16 @@ export async function runFeedbackJob(env, trigger = 'cron') {
   const execId = useHourSlot ? makeCronHourSlotExecId(startedAt) : generateJobExecutionId()
   const steps = []
   const addStep = (type, detail) => steps.push({ type, at: new Date().toISOString(), ...detail })
+
+  // Antes de qualquer coisa: marca como erro qualquer run preso em
+  // 'running' há muito tempo (provavelmente crash do processo anterior).
+  // Sem isso a UI fica mostrando 'Executando...' pra sempre e o user
+  // não sabe se rodou de verdade.
+  const reapAfterMin = Number(env.FEEDBACK_JOB_REAP_AFTER_MINUTES || 90)
+  const reapedCount = await reapStaleRuns(sb, reapAfterMin)
+  if (reapedCount > 0) {
+    addStep('reaper', { count: reapedCount, max_age_minutes: reapAfterMin })
+  }
 
   const windowInfo = await computeAdaptiveWindow(
     sb,
@@ -1282,6 +1401,7 @@ export async function runFeedbackJob(env, trigger = 'cron') {
   let totalSegments = 0
   let feedbacksInserted = 0
   let feedbacksUpdated = 0
+  let feedbacksSkipped = 0
   let pendentesSaved = 0
   let aiCalls = 0
   let promptTokens = 0
@@ -1325,8 +1445,6 @@ export async function runFeedbackJob(env, trigger = 'cron') {
       const v = Number(env.FEEDBACK_JOB_REAVAL_MIN_NEW_HUMAN_MESSAGES)
       return Number.isFinite(v) && v >= 0 ? v : 2
     })()
-
-    let feedbacksSkipped = 0
 
     for (let idx = 0; idx < segments.length; idx++) {
       const seg = segments[idx]
@@ -1418,19 +1536,28 @@ export async function runFeedbackJob(env, trigger = 'cron') {
   const durationMs = finishedAt.getTime() - startedAt.getTime()
 
   // Resumo da janela (until permite a próxima execução continuar sem re-lêr o mesmo período)
-  steps.unshift({
-    type: 'window_info',
-    at: startedAt.toISOString(),
-    since: windowInfo.sinceIso,
-    until: windowInfo.untilIso,
-    window_minutes: windowInfo.window_minutes,
-    based_on: windowInfo.based_on,
-    extra_minutes_over_hour: windowInfo.extra_minutes_over_hour,
-    last_fetch_until: windowInfo.last_fetch_until,
-    last_run_started_at: windowInfo.last_run_started_at,
-  })
+  try {
+    steps.unshift({
+      type: 'window_info',
+      at: startedAt.toISOString(),
+      since: windowInfo.sinceIso,
+      until: windowInfo.untilIso,
+      window_minutes: windowInfo.window_minutes,
+      based_on: windowInfo.based_on,
+      extra_minutes_over_hour: windowInfo.extra_minutes_over_hour,
+      last_fetch_until: windowInfo.last_fetch_until,
+      last_run_started_at: windowInfo.last_run_started_at,
+    })
+  } catch (e) {
+    console.error('[FeedbackJob] Falha ao montar window_info step:', e.message)
+  }
 
-  await sb.update('feedback_job_runs', `id=eq.${execId}`, {
+  // Atualização final do run com retry. Esse UPDATE é CRÍTICO: se ele
+  // falhar a linha fica 'Executando...' pra sempre na UI. Por isso:
+  //  - blindado em try/catch (qualquer throw aqui não pode propagar);
+  //  - 1 retry rápido se o Supabase estiver instável;
+  //  - log explícito em caso de falha total pra facilitar diagnóstico.
+  const finalPatch = {
     finished_at: finishedAt.toISOString(),
     status,
     total_messages_fetched: totalMessagesFetched,
@@ -1446,9 +1573,48 @@ export async function runFeedbackJob(env, trigger = 'cron') {
     duration_ms: durationMs,
     error_message: errorMessage,
     steps,
-  }).catch((e) => console.error('[FeedbackJob] Falha ao atualizar run:', e.message))
+  }
+  let finalUpdateOk = false
+  for (let attempt = 0; attempt < 2 && !finalUpdateOk; attempt++) {
+    try {
+      await sb.update('feedback_job_runs', `id=eq.${execId}`, finalPatch)
+      finalUpdateOk = true
+    } catch (e) {
+      console.error(
+        `[FeedbackJob] Falha ao atualizar run (attempt ${attempt + 1}/2):`,
+        e.message,
+      )
+      if (attempt < 1) {
+        await new Promise((r) => setTimeout(r, 2000))
+      }
+    }
+  }
+  if (!finalUpdateOk) {
+    // Última tentativa minimalista — pelo menos remove o estado 'running'
+    // pra a UI não ficar travada. O reaper da próxima execução vai
+    // capturar runs que nem isso conseguiram.
+    try {
+      await sb.update('feedback_job_runs', `id=eq.${execId}`, {
+        finished_at: finishedAt.toISOString(),
+        status: 'error',
+        error_message:
+          (errorMessage ? errorMessage + ' | ' : '') +
+          'Falha ao gravar resumo final do run (Supabase indisponível). Marcado como erro pelo fallback.',
+        duration_ms: durationMs,
+      })
+      console.warn(`[FeedbackJob] Run ${execId}: gravado em modo fallback (sem steps).`)
+    } catch (e2) {
+      console.error(
+        `[FeedbackJob] Run ${execId}: fallback também falhou (${e2.message}). Reaper fará a limpeza na próxima execução.`,
+      )
+    }
+  }
 
-  console.log(`[FeedbackJob] ${status === 'success' ? '✓' : '✗'} ${execId} | ${durationMs}ms | msgs=${totalMessagesFetched} seg=${totalSegments} ins=${feedbacksInserted} upd=${feedbacksUpdated} skip=${feedbacksSkipped} pend=${pendentesSaved} ai=${aiCalls} tok=${totalTokens}`)
+  try {
+    console.log(`[FeedbackJob] ${status === 'success' ? '✓' : '✗'} ${execId} | ${durationMs}ms | msgs=${totalMessagesFetched} seg=${totalSegments} ins=${feedbacksInserted} upd=${feedbacksUpdated} skip=${feedbacksSkipped} pend=${pendentesSaved} ai=${aiCalls} tok=${totalTokens}`)
+  } catch {
+    /* logging não pode derrubar o retorno */
+  }
 
   return {
     id: execId,

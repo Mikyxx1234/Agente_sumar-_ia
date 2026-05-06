@@ -50,6 +50,31 @@ export async function getJobRunsByRange(startIso, endIso) {
   return all
 }
 
+// Marca como erro qualquer execução que ficou presa em "Executando..."
+// há mais de `maxAgeMinutes` minutos (default 90 no backend). Útil
+// quando o processo foi reiniciado/derrubado entre o INSERT inicial
+// e o UPDATE final do run.
+export async function reapStaleRuns(maxAgeMinutes) {
+  try {
+    const res = await fetch('/api/feedback-job/reap-stale', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(
+        Number.isFinite(Number(maxAgeMinutes))
+          ? { max_age_minutes: Number(maxAgeMinutes) }
+          : {},
+      ),
+    })
+    if (!res.ok) {
+      const err = await res.text().catch(() => '')
+      return { ok: false, error: err || `HTTP ${res.status}` }
+    }
+    return await res.json()
+  } catch (e) {
+    return { ok: false, error: e.message }
+  }
+}
+
 // Busca o status do cron/job. Funciona tanto em dev (vite) quanto em prod (server.js).
 export async function getJobStatus() {
   try {
