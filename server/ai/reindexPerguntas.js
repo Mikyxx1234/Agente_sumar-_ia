@@ -26,9 +26,16 @@ function ensureConfig(env) {
 }
 
 async function fetchAllRows({ url, key }, { onlyMissing = true } = {}) {
-  const filter = onlyMissing ? 'embedding=is.null&' : ''
+  // Quando onlyMissing=true, pegamos:
+  //   (a) linhas com embedding NULL                       — caso documents_perguntas algum dia permita NULL;
+  //   (b) linhas com metadata.embedding_pendente = true   — usado pelos INSERTs SQL que precisam de placeholder
+  //       (a coluna embedding é NOT NULL hoje, então o SQL grava com vetor zero
+  //       e marca a flag; o reindex regenera o vetor de verdade e remove a flag).
+  const filter = onlyMissing
+    ? 'or=(embedding.is.null,metadata->>embedding_pendente.eq.true)&'
+    : ''
   const r = await fetch(
-    `${url}/rest/v1/documents_perguntas?${filter}select=id,content&order=id.asc&limit=5000`,
+    `${url}/rest/v1/documents_perguntas?${filter}select=id,content,metadata&order=id.asc&limit=5000`,
     { headers: { apikey: key, Authorization: `Bearer ${key}`, Accept: 'application/json' } },
   )
   if (!r.ok) {
@@ -55,7 +62,18 @@ async function embedBatch({ apiKey, model }, texts) {
   }
 }
 
-async function patchEmbedding({ url, key }, id, vector) {
+async function patchEmbedding({ url, key }, id, vector, currentMetadata) {
+  // Se a linha tinha a flag `embedding_pendente`, removemos junto com o
+  // PATCH do embedding — assim o reindex não fica reprocessando ela
+  // toda vez. PostgREST não tem JSONB-delete-key direto, então mandamos
+  // o objeto inteiro sem a chave (PATCH substitui o campo metadata
+  // como um todo, é o comportamento do PostgREST).
+  const body = { embedding: vector }
+  if (currentMetadata && typeof currentMetadata === 'object' && 'embedding_pendente' in currentMetadata) {
+    const cleaned = { ...currentMetadata }
+    delete cleaned.embedding_pendente
+    body.metadata = cleaned
+  }
   const r = await fetch(`${url}/rest/v1/documents_perguntas?id=eq.${id}`, {
     method: 'PATCH',
     headers: {
@@ -64,7 +82,7 @@ async function patchEmbedding({ url, key }, id, vector) {
       Authorization: `Bearer ${key}`,
       Prefer: 'return=minimal',
     },
-    body: JSON.stringify({ embedding: vector }),
+    body: JSON.stringify(body),
   })
   if (!r.ok) {
     const t = await r.text().catch(() => '')
@@ -109,7 +127,9 @@ export async function reindexPerguntas(env, opts = {}) {
     for (let j = 0; j < slice.length; j += PARALLEL_PATCH) {
       const chunk = slice.slice(j, j + PARALLEL_PATCH)
       await Promise.all(
-        chunk.map((row, kk) => patchEmbedding(cfg, row.id, vectors[j + kk])),
+        chunk.map((row, kk) =>
+          patchEmbedding(cfg, row.id, vectors[j + kk], row.metadata),
+        ),
       )
     }
     batches += 1
