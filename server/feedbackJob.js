@@ -539,6 +539,14 @@ async function prepareSegmentGravacao(sb, segmento) {
   const mensagensAntigas = Array.isArray(conversaExistente.messages) ? conversaExistente.messages : []
   const mensagensNovas = Array.isArray(segmento.messages) ? segmento.messages : []
 
+  // Track das mensagens "novas" (key não estava em mensagensAntigas).
+  // Usado pra decidir se vale chamar a OpenAI de novo ou se nada relevante
+  // mudou — evita re-avaliar atendimento por causa de 1 mensagem só, o que
+  // gasta token e faz a nota oscilar.
+  const oldKeys = new Set(
+    mensagensAntigas.map((m) => (m.message_uid ? `uid:${m.message_uid}` : `id:${m.source_id}`)),
+  )
+
   const mergedMap = new Map()
   for (const m of [...mensagensAntigas, ...mensagensNovas]) {
     const key = m.message_uid ? `uid:${m.message_uid}` : `id:${m.source_id}`
@@ -599,6 +607,17 @@ async function prepareSegmentGravacao(sb, segmento) {
     conversation_text: conversationText,
   }
 
+  // Quantas mensagens humanas (contact/user) realmente foram adicionadas
+  // depois do último feedback gravado? Se for 0, NADA novo — a re-avaliação
+  // certamente seria a mesma. Se for baixo (1), a mudança é mínima e a
+  // chamada à OpenAI provavelmente vai gerar saída similar à anterior.
+  const newHumanMessages = mergedMessages.filter((m) => {
+    const key = m.message_uid ? `uid:${m.message_uid}` : `id:${m.source_id}`
+    if (oldKeys.has(key)) return false
+    const t = String(m.sender_type || '').toLowerCase()
+    return t === 'contact' || t === 'user'
+  })
+
   return {
     modo_gravacao: modoGravacao,
     registro_id_alvo: row?.id ?? null,
@@ -625,6 +644,13 @@ async function prepareSegmentGravacao(sb, segmento) {
     ponto_negativo: row?.ponto_negativo ?? null,
     first_sent_at: firstSentAt,
     last_sent_at: lastSentAt,
+    // Metadados pra decidir skip de re-avaliação no main runner:
+    has_previous_feedback: !!(row?.id && row?.avaliacao && row?.nota_avaliacao != null),
+    previous_human_messages_count: mensagensAntigas.filter((m) => {
+      const t = String(m.sender_type || '').toLowerCase()
+      return t === 'contact' || t === 'user'
+    }).length,
+    new_human_messages_count: newHumanMessages.length,
   }
 }
 
@@ -685,7 +711,34 @@ async function mergeWithPendente(sb, base) {
 
 /* ───────────── Step 5: Validar conversa ───────────── */
 
-function validateConversa(base) {
+/**
+ * Decide se um atendimento tem material o suficiente pra ser avaliado pela
+ * IA. Atendimentos curtos (lead que só pergunta "qual curso?" e some, ou
+ * "já estou em outro atendimento, valeu") não devem ir pro feedback —
+ * sem evidência pra penalizar, a IA dá nota alta e infla a média.
+ *
+ * Thresholds configuráveis via env (todos opcionais, defaults conservadores):
+ *   FEEDBACK_JOB_MIN_HUMAN_MSGS  (8)   — total de mensagens humanas
+ *   FEEDBACK_JOB_MIN_PAIRS        (2)   — pares contact→user (interações reais)
+ *   FEEDBACK_JOB_MIN_USER_MSGS   (2)   — quantas vezes o consultor falou
+ *   FEEDBACK_JOB_MIN_CONTACT_MSGS (2)   — quantas vezes o lead falou
+ *   FEEDBACK_JOB_MIN_CHARS        (200) — total de caracteres da conversa
+ */
+function getValidacaoThresholds(env) {
+  const num = (key, def) => {
+    const v = Number(env?.[key])
+    return Number.isFinite(v) && v >= 0 ? v : def
+  }
+  return {
+    minHuman: num('FEEDBACK_JOB_MIN_HUMAN_MSGS', 8),
+    minPairs: num('FEEDBACK_JOB_MIN_PAIRS', 2),
+    minUser: num('FEEDBACK_JOB_MIN_USER_MSGS', 2),
+    minContact: num('FEEDBACK_JOB_MIN_CONTACT_MSGS', 2),
+    minChars: num('FEEDBACK_JOB_MIN_CHARS', 200),
+  }
+}
+
+function validateConversa(base, env = {}) {
   const messages = Array.isArray(base.conversa_completa?.messages) ? base.conversa_completa.messages : []
   const humanMessages = messages.filter((m) =>
     ['contact', 'user'].includes(String(m.sender_type || '').toLowerCase()))
@@ -701,13 +754,16 @@ function validateConversa(base) {
 
   const totalChars = String(base.conversation_text_for_ai || '').trim().length
   const totalHumanMessages = humanMessages.length
+  const t = getValidacaoThresholds(env)
 
   let pronta = true, motivo = null
   if (countContact < 1) { pronta = false; motivo = 'sem_mensagem_contact' }
   else if (countUser < 1) { pronta = false; motivo = 'sem_resposta_humana' }
-  else if (totalHumanMessages < 5) { pronta = false; motivo = 'poucas_mensagens' }
-  else if (totalPairs < 1) { pronta = false; motivo = 'sem_par_interacao' }
-  else if (totalChars < 120) { pronta = false; motivo = 'texto_insuficiente' }
+  else if (totalHumanMessages < t.minHuman) { pronta = false; motivo = 'poucas_mensagens' }
+  else if (countContact < t.minContact) { pronta = false; motivo = 'lead_falou_pouco' }
+  else if (countUser < t.minUser) { pronta = false; motivo = 'consultor_falou_pouco' }
+  else if (totalPairs < t.minPairs) { pronta = false; motivo = 'poucas_interacoes' }
+  else if (totalChars < t.minChars) { pronta = false; motivo = 'texto_insuficiente' }
 
   return {
     ...base,
@@ -719,6 +775,7 @@ function validateConversa(base) {
       count_user: countUser,
       total_pairs: totalPairs,
       total_chars: totalChars,
+      thresholds: t,
     },
   }
 }
@@ -1260,35 +1317,63 @@ export async function runFeedbackJob(env, trigger = 'cron') {
     totalSegments = segments.length
     addStep('group_segments', { count: totalSegments })
 
+    // Skip de re-avaliação: se o atendimento já tem feedback prévio e
+    // poucas mensagens humanas foram adicionadas, atualiza só conversa
+    // + métricas (sem chamar a OpenAI). Evita gastar token e oscilar a
+    // nota a cada nova msg. Configurável via env.
+    const minNewHumanForReaval = (() => {
+      const v = Number(env.FEEDBACK_JOB_REAVAL_MIN_NEW_HUMAN_MESSAGES)
+      return Number.isFinite(v) && v >= 0 ? v : 2
+    })()
+
+    let feedbacksSkipped = 0
+
     for (let idx = 0; idx < segments.length; idx++) {
       const seg = segments[idx]
       const segLabel = `${seg.entity_type}:${seg.entity_id} (${seg.consultor || 'sem consultor'})`
       try {
         let base = await prepareSegmentGravacao(sb, seg)
         base = await mergeWithPendente(sb, base)
-        base = validateConversa(base)
+        base = validateConversa(base, env)
 
         if (!base.conversa_pronta_para_avaliacao) {
           await savePendente(sb, base, execId)
           pendentesSaved++
-          addStep('segment_pendente', { segment: segLabel, motivo: base.motivo_pendencia })
+          addStep('segment_pendente', {
+            segment: segLabel,
+            motivo: base.motivo_pendencia,
+            metricas: base.metricas_validacao,
+          })
           continue
         }
 
         base = await computeCommercialRules(sb, base)
 
-        aiCalls++
-        const { content, usage } = await callOpenAIFeedback(env, base)
-        if (usage) {
-          promptTokens += usage.prompt_tokens || 0
-          completionTokens += usage.completion_tokens || 0
-          totalTokens += usage.total_tokens || ((usage.prompt_tokens || 0) + (usage.completion_tokens || 0))
+        // Decide se vale a pena chamar OpenAI de novo. Se já tinha
+        // feedback antes e nada relevante foi adicionado, mantemos a
+        // avaliação anterior — só atualizamos conversa_completa e
+        // métricas objetivas.
+        const skipReaval =
+          base.modo_gravacao === 'update' &&
+          base.has_previous_feedback === true &&
+          base.new_human_messages_count < minNewHumanForReaval
+
+        if (!skipReaval) {
+          aiCalls++
+          const { content, usage } = await callOpenAIFeedback(env, base)
+          if (usage) {
+            promptTokens += usage.prompt_tokens || 0
+            completionTokens += usage.completion_tokens || 0
+            totalTokens += usage.total_tokens || ((usage.prompt_tokens || 0) + (usage.completion_tokens || 0))
+          }
+          const parsed = parseAIJson(content) || {}
+          base.avaliacao = parsed.avaliacao ?? null
+          base.nota_avaliacao = parsed.nota_avaliacao ?? null
+          base.ponto_positivo = parsed.ponto_positivo ?? null
+          base.ponto_negativo = parsed.ponto_negativo ?? null
+        } else {
+          feedbacksSkipped++
         }
-        const parsed = parseAIJson(content) || {}
-        base.avaliacao = parsed.avaliacao ?? null
-        base.nota_avaliacao = parsed.nota_avaliacao ?? null
-        base.ponto_positivo = parsed.ponto_positivo ?? null
-        base.ponto_negativo = parsed.ponto_negativo ?? null
 
         const result = await saveFeedback(sb, base, execId)
         if (result === 'inserted') feedbacksInserted++
@@ -1299,6 +1384,9 @@ export async function runFeedbackJob(env, trigger = 'cron') {
           segment: segLabel,
           action: result,
           nota: base.nota_avaliacao,
+          skipped_reaval: skipReaval,
+          new_human_messages_count: base.new_human_messages_count,
+          previous_human_messages_count: base.previous_human_messages_count,
         })
       } catch (e) {
         segmentErrorCount++
@@ -1360,7 +1448,7 @@ export async function runFeedbackJob(env, trigger = 'cron') {
     steps,
   }).catch((e) => console.error('[FeedbackJob] Falha ao atualizar run:', e.message))
 
-  console.log(`[FeedbackJob] ${status === 'success' ? '✓' : '✗'} ${execId} | ${durationMs}ms | msgs=${totalMessagesFetched} seg=${totalSegments} ins=${feedbacksInserted} upd=${feedbacksUpdated} pend=${pendentesSaved} ai=${aiCalls} tok=${totalTokens}`)
+  console.log(`[FeedbackJob] ${status === 'success' ? '✓' : '✗'} ${execId} | ${durationMs}ms | msgs=${totalMessagesFetched} seg=${totalSegments} ins=${feedbacksInserted} upd=${feedbacksUpdated} skip=${feedbacksSkipped} pend=${pendentesSaved} ai=${aiCalls} tok=${totalTokens}`)
 
   return {
     id: execId,
@@ -1370,6 +1458,7 @@ export async function runFeedbackJob(env, trigger = 'cron') {
     totalSegments,
     feedbacksInserted,
     feedbacksUpdated,
+    feedbacksSkipped,
     pendentesSaved,
     aiCalls,
     promptTokens,
