@@ -38,6 +38,32 @@ async function getEmbedding(env, text, ctx, toolName) {
   return data.data[0].embedding
 }
 
+/**
+ * Extrai o link da grade curricular do metadata, se preenchido.
+ * Usado por `buscar_informacoes` e `buscar_pos` — a base `documents`
+ * tem `metadata.grade_do_curso` com URL (Drive) em alguns cursos.
+ *
+ * Sem isso o LLM não sabe se o link existe e tende a oferecer "te
+ * mando o link" mesmo quando não tem. Ao injetar o link no texto
+ * (quando existe) e marcar explicitamente quando NÃO existe, o LLM
+ * pode decidir certo (ver promptsLoader regra 13).
+ */
+function extractGradeLink(metadata) {
+  if (!metadata || typeof metadata !== 'object') return null
+  const raw =
+    metadata.grade_do_curso ||
+    metadata.grade_curso ||
+    metadata.link_grade ||
+    metadata.gradeCurricular ||
+    null
+  if (!raw) return null
+  const s = String(raw).trim()
+  if (!s) return null
+  // Aceita só se realmente parece URL — evita "N/A", "—", "ver site" virarem link.
+  if (!/^https?:\/\//i.test(s)) return null
+  return s
+}
+
 async function vectorSearch(env, ctx, toolName, rpcName, query, matchCount = 10) {
   const url = env.SUPABASE_URL || env.VITE_SUPABASE_URL
   const key = env.SUPABASE_KEY || env.VITE_SUPABASE_KEY
@@ -86,7 +112,23 @@ async function vectorSearch(env, ctx, toolName, rpcName, query, matchCount = 10)
   }
   const data = await res.json()
   if (!Array.isArray(data) || data.length === 0) return 'Nenhum resultado encontrado na base.'
-  return data.map((d) => d.content).join('\n\n---\n\n')
+
+  // Para tools de curso (buscar_informacoes / buscar_pos), anexamos um
+  // bloco "STATUS DA GRADE" pra cada resultado — assim o LLM sabe se
+  // pode oferecer link da grade ou não. Marcadores legíveis pelo LLM,
+  // não embelezados (não vai pro cliente final, é só pra orquestrador).
+  const isCourseTool = toolName === 'buscar_informacoes' || toolName === 'buscar_pos'
+  return data
+    .map((d) => {
+      const base = d?.content || ''
+      if (!isCourseTool) return base
+      const gradeUrl = extractGradeLink(d?.metadata)
+      const status = gradeUrl
+        ? `STATUS DA GRADE: DISPONIVEL — link oficial: ${gradeUrl}`
+        : 'STATUS DA GRADE: NAO DISPONIVEL — não existe link/PDF da grade deste curso na nossa base.'
+      return `${base}\n\n[${status}]`
+    })
+    .join('\n\n---\n\n')
 }
 
 function formatInscricaoResult(data) {

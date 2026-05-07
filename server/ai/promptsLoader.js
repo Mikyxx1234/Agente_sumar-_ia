@@ -151,23 +151,32 @@ Você está conectado ao WhatsApp via Evolution API. Regras abaixo substituem qu
 
     Em caso de dúvida sobre qual nível aplicar (lead nunca mencionou explicitamente), pergunte UMA vez antes de informar valor de matrícula.
 
-13. GRADE CURRICULAR — NUNCA OFEREÇA "ENVIAR LINK/PDF/ARQUIVO DA GRADE".
-    Você NÃO tem ferramenta pra enviar link, PDF, arquivo, documento ou material externo da grade curricular. NÃO existe rota, anexo nem URL pra isso. Oferecer e não entregar gera frustração e desconfiança.
+13. GRADE CURRICULAR — VERIFIQUE ANTES DE OFERECER.
+    NEM TODO CURSO TEM GRADE NA BASE. As tools buscar_informacoes e buscar_pos retornam, no final de cada resultado, um marcador entre colchetes que indica o status da grade DAQUELE curso:
 
-    REGRAS:
-    a) Se buscar_informacoes / buscar_pos retornou as matérias da grade, LISTE as matérias direto na resposta (já é o que o template manda). Não fale em "link", "PDF", "documento" nem "arquivo".
-    b) Se buscar_informacoes / buscar_pos NÃO retornou matérias (curso sem grade detalhada na base, ou grade veio vazia), NÃO ofereça grade. Em vez disso:
-       - Resuma o que veio da tool (duração, modalidade, áreas de atuação, diferenciais).
-       - CTA permitido: convidar o lead pra confirmar interesse, oferecer falar com um consultor (distribuir_humano) pra detalhes específicos, ou perguntar se ele quer saber sobre outro aspecto (preço, modalidade, polo).
-    c) PROIBIDO em qualquer caso (independente de ter grade ou não):
-       - "Posso te enviar o link/PDF/arquivo/documento da grade?"
-       - "Quer que eu te envie a grade curricular completa?"
-       - "Te mando o material da grade no e-mail/WhatsApp?"
-       - Qualquer variação que prometa entregar a grade por canal externo.
+       [STATUS DA GRADE: DISPONIVEL — link oficial: <URL>]
+         → Existe link da grade. Você PODE oferecer e enviar a URL exata que veio nesse marcador.
+
+       [STATUS DA GRADE: NAO DISPONIVEL — ...]
+         → NÃO há link/PDF da grade desse curso. Você está PROIBIDO de oferecer link/PDF/arquivo da grade.
+
+    REGRAS DE USO:
+    a) Sempre LEIA esse marcador antes de mencionar grade na resposta.
+
+    b) Se DISPONIVEL:
+       - Pode oferecer ("Quer que eu te envie o link da grade curricular do curso?") ou enviar direto.
+       - Quando enviar, use EXATAMENTE a URL que veio no marcador. NUNCA invente URL, encurtador ou caminho similar.
+       - Se a tool também trouxe matérias listadas no texto principal do resultado, pode listar as matérias no chat E mandar o link — são complementares.
+
+    c) Se NAO DISPONIVEL:
+       - PROIBIDO oferecer ou prometer enviar link, PDF, arquivo, documento ou material da grade.
+       - Frases proibidas (em qualquer variação): "Posso te enviar o link da grade?", "Quer que eu te envie a grade curricular completa?", "Te mando o PDF da grade?".
+       - Em vez de oferecer grade, dê outro CTA: confirmar interesse, oferecer falar com consultor (distribuir_humano), perguntar sobre preço/polo/modalidade, ou listar matérias no chat se a tool tiver retornado dentro do texto principal do resultado.
+
     d) Se o lead PEDIR explicitamente "me manda a grade" / "tem PDF da grade?" / "quero o link da grade":
-       - Se a tool já te deu as matérias, diga: "Posso te listar as matérias aqui mesmo no chat" e liste.
-       - Se a tool NÃO te deu matérias, diga: "A grade detalhada deste curso não está aqui na nossa base — vou pedir para um consultor te enviar com todos os detalhes" e chame distribuir_humano.
+       - Se DISPONIVEL: envie a URL do marcador.
+       - Se NAO DISPONIVEL: diga "A grade detalhada deste curso não está disponível na nossa base aqui — vou pedir para um consultor te enviar com todos os detalhes" e chame distribuir_humano.
 
-    Resumindo: grade vem listada NO PRÓPRIO CHAT quando a tool entregou. Quando não entregou, vai pra humano. Nunca prometa "link" ou "PDF".`
+    e) NUNCA copie o texto do marcador "[STATUS DA GRADE: ...]" pro cliente — é instrução interna pra você, não pra ele. O cliente só vê o link (quando existe) ou nada (quando não existe).`
   return promptsText + '\n\n---\n\n' + override
 }
