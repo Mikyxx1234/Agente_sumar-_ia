@@ -882,6 +882,35 @@ app.get('/api/salesbot/probe-pos', async (req, res) => {
   }
 })
 
+// Debug: lista alguns rows brutos de documents_precos pra inspecionar
+// o formato real do `metadata`. Útil quando o extractor canônico
+// (extractPriceMeta) está retornando null e a IA segue alucinando.
+// Ex.: GET /api/debug/documents-precos?like=Gestão Ambiental&limit=5
+app.get('/api/debug/documents-precos', async (req, res) => {
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
+    res.status(500).json({ error: 'SUPABASE_URL/SUPABASE_KEY não configurado' })
+    return
+  }
+  try {
+    const like = String(req.query?.like || '').trim()
+    const limit = Math.min(20, Math.max(1, Number(req.query?.limit) || 10))
+    const filters = ['select=id,content,metadata', `limit=${limit}`, 'order=id.asc']
+    if (like) filters.push(`content=ilike.%${encodeURIComponent(like)}%`)
+    const url = `${SUPABASE_URL}/rest/v1/documents_precos?${filters.join('&')}`
+    const r = await fetch(url, {
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
+    })
+    const text = await r.text()
+    if (!r.ok) {
+      res.status(r.status).type('application/json').send(text)
+      return
+    }
+    res.type('application/json').send(text)
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
 // Lista das execuções do salesbot (proxy direto ao Supabase pra
 // não precisar replicar lógica no client).
 app.get('/api/salesbot/executions', async (req, res) => {

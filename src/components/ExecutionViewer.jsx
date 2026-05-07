@@ -323,7 +323,7 @@ Tokens LLM  : prompt=${tc.queryRewrite.usage.prompt_tokens || 0}, completion=${t
               <div className="flow-section">
                 <div className="flow-label">{tc.error ? 'Erro' : 'Resultado'}</div>
                 <pre className="flow-content-pre" style={tc.error ? { color: 'var(--danger)' } : {}}>
-                  {tc.error || truncate(tc.result, 1000)}
+                  {tc.error || truncate(tc.result, 4000)}
                 </pre>
               </div>
             </div>

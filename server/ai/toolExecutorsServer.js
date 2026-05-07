@@ -238,6 +238,7 @@ async function vectorSearch(env, ctx, toolName, rpcName, query, matchCount = 10)
       }
       if (isPriceTool) {
         const meta = extractPriceMeta(d?.metadata)
+        const lines = [base]
         if (meta) {
           const fields = []
           if (meta.curso) fields.push(`curso: ${meta.curso}`)
@@ -248,23 +249,31 @@ async function vectorSearch(env, ctx, toolName, rpcName, query, matchCount = 10)
           if (meta.modalidade) fields.push(`modalidade: ${meta.modalidade}`)
           if (meta.tempo) fields.push(`duracao: ${meta.tempo}`)
           if (meta.valor) fields.push(`valor: ${meta.valor}`)
-          return `${base}\n\n[FICHA DO PRECO — ${fields.join(' | ')}]`
+          lines.push(`[FICHA DO PRECO — ${fields.join(' | ')}]`)
         }
-        // Fallback: extração canônica falhou. Anexa metadata bruto (limpo
-        // de campos de loader) pra a IA pelo menos enxergar os campos
-        // disponíveis e tentar inferir nivel/modalidade.
-        const rawDump = summarizeMetadataForLLM(d?.metadata)
-        // Log único pra diagnóstico — formato real do metadata na primeira
-        // execução pós-deploy. Sem isso fica difícil saber o que ajustar
-        // no extractor canônico.
+        // SEMPRE anexa o metadata bruto resumido — mesmo quando a FICHA
+        // já foi extraída — pra a IA ter visibilidade completa e poder
+        // decidir caso a FICHA tenha pulado algum campo. Sem filtro de
+        // noise: prefiro a IA descartar campo irrelevante a perder info
+        // crítica (já vimos casos onde tipo/nivel só aparece em key
+        // exótica que o filtro removia).
+        let rawDump = null
         try {
-          const sample = JSON.stringify(d?.metadata || {}).slice(0, 500)
-          console.warn(
-            `[tool/buscar_precos] FICHA DO PRECO não extraída — metadata bruto (primeiros 500 chars): ${sample}`,
-          )
+          const compact = JSON.stringify(d?.metadata ?? null)
+          if (compact && compact !== 'null' && compact !== '{}') {
+            rawDump = compact.length > 500 ? compact.slice(0, 497) + '...' : compact
+          }
         } catch { /* ignore */ }
-        if (rawDump) return `${base}\n\n[METADATA BRUTO DO PRECO — ${rawDump}]`
-        return base
+        // Log do metadata real — aparece no console do servidor ao
+        // executar buscar_precos. Indispensável pra ajustar o extrator
+        // se o formato real for diferente do canônico.
+        try {
+          const sample = JSON.stringify(d?.metadata ?? null).slice(0, 800)
+          console.log(`[tool/buscar_precos] sample content="${(d?.content || '').slice(0, 80)}" metadata=${sample}`)
+        } catch { /* ignore */ }
+        if (rawDump) lines.push(`[METADATA BRUTO — ${rawDump}]`)
+        if (lines.length === 1) return base // nada extra extraído
+        return lines.join('\n\n')
       }
       return base
     })
