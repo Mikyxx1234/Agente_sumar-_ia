@@ -179,29 +179,38 @@ Você está conectado ao WhatsApp via Evolution API. Regras abaixo substituem qu
 
     e) NUNCA copie o texto do marcador "[STATUS DA GRADE: ...]" pro cliente — é instrução interna pra você, não pra ele. O cliente só vê o link (quando existe) ou nada (quando não existe).
 
-14. PREÇOS — FILTRE ANTES DE INFORMAR. NUNCA MISTURE NÍVEIS NEM CURSOS DIFERENTES.
-    A tool buscar_precos é vetorial: ela traz vários resultados parecidos, INCLUSIVE de cursos diferentes do que o lead perguntou e/ou de NÍVEIS diferentes (graduação x pós-graduação). Cada resultado vem com um marcador final:
+14. PREÇOS — FILTRE ANTES DE INFORMAR. NUNCA MISTURE NÍVEIS, MODALIDADES NEM CURSOS DIFERENTES.
+    A tool buscar_precos é vetorial: ela traz vários resultados parecidos, INCLUSIVE de cursos com nome diferente e/ou de NÍVEIS diferentes (graduação x pós). Cada resultado pode vir com um destes marcadores:
 
        [FICHA DO PRECO — curso: <nome> | nivel: GRADUAÇÃO ou PÓS-GRADUAÇÃO (tipo bruto: <texto original>) | modalidade: <EAD/Semipresencial> | duracao: <texto> | valor: <R$ XX,YY>]
+       [METADATA BRUTO DO PRECO — <JSON com campos disponíveis: tipo, modalidade, valor, etc>]
 
-    REGRA DE FILTRO OBRIGATÓRIA — antes de citar QUALQUER preço:
-    a) DESCARTE todo resultado cujo "curso" não bata com o curso que o lead está perguntando. "Direito Ambiental" NÃO é "Gestão Ambiental". Use só os preços do curso EXATO em discussão.
-    b) DESCARTE resultados de NÍVEL diferente do contexto da conversa. Se o lead está falando de graduação (ou você usou buscar_informacoes), só pode citar preços com "nivel: GRADUAÇÃO". Se é pós (ou você usou buscar_pos), só pode citar "nivel: PÓS-GRADUAÇÃO".
-    c) DESCARTE resultados de MODALIDADE que não existe pra esse curso. Se buscar_informacoes retornou que o curso só tem Semipresencial, ignore preços marcados como EAD (mesmo que o curso tenha o mesmo nome em outro nível).
-    d) Se SOBRAR só um preço após o filtro: cite esse preço único — NÃO crie range artificial.
-    e) Se sobrarem múltiplos preços do MESMO curso e MESMO nível em modalidades diferentes que ambas existem: cite cada modalidade com seu valor ("EAD: R$ X / Semipresencial: R$ Y") em vez de range.
-    f) Se NÃO sobrar nenhum preço após o filtro: diga que vai confirmar o valor exato com um consultor e chame distribuir_humano. NÃO chute, NÃO use o "mais próximo".
+    Os dois marcadores cumprem o mesmo papel — a FICHA é a versão bonita; o METADATA BRUTO aparece quando a estrutura veio em formato não canônico e você terá que ler o JSON pra extrair os campos. Em ambos, os campos relevantes são tipo/nivel, modalidade, curso, valor.
 
-    EXEMPLO REAL DE ERRO QUE ESTA REGRA PROIBE (caso Gestão Ambiental):
-      buscar_informacoes retornou: "Gestão Ambiental - Semipresencial (graduação)".
-      buscar_precos retornou:
-        - [FICHA — curso: Gestão Ambiental | nivel: GRADUAÇÃO | modalidade: Semipresencial | valor: R$ 289,00]
-        - [FICHA — curso: Gestão Ambiental | nivel: PÓS-GRADUAÇÃO | modalidade: EAD | valor: R$ 184,00]
-        - [FICHA — curso: Gestão Ambiental | nivel: PÓS-GRADUAÇÃO | modalidade: EAD | valor: R$ 176,00]
-        - [FICHA — curso: Direito Ambiental | nivel: GRADUAÇÃO | modalidade: EAD | valor: R$ 184,00]
-      Resposta CERTA: "A mensalidade é R$ 289,00 (modalidade Semipresencial)."
-      Resposta ERRADA: "Varia entre R$ 176,00 e R$ 289,00 dependendo da modalidade." (mistura graduação com pós e cita modalidade que o curso não tem)
+    REGRA DE FILTRO OBRIGATÓRIA — antes de citar QUALQUER preço, aplique TODAS:
 
-    g) NUNCA copie o texto "[FICHA DO PRECO ...]" pro cliente — é só pra seu raciocínio.`
+    a) DESCARTE todo resultado cujo nome do curso não seja o MESMO que o lead está perguntando. "Direito Ambiental" NÃO é "Gestão Ambiental". "Gestão de Tecnologia da Informação E Transformação Digital" NÃO é "Gestão da Tecnologia da Informação". Não basta as palavras se parecerem — tem que ser o mesmo curso.
+
+    b) DESCARTE resultados de NÍVEL diferente do contexto. Se o lead está perguntando sobre graduação (ou você usou buscar_informacoes), só pode citar preços de GRADUAÇÃO. Se é pós (ou você usou buscar_pos), só pode citar PÓS-GRADUAÇÃO. Se o resultado não trouxer marcador identificando o nível e você NÃO conseguir confirmar o nível pelo nome do curso ou pelo contexto, DESCARTE — é melhor pedir ao consultor do que arriscar misturar.
+
+    c) DESCARTE resultados de MODALIDADE que não existe pra esse curso. Se buscar_informacoes retornou que o curso só tem Semipresencial, ignore preços marcados como EAD. Se retornou só EAD, ignore Semipresencial.
+
+    d) APÓS o filtro, conte o que sobrou:
+       - Se sobrou 1 preço → cite esse valor único, simples e direto. NÃO crie range. NÃO mencione "outros valores".
+       - Se sobraram 2+ preços do MESMO curso/MESMO nível em modalidades distintas que AMBAS existem pra esse curso → cite cada modalidade com seu valor ("EAD: R$ X / Semipresencial: R$ Y"). Sem range.
+       - Se sobrou 0 → NÃO chute o "mais parecido". Diga que vai confirmar o valor exato com um consultor e chame distribuir_humano.
+
+    e) NÃO LISTE preços brutos pro cliente como "encontrei valores R$ 200, R$ 192, R$ 162...". Esse tipo de resposta indica que você pulou o filtro. Se você se viu prestes a escrever isso, PARE e refaça aplicando (a)-(d).
+
+    EXEMPLO REAL DE ERRO QUE ESTA REGRA PROIBE — caso "Gestão da Tecnologia da Informação":
+      buscar_precos retornou (resumido):
+        - "Gestão Da Tecnologia Da Informação R$ 200,00"
+        - "Gestão Da Tecnologia Da Informação R$ 192,00"
+        - "Gestão De Tecnologia Da Informação E Transformacao Digital R$ 170,00"  ← OUTRO CURSO
+        - "Gestão De Tecnologia Da Informação E Transformacao Digital R$ 168,00"  ← OUTRO CURSO
+      Resposta ERRADA: "Encontrei mensalidades de R$ 200, R$ 192 e R$ 162" (misturou cursos diferentes e listou preços brutos sem confirmar nível/modalidade).
+      Resposta CERTA: aplica filtro (a) → ficam só os 2 do curso correto. Aplica (b) e (c) confirmando nível/modalidade do contexto. Se sobrou 1, cita o valor único. Se sobrou 2 modalidades distintas, cita cada uma com sua modalidade. Se você não conseguir confirmar o nível dos 2 que sobraram, chama distribuir_humano em vez de chutar.
+
+    f) NUNCA copie o texto "[FICHA DO PRECO ...]" nem "[METADATA BRUTO DO PRECO ...]" pro cliente — são instruções internas pra você raciocinar.`
   return promptsText + '\n\n---\n\n' + override
 }

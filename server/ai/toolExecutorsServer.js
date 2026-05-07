@@ -65,53 +65,110 @@ function extractGradeLink(metadata) {
 }
 
 /**
- * Extrai info do `metadata` de documents_precos.
+ * Procura, recursivamente em qualquer profundidade do metadata, valores
+ * pra um conjunto de chaves alvo — case-insensitive. Aceita strings JSON
+ * aninhadas (como `metadata.Metadata` que é uma string `{"curso":...}`)
+ * e desserializa automaticamente. Para na primeira ocorrência de cada chave.
  *
- * Estrutura esperada (caso real):
- *   metadata: { Metadata: '{"curso":"Gestão Ambiental","modalidade":"Semipresencial","tempo":"4 semestres","valor":"R$ 289,00","tipo":"graduação"}', ... }
+ * Sem essa varredura recursiva a função antiga falhava em qualquer
+ * variação de formato (PascalCase, snake_case, JSON dentro de string,
+ * objetos aninhados via loaders do n8n/LangChain), e a IA recebia só
+ * "Gestão R$ 200" sem saber se era graduação ou pós.
+ */
+function deepFindKeys(obj, targets, found = {}, depth = 0) {
+  if (!obj || depth > 6) return found
+  if (typeof obj === 'string') {
+    const trimmed = obj.trim()
+    if ((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+        (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+      try {
+        return deepFindKeys(JSON.parse(trimmed), targets, found, depth + 1)
+      } catch { /* ignore */ }
+    }
+    return found
+  }
+  if (Array.isArray(obj)) {
+    for (const item of obj) deepFindKeys(item, targets, found, depth + 1)
+    return found
+  }
+  if (typeof obj !== 'object') return found
+  for (const [k, v] of Object.entries(obj)) {
+    const lower = k.toLowerCase()
+    for (const [outKey, aliases] of Object.entries(targets)) {
+      if (found[outKey] != null) continue
+      if (aliases.includes(lower)) {
+        if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+          const s = String(v).trim()
+          if (s) found[outKey] = s
+        }
+      }
+    }
+    if (typeof v === 'object' || (typeof v === 'string' && v.trim().startsWith('{'))) {
+      deepFindKeys(v, targets, found, depth + 1)
+    }
+  }
+  return found
+}
+
+/**
+ * Extrai info de preço do metadata de documents_precos. Tenta vários
+ * formatos (PascalCase, snake_case, JSON dentro de string, objeto
+ * aninhado).
  *
- * Sem isso a IA só recebia "Gestão Ambiental R$ 184,00" e não tinha
- * como distinguir preço de graduação vs pós, ou de modalidades
- * diferentes — daí ela juntava tudo e dava ranges errados (caso real
- * de Gestão Ambiental: passou range R$176-289 misturando graduação
- * com pós).
+ * Sem isso a IA só recebia "Gestão Ambiental R$ 184,00" sem nivel/
+ * modalidade e juntava preços de graduação com pós (caso real do print).
  */
 function extractPriceMeta(metadata) {
   if (!metadata || typeof metadata !== 'object') return null
-  let inner = null
-  // Caso 1: Metadata (PascalCase) é string JSON aninhada — formato
-  // canônico atual da tabela documents_precos.
-  const rawNested = metadata.Metadata ?? metadata.metadata
-  if (typeof rawNested === 'string' && rawNested.trim().startsWith('{')) {
-    try { inner = JSON.parse(rawNested) } catch { inner = null }
-  } else if (rawNested && typeof rawNested === 'object') {
-    inner = rawNested
-  }
-  // Caso 2: campos planos no próprio metadata (fallback).
-  const src = inner || metadata
-  const pick = (...keys) => {
-    for (const k of keys) {
-      const v = src[k]
-      if (v != null && String(v).trim() !== '') return String(v).trim()
-    }
-    return null
-  }
-  const out = {
-    curso: pick('curso', 'nome', 'nome_curso'),
-    tipo: pick('tipo', 'nivel', 'grau', 'grau_curso'),
-    modalidade: pick('modalidade', 'modalidades'),
-    tempo: pick('tempo', 'duracao', 'duracao_curso'),
-    valor: pick('valor', 'preco', 'preco_mensal', 'mensalidade'),
-  }
-  // Se nada relevante veio, retorna null pra não poluir a saída.
-  if (!out.curso && !out.tipo && !out.modalidade && !out.tempo && !out.valor) return null
-  return out
+  const found = deepFindKeys(metadata, {
+    curso: ['curso', 'nome', 'nome_curso', 'course', 'name'],
+    tipo: ['tipo', 'nivel', 'grau', 'grau_curso', 'level', 'category'],
+    modalidade: ['modalidade', 'modalidades', 'modality'],
+    tempo: ['tempo', 'duracao', 'duracao_curso', 'duration'],
+    valor: ['valor', 'preco', 'preco_mensal', 'mensalidade', 'price'],
+  })
+  if (!found.curso && !found.tipo && !found.modalidade && !found.tempo && !found.valor) return null
+  return found
 }
 
 function isPosTipo(tipo) {
   if (!tipo) return false
   const t = String(tipo).toLowerCase()
   return /(p[óo]s|mba|especializa)/i.test(t)
+}
+
+/**
+ * Fallback: serializa o metadata em string compacta (até ~250 chars) pra
+ * a IA ter pelo menos UMA visão dos campos brutos quando o extrator
+ * canônico falha. Remove campos de loader (loc, source, blobType, etc)
+ * que só poluem o prompt.
+ */
+const NOISE_KEYS = new Set([
+  'loc', 'source', 'blobtype', 'pdf', 'pageNumber', 'totalPages',
+  'lines', 'embedding', 'id',
+])
+function summarizeMetadataForLLM(metadata) {
+  if (!metadata || typeof metadata !== 'object') return null
+  const cleaned = {}
+  for (const [k, v] of Object.entries(metadata)) {
+    if (NOISE_KEYS.has(k.toLowerCase())) continue
+    if (v == null) continue
+    if (typeof v === 'string') {
+      // Se for JSON-string, tenta parsear pra exibir mais legível.
+      const t = v.trim()
+      if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
+        try { cleaned[k] = JSON.parse(t); continue } catch { /* ignore */ }
+      }
+      cleaned[k] = v
+    } else {
+      cleaned[k] = v
+    }
+  }
+  if (Object.keys(cleaned).length === 0) return null
+  let s
+  try { s = JSON.stringify(cleaned) } catch { return null }
+  if (s.length > 280) s = s.slice(0, 277) + '...'
+  return s
 }
 
 async function vectorSearch(env, ctx, toolName, rpcName, query, matchCount = 10) {
@@ -181,17 +238,33 @@ async function vectorSearch(env, ctx, toolName, rpcName, query, matchCount = 10)
       }
       if (isPriceTool) {
         const meta = extractPriceMeta(d?.metadata)
-        if (!meta) return base
-        const fields = []
-        if (meta.curso) fields.push(`curso: ${meta.curso}`)
-        if (meta.tipo) {
-          const nivel = isPosTipo(meta.tipo) ? 'PÓS-GRADUAÇÃO' : 'GRADUAÇÃO'
-          fields.push(`nivel: ${nivel} (tipo bruto: ${meta.tipo})`)
+        if (meta) {
+          const fields = []
+          if (meta.curso) fields.push(`curso: ${meta.curso}`)
+          if (meta.tipo) {
+            const nivel = isPosTipo(meta.tipo) ? 'PÓS-GRADUAÇÃO' : 'GRADUAÇÃO'
+            fields.push(`nivel: ${nivel} (tipo bruto: ${meta.tipo})`)
+          }
+          if (meta.modalidade) fields.push(`modalidade: ${meta.modalidade}`)
+          if (meta.tempo) fields.push(`duracao: ${meta.tempo}`)
+          if (meta.valor) fields.push(`valor: ${meta.valor}`)
+          return `${base}\n\n[FICHA DO PRECO — ${fields.join(' | ')}]`
         }
-        if (meta.modalidade) fields.push(`modalidade: ${meta.modalidade}`)
-        if (meta.tempo) fields.push(`duracao: ${meta.tempo}`)
-        if (meta.valor) fields.push(`valor: ${meta.valor}`)
-        return `${base}\n\n[FICHA DO PRECO — ${fields.join(' | ')}]`
+        // Fallback: extração canônica falhou. Anexa metadata bruto (limpo
+        // de campos de loader) pra a IA pelo menos enxergar os campos
+        // disponíveis e tentar inferir nivel/modalidade.
+        const rawDump = summarizeMetadataForLLM(d?.metadata)
+        // Log único pra diagnóstico — formato real do metadata na primeira
+        // execução pós-deploy. Sem isso fica difícil saber o que ajustar
+        // no extractor canônico.
+        try {
+          const sample = JSON.stringify(d?.metadata || {}).slice(0, 500)
+          console.warn(
+            `[tool/buscar_precos] FICHA DO PRECO não extraída — metadata bruto (primeiros 500 chars): ${sample}`,
+          )
+        } catch { /* ignore */ }
+        if (rawDump) return `${base}\n\n[METADATA BRUTO DO PRECO — ${rawDump}]`
+        return base
       }
       return base
     })
