@@ -64,6 +64,56 @@ function extractGradeLink(metadata) {
   return s
 }
 
+/**
+ * Extrai info do `metadata` de documents_precos.
+ *
+ * Estrutura esperada (caso real):
+ *   metadata: { Metadata: '{"curso":"Gestão Ambiental","modalidade":"Semipresencial","tempo":"4 semestres","valor":"R$ 289,00","tipo":"graduação"}', ... }
+ *
+ * Sem isso a IA só recebia "Gestão Ambiental R$ 184,00" e não tinha
+ * como distinguir preço de graduação vs pós, ou de modalidades
+ * diferentes — daí ela juntava tudo e dava ranges errados (caso real
+ * de Gestão Ambiental: passou range R$176-289 misturando graduação
+ * com pós).
+ */
+function extractPriceMeta(metadata) {
+  if (!metadata || typeof metadata !== 'object') return null
+  let inner = null
+  // Caso 1: Metadata (PascalCase) é string JSON aninhada — formato
+  // canônico atual da tabela documents_precos.
+  const rawNested = metadata.Metadata ?? metadata.metadata
+  if (typeof rawNested === 'string' && rawNested.trim().startsWith('{')) {
+    try { inner = JSON.parse(rawNested) } catch { inner = null }
+  } else if (rawNested && typeof rawNested === 'object') {
+    inner = rawNested
+  }
+  // Caso 2: campos planos no próprio metadata (fallback).
+  const src = inner || metadata
+  const pick = (...keys) => {
+    for (const k of keys) {
+      const v = src[k]
+      if (v != null && String(v).trim() !== '') return String(v).trim()
+    }
+    return null
+  }
+  const out = {
+    curso: pick('curso', 'nome', 'nome_curso'),
+    tipo: pick('tipo', 'nivel', 'grau', 'grau_curso'),
+    modalidade: pick('modalidade', 'modalidades'),
+    tempo: pick('tempo', 'duracao', 'duracao_curso'),
+    valor: pick('valor', 'preco', 'preco_mensal', 'mensalidade'),
+  }
+  // Se nada relevante veio, retorna null pra não poluir a saída.
+  if (!out.curso && !out.tipo && !out.modalidade && !out.tempo && !out.valor) return null
+  return out
+}
+
+function isPosTipo(tipo) {
+  if (!tipo) return false
+  const t = String(tipo).toLowerCase()
+  return /(p[óo]s|mba|especializa)/i.test(t)
+}
+
 async function vectorSearch(env, ctx, toolName, rpcName, query, matchCount = 10) {
   const url = env.SUPABASE_URL || env.VITE_SUPABASE_URL
   const key = env.SUPABASE_KEY || env.VITE_SUPABASE_KEY
@@ -113,20 +163,37 @@ async function vectorSearch(env, ctx, toolName, rpcName, query, matchCount = 10)
   const data = await res.json()
   if (!Array.isArray(data) || data.length === 0) return 'Nenhum resultado encontrado na base.'
 
-  // Para tools de curso (buscar_informacoes / buscar_pos), anexamos um
-  // bloco "STATUS DA GRADE" pra cada resultado — assim o LLM sabe se
-  // pode oferecer link da grade ou não. Marcadores legíveis pelo LLM,
-  // não embelezados (não vai pro cliente final, é só pra orquestrador).
+  // Anexa metadata legível ao texto pra o LLM — sem isso ele perdia
+  // contexto crítico (link da grade, nível/modalidade do preço) e
+  // alucinava (oferecia link inexistente, juntava preço de graduação
+  // com preço de pós, etc).
   const isCourseTool = toolName === 'buscar_informacoes' || toolName === 'buscar_pos'
+  const isPriceTool = toolName === 'buscar_precos'
   return data
     .map((d) => {
       const base = d?.content || ''
-      if (!isCourseTool) return base
-      const gradeUrl = extractGradeLink(d?.metadata)
-      const status = gradeUrl
-        ? `STATUS DA GRADE: DISPONIVEL — link oficial: ${gradeUrl}`
-        : 'STATUS DA GRADE: NAO DISPONIVEL — não existe link/PDF da grade deste curso na nossa base.'
-      return `${base}\n\n[${status}]`
+      if (isCourseTool) {
+        const gradeUrl = extractGradeLink(d?.metadata)
+        const status = gradeUrl
+          ? `STATUS DA GRADE: DISPONIVEL — link oficial: ${gradeUrl}`
+          : 'STATUS DA GRADE: NAO DISPONIVEL — não existe link/PDF da grade deste curso na nossa base.'
+        return `${base}\n\n[${status}]`
+      }
+      if (isPriceTool) {
+        const meta = extractPriceMeta(d?.metadata)
+        if (!meta) return base
+        const fields = []
+        if (meta.curso) fields.push(`curso: ${meta.curso}`)
+        if (meta.tipo) {
+          const nivel = isPosTipo(meta.tipo) ? 'PÓS-GRADUAÇÃO' : 'GRADUAÇÃO'
+          fields.push(`nivel: ${nivel} (tipo bruto: ${meta.tipo})`)
+        }
+        if (meta.modalidade) fields.push(`modalidade: ${meta.modalidade}`)
+        if (meta.tempo) fields.push(`duracao: ${meta.tempo}`)
+        if (meta.valor) fields.push(`valor: ${meta.valor}`)
+        return `${base}\n\n[FICHA DO PRECO — ${fields.join(' | ')}]`
+      }
+      return base
     })
     .join('\n\n---\n\n')
 }
