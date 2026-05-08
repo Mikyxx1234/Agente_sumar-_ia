@@ -22,6 +22,7 @@
 
 import { pushMessage, getMessages, clearMessages } from './messageBuffer.js'
 import { transcribeAudioBase64, analyzeImageBase64 } from './openaiMedia.js'
+import { fetchEvolutionMediaBase64, resolveInstanceName, describeMediaPayloadShape } from './evolutionMedia.js'
 import { runAgent } from '../ai/agentRunner.js'
 import { saveConversation } from '../historyStore.js'
 import { getLeadIdByTelefone } from '../dadosClienteStore.js'
@@ -166,7 +167,60 @@ function getMessageId(payload) {
 
 function getBase64(payload) {
   const d = payload?.data || payload
-  return d?.message?.base64 || d?.message?.mediaBase64 || null
+  const m = d?.message || {}
+  // Versões diferentes da Evolution colocam o base64 em lugares
+  // diferentes. Verifica todos os caminhos conhecidos antes de
+  // partir pro fallback que baixa via API (mais lento).
+  return (
+    m.base64 ||
+    m.mediaBase64 ||
+    m?.audioMessage?.base64 ||
+    m?.imageMessage?.base64 ||
+    m?.documentMessage?.base64 ||
+    null
+  )
+}
+
+/**
+ * Devolve o base64 da mídia. Fluxo:
+ *   1) Procura inline no payload (Baileys ou Evolution com `download` ligado).
+ *   2) Se não achou, baixa via Evolution `/chat/getBase64FromMediaMessage`.
+ *
+ * Loga o resultado pra facilitar diagnóstico — sem isso, áudio que
+ * "não executa" vira caixa preta.
+ *
+ * @returns {Promise<{base64: string|null, source: 'inline'|'evolution-download'|'none', detail?: object}>}
+ */
+async function resolveMediaBase64(env, payload, kind) {
+  const inline = getBase64(payload)
+  if (inline) {
+    return { base64: inline, source: 'inline' }
+  }
+
+  const instance = resolveInstanceName(env, payload)
+  if (!instance) {
+    console.warn(
+      `[Evolution][${kind}] sem base64 inline e EVOLUTION_INSTANCE não resolvida — não dá pra baixar via API. Shape:`,
+      JSON.stringify(describeMediaPayloadShape(payload)),
+    )
+    return { base64: null, source: 'none', detail: { reason: 'no_instance' } }
+  }
+
+  console.log(
+    `[Evolution][${kind}] base64 ausente inline → tentando download via Evolution (instance=${instance})`,
+  )
+  const dl = await fetchEvolutionMediaBase64(env, { instance, payload })
+  if (dl.ok && dl.base64) {
+    console.log(
+      `[Evolution][${kind}] download Evolution OK em ${dl.elapsedMs}ms (${dl.base64.length} chars, mimetype=${dl.mimetype || 'n/a'})`,
+    )
+    return { base64: dl.base64, source: 'evolution-download', detail: { mimetype: dl.mimetype, fileName: dl.fileName } }
+  }
+  console.error(
+    `[Evolution][${kind}] download Evolution falhou (${dl.code}${dl.status ? ` ${dl.status}` : ''}) em ${dl.elapsedMs || '?'}ms: ${dl.error || ''}. Shape:`,
+    JSON.stringify(describeMediaPayloadShape(payload)),
+  )
+  return { base64: null, source: 'none', detail: { code: dl.code, status: dl.status, error: dl.error } }
 }
 
 function getImageCaption(payload) {
@@ -212,9 +266,17 @@ async function extractMessageText(env, payload, messageType) {
       return getTextContent(payload)
 
     case 'audioMessage': {
-      const b64 = getBase64(payload)
-      if (!b64) return '[ÁUDIO RECEBIDO mas sem base64 no payload — peça ao lead pra reenviar.]'
+      const { base64: b64 } = await resolveMediaBase64(env, payload, 'audio')
+      if (!b64) {
+        // Mantemos o marcador entre colchetes pra a IA SEMPRE saber
+        // que veio um áudio (Rule 15 do prompt). Sem isso, o
+        // orquestrador respondia como se nada tivesse chegado e o
+        // cliente ficava sem retorno (caso reportado pelo operador).
+        return '[ÁUDIO RECEBIDO mas não foi possível baixar o conteúdo. Peça desculpas e diga que vai pedir pra um consultor escutar — ou peça pro lead reenviar/digitar a mensagem.]'
+      }
       try {
+        // mimeType padrão do WhatsApp é audio/ogg; codecs=opus, mas
+        // Whisper aceita ogg sem o `codecs=`.
         const txt = await transcribeAudioBase64(env, b64, { filename: 'file.ogg', mimeType: 'audio/ogg' })
         if (!txt || !txt.trim()) {
           return '[ÁUDIO RECEBIDO mas a transcrição ficou vazia — confirme com o lead se ele pode reenviar ou digitar a mensagem.]'
@@ -229,7 +291,7 @@ async function extractMessageText(env, payload, messageType) {
     }
 
     case 'imageMessage': {
-      const b64 = getBase64(payload)
+      const { base64: b64 } = await resolveMediaBase64(env, payload, 'image')
       const caption = getImageCaption(payload).trim()
       if (!b64) {
         // Sem base64 a Vision não roda — mas a IA precisa SABER que

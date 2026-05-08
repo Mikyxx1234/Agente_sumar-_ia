@@ -16,6 +16,7 @@ import { generateExecutionId, saveExecution } from './server/ai/executionTelemet
 import { sendTyping } from './server/evolution/typingIndicator.js'
 import { makeEvolutionWebhookHandler } from './server/evolution/webhookEvolution.js'
 import { transcribeAudioBase64, analyzeImageBase64 } from './server/evolution/openaiMedia.js'
+import { fetchEvolutionMediaBase64 } from './server/evolution/evolutionMedia.js'
 import { recordWebhookIngress, getWebhookDiagnosticsSnapshot } from './server/evolution/webhookDiagnostics.js'
 import { getKommoPollSnapshot } from './server/kommoInboundDiagnostics.js'
 import { getModelRegistrySnapshot } from './server/ai/modelRegistry.js'
@@ -1088,6 +1089,87 @@ async function handleTypingTest(req, res) {
 }
 app.get('/api/evolution/typing-test', handleTypingTest)
 app.post('/api/evolution/typing-test', handleTypingTest)
+
+// ── /api/evolution/media-test ──
+//
+// Baixa o base64 de uma mensagem de mídia (áudio/imagem/documento) via
+// `/chat/getBase64FromMediaMessage/{instance}` da Evolution. Útil pra
+// validar credenciais e ver se a Evolution está mesmo retornando o
+// conteúdo, sem precisar enviar áudio real.
+//
+// Uso:
+//   POST /api/evolution/media-test
+//   body:
+//     { "messageId": "<wamid>", "remoteJid": "5511...@s.whatsapp.net",
+//       "fromMe": false, "instance": "<opcional>" }
+//
+// Resposta (sucesso): { ok: true, base64Length, mimetype, fileName, transcribed?, vision? }
+// Pra economizar payload, devolve só o tamanho do base64 (não o conteúdo).
+// Se passar `?transcribe=1` na query, roda Whisper e devolve o texto.
+async function handleMediaTest(req, res) {
+  try {
+    const body = req.method === 'GET' ? req.query : req.body || {}
+    const messageId = String(body.messageId || '').trim()
+    const remoteJid = String(body.remoteJid || '').trim()
+    const fromMe = body.fromMe === 'true' || body.fromMe === true
+    const instance = String(body.instance || '').trim() || undefined
+    if (!messageId || !remoteJid) {
+      res.status(400).json({
+        ok: false,
+        error: 'messageId e remoteJid são obrigatórios. Pegue eles em /api/kommo/poll/dispatcher ou nos logs do webhook.',
+      })
+      return
+    }
+    const fakePayload = {
+      data: {
+        key: { id: messageId, remoteJid, fromMe },
+      },
+    }
+    const dl = await fetchEvolutionMediaBase64(process.env, { instance, payload: fakePayload })
+    if (!dl.ok) {
+      res.status(502).json({
+        ok: false,
+        code: dl.code,
+        status: dl.status || null,
+        error: dl.error,
+        elapsedMs: dl.elapsedMs || null,
+        retried: Boolean(dl.retried),
+        hint:
+          dl.code === 'EVOLUTION_NOT_CONFIGURED'
+            ? 'Configure EVOLUTION_API_URL / EVOLUTION_API_KEY / EVOLUTION_INSTANCE no env do container.'
+            : dl.code === 'EVOLUTION_TIMEOUT'
+              ? 'A Evolution demorou >15s. Veja se EVOLUTION_API_URL está acessível e se a instância existe.'
+              : 'Ver logs da Evolution. Verifique se messageId/remoteJid existem no histórico da instância.',
+      })
+      return
+    }
+    const result = {
+      ok: true,
+      base64Length: dl.base64?.length || 0,
+      mimetype: dl.mimetype,
+      fileName: dl.fileName,
+      elapsedMs: dl.elapsedMs,
+      retried: Boolean(dl.retried),
+    }
+    if (String(req.query.transcribe || '').toLowerCase() === '1') {
+      try {
+        const txt = await transcribeAudioBase64(process.env, dl.base64, {
+          filename: dl.fileName || 'file.ogg',
+          mimeType: dl.mimetype || 'audio/ogg',
+        })
+        result.transcribed = txt
+      } catch (e) {
+        result.transcribed = null
+        result.transcribeError = e.message
+      }
+    }
+    res.json(result)
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+}
+app.get('/api/evolution/media-test', handleMediaTest)
+app.post('/api/evolution/media-test', handleMediaTest)
 
 // Dispara um tick do scheduler imediatamente (útil para teste).
 app.post('/api/scheduler/tick', async (_req, res) => {
