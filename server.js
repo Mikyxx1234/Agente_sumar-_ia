@@ -17,6 +17,7 @@ import { sendTyping } from './server/evolution/typingIndicator.js'
 import { makeEvolutionWebhookHandler } from './server/evolution/webhookEvolution.js'
 import { transcribeAudioBase64, analyzeImageBase64 } from './server/evolution/openaiMedia.js'
 import { fetchEvolutionMediaBase64 } from './server/evolution/evolutionMedia.js'
+import { downloadUrlAsBase64 } from './server/mediaDownloader.js'
 import { recordWebhookIngress, getWebhookDiagnosticsSnapshot } from './server/evolution/webhookDiagnostics.js'
 import { getKommoPollSnapshot } from './server/kommoInboundDiagnostics.js'
 import { getModelRegistrySnapshot } from './server/ai/modelRegistry.js'
@@ -1014,6 +1015,7 @@ app.get('/api/kommo/poll/dispatcher', async (req, res) => {
       sender_name: m.sender_name,
       message_type: m.message_type,
       message_text: m.message_text,
+      media_url: m.media_url || null,
       sent_at: m.sent_at,
       origin: m.origin,
       synced_at: m.synced_at,
@@ -1170,6 +1172,66 @@ async function handleMediaTest(req, res) {
 }
 app.get('/api/evolution/media-test', handleMediaTest)
 app.post('/api/evolution/media-test', handleMediaTest)
+
+// ── /api/media/url-test ──
+//
+// Baixa uma URL arbitrária (ex.: media_url devolvido pelo dispatcher
+// pra mensagens de voz/imagem) e devolve metadados + base64Length.
+// Com ?transcribe=1 também roda Whisper em cima do áudio. Útil pra
+// diagnosticar se a URL tá pública / se precisa de auth / se whisper
+// engole o formato.
+//
+//   GET /api/media/url-test?url=<URL>&transcribe=1
+async function handleUrlMediaTest(req, res) {
+  try {
+    const url = String(
+      req.query.url || (req.body && req.body.url) || '',
+    ).trim()
+    if (!url) {
+      res.status(400).json({ ok: false, error: 'url é obrigatório (?url=...)' })
+      return
+    }
+    const dl = await downloadUrlAsBase64(process.env, url)
+    if (!dl.ok) {
+      res.status(502).json({
+        ok: false,
+        url,
+        code: dl.code,
+        status: dl.status || null,
+        error: dl.error,
+        attempts: dl.attempts || [],
+        elapsedMs: dl.elapsedMs || null,
+      })
+      return
+    }
+    const result = {
+      ok: true,
+      url,
+      base64Length: dl.base64?.length || 0,
+      bytes: dl.bytes,
+      mimeType: dl.mimeType,
+      attempts: dl.attempts,
+      elapsedMs: dl.elapsedMs,
+    }
+    if (String(req.query.transcribe || '').toLowerCase() === '1') {
+      try {
+        const txt = await transcribeAudioBase64(process.env, dl.base64, {
+          filename: 'voice.ogg',
+          mimeType: dl.mimeType || 'audio/ogg',
+        })
+        result.transcribed = txt
+      } catch (e) {
+        result.transcribed = null
+        result.transcribeError = e.message
+      }
+    }
+    res.json(result)
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+}
+app.get('/api/media/url-test', handleUrlMediaTest)
+app.post('/api/media/url-test', handleUrlMediaTest)
 
 // Dispara um tick do scheduler imediatamente (útil para teste).
 app.post('/api/scheduler/tick', async (_req, res) => {

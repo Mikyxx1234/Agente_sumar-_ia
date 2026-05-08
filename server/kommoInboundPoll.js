@@ -28,6 +28,8 @@ import {
 import { fetchAmojoChatHistory } from './kommoAmojoHistory.js'
 import { getMessagesByLead as dispatcherGetMessagesByLead } from './kommoDispatcherClient.js'
 import { digitsToWhatsAppLocalPart } from './phoneWhatsApp.js'
+import { transcribeAudioBase64, analyzeImageBase64 } from './evolution/openaiMedia.js'
+import { downloadUrlAsBase64 } from './mediaDownloader.js'
 import {
   recordNotesTick,
   recordAmojoTick,
@@ -557,11 +559,104 @@ async function pollEvents(env, leadId, sessionId) {
  */
 const DISPATCHER_INBOUND_SENDER_TYPES = new Set(['contact'])
 /**
- * Por enquanto só processamos texto. Voz/áudio/imagem ficam para outra tarefa
- * (precisaria de transcrição/OCR). Mensagens não-texto são ignoradas mas
- * registradas no diagnóstico para visibilidade.
+ * Tipos puramente texto — vão direto pro buffer.
  */
 const DISPATCHER_TEXT_TYPES = new Set(['text'])
+/**
+ * Tipos de áudio/voz — passamos por Whisper antes de empurrar pro buffer.
+ * (`voice` é o nome canônico do dispatcher; `audio` aparece em variações.)
+ */
+const DISPATCHER_VOICE_TYPES = new Set(['voice', 'audio'])
+/**
+ * Tipos de imagem — passamos por Vision (gpt-4o) antes de empurrar.
+ * (`picture` é o nome do dispatcher; `image` aparece em variações.)
+ */
+const DISPATCHER_PICTURE_TYPES = new Set(['picture', 'image'])
+
+/**
+ * Processa uma mensagem de áudio do dispatcher: baixa via media_url,
+ * transcreve com Whisper, devolve texto pronto pra empurrar no buffer.
+ * Garante que SEMPRE devolve algum texto — mesmo em falha — pra IA não
+ * ficar muda (Rule 15 do prompt).
+ */
+async function transcribeDispatcherVoice(env, msg, leadId) {
+  const url = msg?.media_url
+  if (!url) {
+    console.warn(`[kommo-poll][dispatcher] voice sem media_url lead=${leadId} msgId=${msg?.id}`)
+    return '[ÁUDIO RECEBIDO mas o dispatcher não devolveu URL — peça desculpas e diga que vai pedir pra um consultor escutar.]'
+  }
+  const dl = await downloadUrlAsBase64(env, url)
+  if (!dl.ok) {
+    console.error(
+      `[kommo-poll][dispatcher] download voice falhou lead=${leadId} msgId=${msg?.id} url=${url} (${dl.code || dl.status}): ${dl.error} attempts=${(dl.attempts || []).join(',')}`,
+    )
+    return '[ÁUDIO RECEBIDO mas o download falhou — peça desculpas e diga que vai pedir pra um consultor escutar ou peça pro lead reenviar/digitar a mensagem.]'
+  }
+  console.log(
+    `[kommo-poll][dispatcher] download voice OK lead=${leadId} msgId=${msg?.id} ${dl.bytes}B mime=${dl.mimeType || 'n/a'} via ${(dl.attempts || []).join(',')}`,
+  )
+  try {
+    const txt = await transcribeAudioBase64(env, dl.base64, {
+      filename: 'voice.ogg',
+      mimeType: dl.mimeType || 'audio/ogg',
+    })
+    if (!txt || !txt.trim()) {
+      return '[ÁUDIO RECEBIDO mas a transcrição ficou vazia — peça ao lead pra reenviar ou digitar a mensagem.]'
+    }
+    return `[ÁUDIO TRANSCRITO]: ${txt.trim()}`
+  } catch (e) {
+    console.error(
+      `[kommo-poll][dispatcher] whisper falhou lead=${leadId} msgId=${msg?.id}: ${e.message}`,
+    )
+    return '[ÁUDIO RECEBIDO mas houve falha técnica na transcrição — peça desculpas e diga que vai pedir pra um consultor escutar.]'
+  }
+}
+
+/**
+ * Processa uma mensagem de imagem do dispatcher: baixa via media_url,
+ * analisa com Vision, devolve texto pronto pra empurrar no buffer.
+ */
+async function analyzeDispatcherPicture(env, msg, leadId) {
+  const url = msg?.media_url
+  const caption = String(msg?.message_text || '').trim()
+  if (!url) {
+    console.warn(`[kommo-poll][dispatcher] picture sem media_url lead=${leadId} msgId=${msg?.id}`)
+    return caption
+      ? `[IMAGEM RECEBIDA mas o dispatcher não devolveu URL. Legenda do lead: "${caption}". Peça desculpas e diga que vai pedir pra um consultor analisar.]`
+      : '[IMAGEM RECEBIDA mas o dispatcher não devolveu URL. Peça desculpas e diga que vai pedir pra um consultor analisar.]'
+  }
+  const dl = await downloadUrlAsBase64(env, url)
+  if (!dl.ok) {
+    console.error(
+      `[kommo-poll][dispatcher] download picture falhou lead=${leadId} msgId=${msg?.id} url=${url} (${dl.code || dl.status}): ${dl.error} attempts=${(dl.attempts || []).join(',')}`,
+    )
+    return caption
+      ? `[IMAGEM RECEBIDA mas o download falhou. Legenda do lead: "${caption}". Diga que vai pedir pra um consultor olhar.]`
+      : '[IMAGEM RECEBIDA mas o download falhou. Diga que vai pedir pra um consultor olhar.]'
+  }
+  console.log(
+    `[kommo-poll][dispatcher] download picture OK lead=${leadId} msgId=${msg?.id} ${dl.bytes}B mime=${dl.mimeType || 'n/a'} via ${(dl.attempts || []).join(',')}`,
+  )
+  try {
+    const analysis = await analyzeImageBase64(env, dl.base64, {
+      mimeType: dl.mimeType || 'image/jpeg',
+    })
+    const clean = String(analysis || '').trim()
+    if (!clean) {
+      return caption
+        ? `[IMAGEM RECEBIDA mas a análise visual ficou vazia. Legenda do lead: "${caption}".]`
+        : '[IMAGEM RECEBIDA mas a análise visual ficou vazia. Peça ao lead pra reenviar ou descrever em texto.]'
+    }
+    return caption ? `${clean}\n\n[Legenda do lead na imagem]: ${caption}` : clean
+  } catch (e) {
+    console.error(
+      `[kommo-poll][dispatcher] vision falhou lead=${leadId} msgId=${msg?.id}: ${e.message}`,
+    )
+    return caption
+      ? `[IMAGEM RECEBIDA mas houve falha técnica ao analisá-la. Legenda do lead: "${caption}". Diga que vai pedir pra um consultor olhar.]`
+      : '[IMAGEM RECEBIDA mas houve falha técnica ao analisá-la. Diga que vai pedir pra um consultor olhar.]'
+  }
+}
 
 function countDispatcherStats(messages) {
   const senderTypes = {}
@@ -573,6 +668,31 @@ function countDispatcherStats(messages) {
     messageTypes[mt] = (messageTypes[mt] || 0) + 1
   }
   return { senderTypes, messageTypes }
+}
+
+/**
+ * Janela em segundos pra considerar uma mensagem "recente" no warmup.
+ * No primeiro tick após deploy/restart, mensagens dentro dessa janela
+ * SÃO processadas — só descartamos histórico de fato antigo. Sem isso,
+ * o warmup engolia exatamente a mensagem que acabou de chegar (caso
+ * comum: lead movido pra "Agente AI receptivo" segundos depois de
+ * mandar áudio → primeiro tick do scheduler virava warmup → áudio
+ * desaparecia).
+ *
+ * 120s cobre o caso normal (mensagem chegou enquanto o deploy ainda
+ * estava subindo) sem reprocessar minutos de histórico.
+ */
+function getWarmupFreshSec(env) {
+  const v = Number(env.KOMMO_INBOUND_WARMUP_FRESH_SEC)
+  return Number.isFinite(v) && v >= 0 ? Math.floor(v) : 120
+}
+
+function parseSentAtSec(value) {
+  if (value == null) return 0
+  const d = new Date(value)
+  const ms = d.getTime()
+  if (!Number.isFinite(ms)) return 0
+  return Math.floor(ms / 1000)
 }
 
 async function pollDispatcher(env, leadId, sessionId) {
@@ -611,28 +731,35 @@ async function pollDispatcher(env, leadId, sessionId) {
 
   if (!st.warmed) {
     const maxId = messages.reduce((m, x) => Math.max(m, Number(x?.id) || 0), 0)
-    dispatcherState.set(lid, { warmed: true, lastMsgId: maxId, seenIds: new Set() })
+    const freshSec = getWarmupFreshSec(env)
+    const nowSec = Math.floor(Date.now() / 1000)
+    // Pra evitar reprocessar histórico antigo, só consideramos mensagens
+    // com sent_at dentro da janela. Se freshSec=0, o warmup volta a se
+    // comportar como antes (descartar tudo).
+    let warmupCutoffId = maxId
+    if (freshSec > 0) {
+      const cutoff = nowSec - freshSec
+      const oldEnough = messages.filter((m) => {
+        const sec = parseSentAtSec(m?.sent_at)
+        return sec > 0 && sec < cutoff
+      })
+      // lastMsgId vira o maior id ENTRE as mensagens antigas; assim,
+      // mensagens dentro da janela ficam fresh e são processadas pelo
+      // loop normal abaixo.
+      warmupCutoffId = oldEnough.reduce((m, x) => Math.max(m, Number(x?.id) || 0), 0)
+    }
+    dispatcherState.set(lid, { warmed: true, lastMsgId: warmupCutoffId, seenIds: new Set() })
     console.log(
-      `[kommo-poll][dispatcher] warmup lead=${lid} session=${sessionId} lastMsgId=${maxId} mensagens=${messages.length} stats=${JSON.stringify(stats)} elapsed=${list.elapsedMs ?? '?'}ms`,
+      `[kommo-poll][dispatcher] warmup lead=${lid} session=${sessionId} lastMsgId=${warmupCutoffId} (de ${maxId}) freshSec=${freshSec} mensagens=${messages.length} stats=${JSON.stringify(stats)} elapsed=${list.elapsedMs ?? '?'}ms`,
     )
-    recordDispatcherTick({
-      leadId: lid,
-      sessionId,
-      warmedUp: false,
-      messagesTotal: messages.length,
-      stats,
-      freshCount: 0,
-      pushedCount: 0,
-      filteredOutbound: 0,
-      filteredNonText: 0,
-      filteredEmpty: 0,
-      lastMsgId: maxId,
-      pollMode: 'dispatcher',
-      requestUrl: list.requestUrl || null,
-      httpStatus: list.status || null,
-      elapsedMs: list.elapsedMs || null,
-    })
-    return 0
+    // Atualiza o `st` em memória pra o loop abaixo enxergar o novo
+    // lastMsgId. Sem isso, o `fresh.filter` usaria o `st` antigo (com
+    // lastMsgId = 0) e processaria histórico inteiro.
+    st = { warmed: true, lastMsgId: warmupCutoffId, seenIds: new Set() }
+    // CONTINUA pro loop abaixo — não retorna 0 cedo. As mensagens
+    // dentro da janela `freshSec` (id > warmupCutoffId) são tratadas
+    // como fresh e empurradas normalmente. O recordDispatcherTick é
+    // chamado UMA vez no fim com os totais corretos.
   }
 
   const fresh = messages.filter((m) => {
@@ -662,12 +789,57 @@ async function pollDispatcher(env, leadId, sessionId) {
       continue
     }
 
+    // Áudio/voz → Whisper. Empurra a transcrição (com marcador entre
+    // colchetes, igual o webhook Evolution faz, pra IA seguir Rule 15).
+    if (DISPATCHER_VOICE_TYPES.has(messageType)) {
+      try {
+        const transcribed = await transcribeDispatcherVoice(env, m, lid)
+        await pushMessage(env, sessionId, transcribed)
+        pushed += 1
+        st.seenIds.add(mid)
+        maxApplied = Math.max(maxApplied, mid)
+        console.log(
+          `[kommo-poll][dispatcher] +1 voz lead=${lid} session=${sessionId} msgId=${mid} sender="${m?.sender_name || senderType}" sentAt=${m?.sent_at || 'n/a'} text="${transcribed.slice(0, 100)}"`,
+        )
+      } catch (err) {
+        console.error(
+          `[kommo-poll][dispatcher] processar voz falhou lead=${lid} msgId=${mid}: ${err.message}`,
+        )
+        // Mesmo em exceção inesperada, marca como vista pra não ficar
+        // re-tentando infinito a cada tick.
+        st.seenIds.add(mid)
+        maxApplied = Math.max(maxApplied, mid)
+      }
+      continue
+    }
+
+    // Imagem → Vision.
+    if (DISPATCHER_PICTURE_TYPES.has(messageType)) {
+      try {
+        const described = await analyzeDispatcherPicture(env, m, lid)
+        await pushMessage(env, sessionId, described)
+        pushed += 1
+        st.seenIds.add(mid)
+        maxApplied = Math.max(maxApplied, mid)
+        console.log(
+          `[kommo-poll][dispatcher] +1 imagem lead=${lid} session=${sessionId} msgId=${mid} sender="${m?.sender_name || senderType}" sentAt=${m?.sent_at || 'n/a'} text="${described.slice(0, 100)}"`,
+        )
+      } catch (err) {
+        console.error(
+          `[kommo-poll][dispatcher] processar imagem falhou lead=${lid} msgId=${mid}: ${err.message}`,
+        )
+        st.seenIds.add(mid)
+        maxApplied = Math.max(maxApplied, mid)
+      }
+      continue
+    }
+
     if (!DISPATCHER_TEXT_TYPES.has(messageType)) {
       filteredNonText += 1
       st.seenIds.add(mid)
       maxApplied = Math.max(maxApplied, mid)
       console.log(
-        `[kommo-poll][dispatcher] ignorando não-texto lead=${lid} msgId=${mid} type=${messageType} sender=${m?.sender_name || senderType}`,
+        `[kommo-poll][dispatcher] ignorando tipo não suportado lead=${lid} msgId=${mid} type=${messageType} sender=${m?.sender_name || senderType}`,
       )
       continue
     }
