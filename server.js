@@ -15,6 +15,7 @@ import { sendMessageWithNote, sendText, splitMessage } from './server/whatsappSe
 import { generateExecutionId, saveExecution } from './server/ai/executionTelemetry.js'
 import { sendTyping } from './server/evolution/typingIndicator.js'
 import { makeEvolutionWebhookHandler } from './server/evolution/webhookEvolution.js'
+import { transcribeAudioBase64, analyzeImageBase64 } from './server/evolution/openaiMedia.js'
 import { recordWebhookIngress, getWebhookDiagnosticsSnapshot } from './server/evolution/webhookDiagnostics.js'
 import { getKommoPollSnapshot } from './server/kommoInboundDiagnostics.js'
 import { getModelRegistrySnapshot } from './server/ai/modelRegistry.js'
@@ -33,7 +34,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const app = express()
 const PORT = process.env.PORT || 8000
 
-app.use(express.json({ limit: '5mb' }))
+app.use(express.json({ limit: '25mb' }))
 // O webhook do amocrm/Kommo manda como application/x-www-form-urlencoded
 // com chaves em bracket notation (`leads[add][0][id]`). Precisamos de
 // `extended: true` pra Express desserializar isso em objeto aninhado.
@@ -1199,6 +1200,46 @@ app.post('/api/playground/flush', async (req, res) => {
     })
     res.json(result)
   } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// ── Playground: mídia (imagem e áudio) ──
+//    Reusa o mesmo pipeline de média do webhook real (Whisper + GPT-4o vision).
+//    Front manda base64 puro (sem prefixo data:); endpoint devolve texto.
+
+app.post('/api/playground/transcribe', async (req, res) => {
+  try {
+    const { audioBase64, mimeType, filename } = req.body || {}
+    if (!audioBase64) {
+      res.status(400).json({ ok: false, error: 'audioBase64 é obrigatório' })
+      return
+    }
+    const text = await transcribeAudioBase64(process.env, audioBase64, {
+      filename: filename || 'audio.webm',
+      mimeType: mimeType || 'audio/webm',
+    })
+    res.json({ ok: true, text: text || '' })
+  } catch (e) {
+    console.error('[playground][transcribe]', e.message)
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.post('/api/playground/analyze-image', async (req, res) => {
+  try {
+    const { imageBase64, mimeType, prompt } = req.body || {}
+    if (!imageBase64) {
+      res.status(400).json({ ok: false, error: 'imageBase64 é obrigatório' })
+      return
+    }
+    const text = await analyzeImageBase64(process.env, imageBase64, {
+      mimeType: mimeType || 'image/jpeg',
+      prompt: prompt || undefined,
+    })
+    res.json({ ok: true, text: text || '' })
+  } catch (e) {
+    console.error('[playground][analyze-image]', e.message)
     res.status(500).json({ ok: false, error: e.message })
   }
 })

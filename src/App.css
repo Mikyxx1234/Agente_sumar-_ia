@@ -166,6 +166,7 @@ input, textarea, select { font-family: inherit; color: inherit; }
 
 .divider { height: 1px; background: var(--line-subtle); margin: 16px 0; }
 .loader { width: 22px; height: 22px; border: 2px solid var(--line-1); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+.spin { animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .empty { padding: 48px 20px; text-align: center; color: var(--fg-3); font-size: 13px; }
 .empty .empty-icon { color: var(--fg-4); margin-bottom: 8px; opacity: 0.6; }

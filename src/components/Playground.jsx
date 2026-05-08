@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Send, Settings, Trash2, Bot, User, AlertCircle, Key, Sparkles, Check, DollarSign, FileText, MessageSquare, Phone, Clock } from 'lucide-react'
+import { Send, Settings, Trash2, Bot, User, AlertCircle, Key, Sparkles, Check, DollarSign, FileText, MessageSquare, Phone, Clock, Image as ImageIcon, Mic, Square, Loader2, Paperclip } from 'lucide-react'
 import { TOOL_DEFINITIONS, TOOL_EXECUTORS } from '../lib/supabaseSearch'
 import { generateExecutionId, saveExecution } from '../lib/executionStore'
 import { OPENAI_CHAT_MODELS } from '../lib/openaiPricing'
@@ -17,6 +17,21 @@ const WA_SESSION_KEY = 'playground_wa_session'
 function loadChat() {
   try { return JSON.parse(localStorage.getItem(CHAT_STORAGE_KEY)) || [] }
   catch { return [] }
+}
+
+// Lê um File (imagem ou áudio) e devolve só o base64 (sem prefixo data:).
+// Os endpoints /api/playground/{transcribe,analyze-image} esperam base64 puro.
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(reader.error || new Error('Falha ao ler arquivo'))
+    reader.onload = () => {
+      const result = String(reader.result || '')
+      const comma = result.indexOf(',')
+      resolve(comma >= 0 ? result.slice(comma + 1) : result)
+    }
+    reader.readAsDataURL(file)
+  })
 }
 
 function generatePlaygroundSessionId() {
@@ -60,6 +75,20 @@ export default function Playground({ prompts }) {
   const inputRef = useRef(null)
   const flushTimerRef = useRef(null)
   const countdownTimerRef = useRef(null)
+
+  // Mídia (imagem + áudio).
+  // pendingMedia = { kind: 'image'|'audio', dataUrl?, fileName?, processedText, status }
+  // Fica anexada ao próximo handleSend; a IA recebe `processedText` no lugar/junto do `input`.
+  const fileInputRef = useRef(null)
+  const mediaRecorderRef = useRef(null)
+  const audioChunksRef = useRef([])
+  const recordStartRef = useRef(0)
+  const recordTimerRef = useRef(null)
+
+  const [pendingMedia, setPendingMedia] = useState(null)
+  const [mediaProcessing, setMediaProcessing] = useState(false)
+  const [recording, setRecording] = useState(false)
+  const [recordSeconds, setRecordSeconds] = useState(0)
 
   useEffect(() => {
     fetch('/api/evolution/health')
@@ -284,10 +313,130 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
     flushTimerRef.current = setTimeout(() => { runFlush() }, debounceMs)
   }
 
+  // ── Mídia: imagem ──
+  const handleImagePick = async (file) => {
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      setMessages((prev) => [...prev, { role: 'error', content: 'Arquivo selecionado não é uma imagem.' }])
+      return
+    }
+    setMediaProcessing(true)
+    try {
+      const dataUrl = await new Promise((resolve, reject) => {
+        const r = new FileReader()
+        r.onerror = () => reject(r.error)
+        r.onload = () => resolve(String(r.result || ''))
+        r.readAsDataURL(file)
+      })
+      const base64 = await fileToBase64(file)
+      const res = await fetch('/api/playground/analyze-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageBase64: base64, mimeType: file.type || 'image/jpeg' }),
+      })
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`)
+      setPendingMedia({
+        kind: 'image',
+        dataUrl,
+        fileName: file.name || 'imagem',
+        processedText: data.text || '',
+        status: 'ready',
+      })
+    } catch (e) {
+      setMessages((prev) => [...prev, { role: 'error', content: `Falha ao processar imagem: ${e.message}` }])
+    } finally {
+      setMediaProcessing(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
+  // ── Mídia: áudio (gravação via MediaRecorder do navegador) ──
+  const startRecording = async () => {
+    if (recording) return
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      // Tenta webm/opus (mais compatível com Chromium); cai pra default se navegador não aceitar.
+      let mimeType = 'audio/webm;codecs=opus'
+      if (!window.MediaRecorder?.isTypeSupported?.(mimeType)) mimeType = ''
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream)
+      mediaRecorderRef.current = recorder
+      audioChunksRef.current = []
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) audioChunksRef.current.push(e.data)
+      }
+      recorder.onstop = async () => {
+        const tracks = recorder.stream?.getTracks?.() || []
+        tracks.forEach((t) => t.stop())
+        const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' })
+        await processRecordedAudio(blob)
+      }
+      recordStartRef.current = Date.now()
+      setRecordSeconds(0)
+      recordTimerRef.current = setInterval(() => {
+        setRecordSeconds(Math.floor((Date.now() - recordStartRef.current) / 1000))
+      }, 250)
+      recorder.start()
+      setRecording(true)
+    } catch (e) {
+      setMessages((prev) => [...prev, { role: 'error', content: `Falha ao acessar microfone: ${e.message}` }])
+    }
+  }
+
+  const stopRecording = () => {
+    if (!recording) return
+    try { mediaRecorderRef.current?.stop() } catch {}
+    if (recordTimerRef.current) { clearInterval(recordTimerRef.current); recordTimerRef.current = null }
+    setRecording(false)
+  }
+
+  const processRecordedAudio = async (blob) => {
+    setMediaProcessing(true)
+    try {
+      const file = new File([blob], 'audio.webm', { type: blob.type || 'audio/webm' })
+      const base64 = await fileToBase64(file)
+      const res = await fetch('/api/playground/transcribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audioBase64: base64, mimeType: file.type || 'audio/webm', filename: 'audio.webm' }),
+      })
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`)
+      setPendingMedia({
+        kind: 'audio',
+        fileName: 'gravação',
+        processedText: data.text || '',
+        status: 'ready',
+      })
+    } catch (e) {
+      setMessages((prev) => [...prev, { role: 'error', content: `Falha ao transcrever áudio: ${e.message}` }])
+    } finally {
+      setMediaProcessing(false)
+    }
+  }
+
+  const clearPendingMedia = () => setPendingMedia(null)
+
+  // Constrói o "texto efetivo" enviado pra IA quando há mídia anexada.
+  // Se houver input do usuário, ele vira a "legenda" da mídia.
+  // O prefixo replica o formato que o webhook real injeta — assim a Regra 15
+  // do prompt (mídia) é acionada da mesma forma no Playground.
+  const buildEffectiveText = () => {
+    const trimmed = input.trim()
+    if (!pendingMedia || !pendingMedia.processedText) return trimmed
+    if (pendingMedia.kind === 'audio') {
+      const base = `[ÁUDIO TRANSCRITO]: ${pendingMedia.processedText}`
+      return trimmed ? `${base}\n\n[Mensagem digitada junto]: ${trimmed}` : base
+    }
+    // imagem — o texto da Vision JÁ vem com prefixo "[IMAGEM RECEBIDA - ...]:"
+    const base = pendingMedia.processedText
+    return trimmed ? `${base}\n\n[Legenda do lead na imagem]: ${trimmed}` : base
+  }
+
   const handleSend = async () => {
-    const text = input.trim()
-    if (!text || loading) return
-    if (waMode) { handleSendWhatsapp(text); return }
+    const effectiveText = buildEffectiveText()
+    if (!effectiveText || loading) return
+    if (waMode) { handleSendWhatsapp(effectiveText); return }
     if (!apiKey) { setShowConfig(true); return }
 
     const execId = generateExecutionId()
@@ -298,7 +447,7 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
     const execution = {
       id: execId,
       timestamp: new Date().toISOString(),
-      userMessage: text,
+      userMessage: effectiveText,
       model,
       steps: [],
       toolCalls: [],
@@ -309,16 +458,41 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
     }
     const t0 = Date.now()
 
-    const userMsg = { role: 'user', content: text }
-    const updated = [...messages, userMsg]
-    setMessages(updated)
+    // userMsg na UI: mostra metadata da mídia + texto digitado.
+    // No histórico que vai pra OpenAI usamos `effectiveText` (com prefixos);
+    // mas o que aparece na bolha é só o que o usuário "viu enviando".
+    const uiUserMsg = {
+      role: 'user',
+      content: input.trim() || (pendingMedia?.kind === 'image' ? '(imagem)' : pendingMedia?.kind === 'audio' ? '(áudio)' : ''),
+      media: pendingMedia ? {
+        kind: pendingMedia.kind,
+        dataUrl: pendingMedia.dataUrl,
+        fileName: pendingMedia.fileName,
+        processedText: pendingMedia.processedText,
+      } : null,
+    }
+    const apiUserMsg = { role: 'user', content: effectiveText }
+    setMessages((prev) => [...prev, uiUserMsg])
     setInput('')
+    setPendingMedia(null)
     setLoading(true)
     setToolStatus('')
 
+    // O histórico que vai pra OpenAI precisa ter o effectiveText, não a versão UI.
+    // Reconstrói o histórico inteiro mapeando media → effectiveText quando possível.
+    const apiHistory = messages.map((m) => {
+      if (m.role !== 'user' || !m.media) return { role: m.role, content: m.content }
+      const base = m.media.kind === 'audio'
+        ? `[ÁUDIO TRANSCRITO]: ${m.media.processedText || ''}`
+        : (m.media.processedText || '')
+      const cap = (m.content && m.content !== '(imagem)' && m.content !== '(áudio)') ? m.content : ''
+      return { role: 'user', content: cap ? `${base}\n\n[Legenda]: ${cap}` : base }
+    })
+
     const apiMessages = [
       { role: 'system', content: buildSystemMessage() },
-      ...updated,
+      ...apiHistory,
+      apiUserMsg,
     ]
 
     try {
@@ -562,7 +736,34 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
                   </button>
                 )}
               </div>
-              <div className="msg-bubble">{m.content}</div>
+              <div className="msg-bubble">
+                {m.media?.kind === 'image' && m.media?.dataUrl && (
+                  <div style={{ marginBottom: m.content && m.content !== '(imagem)' ? 8 : 0 }}>
+                    <img
+                      src={m.media.dataUrl}
+                      alt={m.media.fileName || 'imagem'}
+                      style={{ maxWidth: 260, maxHeight: 260, borderRadius: 8, display: 'block' }}
+                    />
+                  </div>
+                )}
+                {m.media?.kind === 'audio' && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, opacity: 0.85, marginBottom: m.content && m.content !== '(áudio)' ? 8 : 0 }}>
+                    <Mic size={13} />
+                    <span>Áudio enviado</span>
+                  </div>
+                )}
+                {m.content && m.content !== '(imagem)' && m.content !== '(áudio)' && <span>{m.content}</span>}
+                {m.media?.processedText && (
+                  <details style={{ marginTop: 8, fontSize: 11, opacity: 0.75 }}>
+                    <summary style={{ cursor: 'pointer' }}>
+                      {m.media.kind === 'audio' ? 'Ver transcrição enviada à IA' : 'Ver leitura da imagem enviada à IA'}
+                    </summary>
+                    <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', marginTop: 6, padding: 8, background: 'rgba(0,0,0,0.15)', borderRadius: 6, fontSize: 11 }}>
+                      {m.media.processedText}
+                    </pre>
+                  </details>
+                )}
+              </div>
               {m.waJoined && m.waCount > 1 && (
                 <div className="msg-meta-joined" title="Texto combinado enviado ao agente">
                   Juntado: “{m.waJoined}”
@@ -600,19 +801,102 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
 
       {/* Input */}
       <div className="pg-input-wrap">
+        {pendingMedia && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '8px 10px',
+            marginBottom: 8,
+            background: 'rgba(99,102,241,0.08)',
+            border: '1px solid rgba(99,102,241,0.25)',
+            borderRadius: 8,
+            fontSize: 12,
+          }}>
+            {pendingMedia.kind === 'image' && pendingMedia.dataUrl ? (
+              <img src={pendingMedia.dataUrl} alt="preview" style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 6 }} />
+            ) : (
+              <div style={{ width: 44, height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(99,102,241,0.15)', borderRadius: 6 }}>
+                <Mic size={18} />
+              </div>
+            )}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 600 }}>
+                {pendingMedia.kind === 'image' ? 'Imagem anexada' : 'Áudio anexado'}
+                {pendingMedia.fileName && ` · ${pendingMedia.fileName}`}
+              </div>
+              <div style={{ opacity: 0.7, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {pendingMedia.processedText ? `Lido pela IA: ${pendingMedia.processedText.slice(0, 120)}${pendingMedia.processedText.length > 120 ? '…' : ''}` : 'Sem texto extraído'}
+              </div>
+            </div>
+            <button
+              className="btn-icon"
+              onClick={clearPendingMedia}
+              title="Remover anexo"
+              style={{ flexShrink: 0 }}
+            >
+              <Trash2 size={14} />
+            </button>
+          </div>
+        )}
+        {recording && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '8px 10px',
+            marginBottom: 8,
+            background: 'rgba(239,68,68,0.08)',
+            border: '1px solid rgba(239,68,68,0.3)',
+            borderRadius: 8,
+            fontSize: 12,
+          }}>
+            <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#ef4444', boxShadow: '0 0 0 0 #ef4444', animation: 'pulse 1.5s infinite' }} />
+            <span style={{ flex: 1, fontWeight: 600 }}>Gravando áudio… {recordSeconds}s</span>
+            <button className="btn btn-ghost" onClick={stopRecording}>
+              <Square size={13} />
+              <span>Parar</span>
+            </button>
+          </div>
+        )}
         <div className="pg-input-inner">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            style={{ display: 'none' }}
+            onChange={(e) => handleImagePick(e.target.files?.[0])}
+          />
+          <button
+            className="btn-icon"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={loading || mediaProcessing || recording || !!pendingMedia}
+            title="Anexar imagem"
+            style={{ flexShrink: 0 }}
+          >
+            {mediaProcessing && pendingMedia?.kind !== 'audio' ? <Loader2 size={15} className="spin" /> : <ImageIcon size={15} />}
+          </button>
+          <button
+            className="btn-icon"
+            onClick={recording ? stopRecording : startRecording}
+            disabled={loading || mediaProcessing || !!pendingMedia}
+            title={recording ? 'Parar gravação' : 'Gravar áudio'}
+            style={{ flexShrink: 0, color: recording ? '#ef4444' : undefined }}
+          >
+            {mediaProcessing && pendingMedia?.kind !== 'image' ? <Loader2 size={15} className="spin" /> : recording ? <Square size={15} /> : <Mic size={15} />}
+          </button>
           <textarea
             ref={inputRef}
             rows={1}
-            placeholder="Pergunte algo à IA..."
+            placeholder={pendingMedia ? 'Adicionar legenda (opcional)…' : 'Pergunte algo à IA...'}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
           />
           <button
-            className={`pg-send${input.trim() ? ' ready' : ''}`}
+            className={`pg-send${(input.trim() || pendingMedia) ? ' ready' : ''}`}
             onClick={handleSend}
-            disabled={!input.trim() || loading}
+            disabled={(!input.trim() && !pendingMedia) || loading || mediaProcessing}
           >
             <Send size={15} />
           </button>
@@ -623,6 +907,12 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
           <span style={{ opacity: 0.5 }}>·</span>
           <kbd>Shift + Enter</kbd>
           <span>quebrar linha</span>
+          <span style={{ opacity: 0.5 }}>·</span>
+          <Paperclip size={11} />
+          <span>imagem</span>
+          <span style={{ opacity: 0.5 }}>·</span>
+          <Mic size={11} />
+          <span>áudio</span>
         </div>
       </div>
     </div>

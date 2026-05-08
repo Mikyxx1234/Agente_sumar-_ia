@@ -11,7 +11,22 @@ import { resolveModel } from '../ai/modelRegistry.js'
 const TRANSCRIBE_URL = 'https://api.openai.com/v1/audio/transcriptions'
 const CHAT_URL = 'https://api.openai.com/v1/chat/completions'
 
-const DEFAULT_IMAGE_PROMPT = 'Analise essa imagem e resuma pra mim o que ela é'
+// Prompt antigo era "Analise essa imagem e resuma pra mim o que ela é"
+// — genérico demais. Pra atendimento comercial educacional, o lead
+// costuma mandar foto de notas ENEM, histórico escolar, boletim, RG,
+// captura de outro chat. O orquestrador precisa do CONTEÚDO TEXTUAL
+// (notas, datas, valores) pra responder; uma descrição visual genérica
+// faz a IA não saber o que fazer e ficar muda.
+const DEFAULT_IMAGE_PROMPT = `Você está ajudando um atendente comercial de uma faculdade brasileira a entender uma imagem que um lead enviou pelo WhatsApp.
+
+TAREFAS (em ordem):
+1. CLASSIFIQUE o tipo da imagem: notas/boletim do ENEM, histórico escolar, declaração/diploma, RG/CNH, comprovante de residência, captura de tela de outra conversa, foto pessoal, captura de site, ou outro.
+2. EXTRAIA todo texto legível literalmente, preservando os números. Cole tudo em formato fácil de ler. Se houver tabela (ex.: notas ENEM por matéria), use formato "Matéria: Nota".
+3. Se for documento educacional (ENEM, histórico, boletim), além das notas, registre o ano da prova/curso, nome do candidato e pontuação total/média se visíveis.
+4. Se for screenshot de outro chat, transcreva as mensagens preservando quem falou.
+5. Se NÃO houver texto legível ou a imagem estiver muito borrada, descreva o que está visível e diga que a leitura ficou parcial.
+
+RESPONDA em português, em texto corrido, em até 8 linhas, com TUDO que o atendente precisa pra continuar o atendimento. NÃO use JSON, listas com bullets ou markdown. Comece a resposta com "[IMAGEM RECEBIDA - <tipo>]: " seguido do conteúdo extraído.`
 
 function b64ToBuffer(b64) {
   if (!b64 || typeof b64 !== 'string') throw new Error('Base64 ausente ou inválido')
@@ -55,7 +70,9 @@ export async function analyzeImageBase64(env, b64, opts = {}) {
   const apiKey = requireApiKey(env)
   const model = opts.model || resolveModel(env, 'vision')
   const prompt = opts.prompt || DEFAULT_IMAGE_PROMPT
-  const mimeType = opts.mimeType || 'image/png'
+  // WhatsApp manda quase sempre JPEG. PNG era default antigo e funcionava
+  // por sorte (a OpenAI tolera mismatch leve), mas é mais seguro o real.
+  const mimeType = opts.mimeType || 'image/jpeg'
 
   const clean = String(b64 || '').replace(/^data:[^;]+;base64,/, '')
   if (!clean) throw new Error('Imagem base64 ausente')
@@ -74,11 +91,13 @@ export async function analyzeImageBase64(env, b64, opts = {}) {
           role: 'user',
           content: [
             { type: 'text', text: prompt },
-            { type: 'image_url', image_url: { url: dataUrl } },
+            // detail: 'high' melhora OCR de texto pequeno (notas ENEM têm
+            // tabela densa). Custo ~3x do padrão mas vale pra documentos.
+            { type: 'image_url', image_url: { url: dataUrl, detail: 'high' } },
           ],
         },
       ],
-      max_tokens: 500,
+      max_tokens: 1200,
     }),
   })
   if (!res.ok) {

@@ -213,17 +213,50 @@ async function extractMessageText(env, payload, messageType) {
 
     case 'audioMessage': {
       const b64 = getBase64(payload)
-      if (!b64) return ''
-      return transcribeAudioBase64(env, b64, { filename: 'file.ogg', mimeType: 'audio/ogg' })
+      if (!b64) return '[ÁUDIO RECEBIDO mas sem base64 no payload — peça ao lead pra reenviar.]'
+      try {
+        const txt = await transcribeAudioBase64(env, b64, { filename: 'file.ogg', mimeType: 'audio/ogg' })
+        if (!txt || !txt.trim()) {
+          return '[ÁUDIO RECEBIDO mas a transcrição ficou vazia — confirme com o lead se ele pode reenviar ou digitar a mensagem.]'
+        }
+        // Marca explicitamente que veio de áudio pra a IA poder
+        // se referir a "o que você disse" sem alucinar.
+        return `[ÁUDIO TRANSCRITO]: ${txt.trim()}`
+      } catch (e) {
+        console.error('[Evolution][audio] falha na transcrição:', e.message)
+        return '[ÁUDIO RECEBIDO mas houve falha técnica na transcrição — peça ao lead pra reenviar ou digitar a mensagem.]'
+      }
     }
 
     case 'imageMessage': {
       const b64 = getBase64(payload)
-      if (!b64) return ''
       const caption = getImageCaption(payload).trim()
-      const analysis = await analyzeImageBase64(env, b64, { mimeType: 'image/png' })
-      const clean = analysis.replace(/\n/g, ' ').replace(/['"]/g, '').trim()
-      return caption ? `${caption}, ${clean}` : clean
+      if (!b64) {
+        // Sem base64 a Vision não roda — mas a IA precisa SABER que
+        // recebeu uma imagem pra responder algo (sem isso ela ficava
+        // muda, caso real visto na conversa de notas ENEM).
+        return caption
+          ? `[IMAGEM RECEBIDA mas o conteúdo não foi processado tecnicamente. Legenda enviada pelo lead: "${caption}". Peça desculpas e diga que vai pedir pra um consultor analisar a imagem.]`
+          : '[IMAGEM RECEBIDA mas o conteúdo não foi processado tecnicamente. Peça desculpas e diga que vai pedir pra um consultor analisar a imagem.]'
+      }
+      try {
+        const analysis = await analyzeImageBase64(env, b64, { mimeType: 'image/jpeg' })
+        // NÃO removemos quebras de linha agora — a leitura de notas ENEM
+        // fica muito melhor com formatação mantida. O orquestrador lida
+        // bem com texto multi-linha.
+        const clean = String(analysis || '').trim()
+        if (!clean) {
+          return caption
+            ? `[IMAGEM RECEBIDA mas a análise visual ficou vazia. Legenda do lead: "${caption}".]`
+            : '[IMAGEM RECEBIDA mas a análise visual ficou vazia. Peça ao lead pra reenviar ou descrever em texto.]'
+        }
+        return caption ? `${clean}\n\n[Legenda do lead na imagem]: ${caption}` : clean
+      } catch (e) {
+        console.error('[Evolution][image] falha na análise:', e.message)
+        return caption
+          ? `[IMAGEM RECEBIDA mas houve falha técnica ao analisá-la. Legenda do lead: "${caption}". Diga que vai pedir pra um consultor olhar.]`
+          : '[IMAGEM RECEBIDA mas houve falha técnica ao analisá-la. Diga que vai pedir pra um consultor olhar.]'
+      }
     }
 
     default:
