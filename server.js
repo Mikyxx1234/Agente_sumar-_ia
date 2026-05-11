@@ -1233,6 +1233,196 @@ async function handleUrlMediaTest(req, res) {
 app.get('/api/media/url-test', handleUrlMediaTest)
 app.post('/api/media/url-test', handleUrlMediaTest)
 
+// ── /api/agent/diagnose ──
+//
+// Diagnóstico ponta-a-ponta de UM lead específico. Foi feito pra
+// resolver "mandei áudio, IA não respondeu, e agora?".
+// Devolve, em uma única chamada:
+//   1) Config do scheduler (pipeline/status alvo, intervalo, está rodando?).
+//   2) Últimas N mensagens do `banco-kommo-dispatcher` pro lead, com
+//      message_type, media_url e sent_at — mostra se o áudio chegou
+//      no cache da fonte.
+//   3) Pra cada mensagem `voice`/`audio`/`picture` recente, faz um
+//      teste de download da media_url (sem rodar Whisper/Vision, só
+//      pra validar se a URL é acessível e quanto pesa).
+//   4) Snapshot do buffer atual da sessão WhatsApp construída a
+//      partir do telefone informado (se for, mostra quantas mensagens
+//      estão pendentes esperando o flush do scheduler).
+//
+//   GET /api/agent/diagnose?leadId=19884275&phone=5511999999999&limit=10
+//
+// `phone` é opcional — se passar, a gente também mostra o buffer
+// pra essa sessão.
+app.get('/api/agent/diagnose', async (req, res) => {
+  const leadId = Number(req.query.leadId)
+  if (!Number.isFinite(leadId) || leadId <= 0) {
+    res.status(400).json({
+      ok: false,
+      error: 'leadId é obrigatório. Ex.: /api/agent/diagnose?leadId=19884275&phone=5511...',
+      hint: 'Pegue o ID na URL do lead no Kommo: https://<conta>.kommo.com/leads/detail/<ID>',
+    })
+    return
+  }
+  const limit = Math.min(30, Math.max(1, Number(req.query.limit) || 10))
+  const phone = String(req.query.phone || '').replace(/[^0-9]/g, '')
+
+  const env = process.env
+  const out = {
+    ok: true,
+    leadId,
+    phone: phone || null,
+    timestamp: new Date().toISOString(),
+    scheduler: {
+      running: isSchedulerRunning(),
+      intervalSec: Number(env.KOMMO_SCHEDULER_INTERVAL_SEC) || 10,
+      debounceSec: Number(env.KOMMO_SCHEDULER_DEBOUNCE_SEC) || 5,
+      pipelineId: env.KOMMO_AGENT_PIPELINE_ID || null,
+      statusId: env.KOMMO_AGENT_STATUS_ID || null,
+      enabledFlag: env.KOMMO_SCHEDULER_ENABLED ?? null,
+      testWhitelist: env.KOMMO_AGENT_TEST_LEAD_IDS || null,
+      inboundPollEnabled: String(env.KOMMO_INBOUND_POLL_ENABLED || 'false').toLowerCase() === 'true',
+      inboundPollMode: env.KOMMO_INBOUND_POLL_MODE || 'notes (default)',
+      warmupFreshSec: env.KOMMO_INBOUND_WARMUP_FRESH_SEC || '120 (default)',
+    },
+    secrets: {
+      kommoConfigured: Boolean(env.KOMMO_BASE_URL && env.KOMMO_ACCESS_TOKEN),
+      dispatcherUrl: env.KOMMO_DISPATCHER_URL || 'http://banco-kommo-dispatcher:8000',
+      whatsappTokenSet: Boolean(env.WHATSAPP_ACCESS_TOKEN),
+      openaiKeySet: Boolean(env.OPENAI_API_KEY),
+      evolutionConfigured: Boolean(
+        env.EVOLUTION_API_URL && env.EVOLUTION_API_KEY && (env.EVOLUTION_INSTANCE || env.EVOLUTION_INSTANCE_NAME),
+      ),
+    },
+    dispatcher: {
+      ok: false,
+      messagesTotal: 0,
+      messages: [],
+      mediaTests: [],
+      hint: null,
+    },
+    buffer: null,
+    nextSteps: [],
+  }
+
+  // 1) Dispatcher: ver o que tem cacheado pro lead.
+  try {
+    const r = await dispatcherGetMessagesByLead(env, leadId, { limit, order: 'desc' })
+    if (!r.ok) {
+      out.dispatcher.ok = false
+      out.dispatcher.error = r.error
+      out.dispatcher.status = r.status || null
+      out.dispatcher.elapsedMs = r.elapsedMs || null
+      out.dispatcher.hint =
+        'O banco-kommo-dispatcher não respondeu. Verifique se KOMMO_DISPATCHER_URL aponta pro serviço certo dentro do EasyPanel.'
+    } else {
+      out.dispatcher.ok = true
+      out.dispatcher.messagesTotal = (r.messages || []).length
+      out.dispatcher.elapsedMs = r.elapsedMs || null
+      const slim = (r.messages || []).map((m) => ({
+        id: m.id,
+        sender_type: m.sender_type,
+        sender_name: m.sender_name,
+        message_type: m.message_type,
+        message_text: (m.message_text || '').slice(0, 120),
+        media_url: m.media_url || null,
+        sent_at: m.sent_at,
+        origin: m.origin,
+      }))
+      out.dispatcher.messages = slim
+
+      // 2) Teste de download em mídias recentes (até 3 pra não estourar tempo).
+      const mediaMessages = slim
+        .filter((m) => {
+          const t = String(m.message_type || '').toLowerCase()
+          return ['voice', 'audio', 'picture', 'image'].includes(t) && m.media_url
+        })
+        .slice(0, 3)
+      for (const m of mediaMessages) {
+        const dl = await downloadUrlAsBase64(env, m.media_url)
+        out.dispatcher.mediaTests.push({
+          msgId: m.id,
+          type: m.message_type,
+          url: m.media_url,
+          ok: dl.ok,
+          status: dl.status || null,
+          code: dl.code || null,
+          bytes: dl.bytes || null,
+          mimeType: dl.mimeType || null,
+          attempts: dl.attempts || [],
+          error: dl.ok ? null : dl.error,
+          elapsedMs: dl.elapsedMs || null,
+        })
+      }
+    }
+  } catch (e) {
+    out.dispatcher.ok = false
+    out.dispatcher.error = e.message
+  }
+
+  // 3) Buffer atual da sessão (precisa do phone pra resolver session).
+  if (phone) {
+    try {
+      const { phoneToWhatsAppSessionId } = await import('./server/phoneWhatsApp.js')
+      const sessionId = phoneToWhatsAppSessionId(phone)
+      if (sessionId) {
+        const msgs = await getMessages(env, sessionId)
+        out.buffer = {
+          sessionId,
+          pendingCount: msgs.length,
+          messages: msgs.slice(0, 20).map((s) => (typeof s === 'string' ? s.slice(0, 200) : s)),
+        }
+      } else {
+        out.buffer = { error: 'phone não resolveu sessionId válido' }
+      }
+    } catch (e) {
+      out.buffer = { error: e.message }
+    }
+  }
+
+  // 4) Gerar `nextSteps` com base nos achados — fala em humano o que checar.
+  if (!out.scheduler.pipelineId || !out.scheduler.statusId) {
+    out.nextSteps.push(
+      'CRITICO: KOMMO_AGENT_PIPELINE_ID e KOMMO_AGENT_STATUS_ID não estão setados — scheduler nunca vai responder ninguém. Defina no env do EasyPanel e reinicie.',
+    )
+  }
+  if (!out.scheduler.running) {
+    out.nextSteps.push(
+      'Scheduler NÃO está rodando neste processo. Verifique o KOMMO_SCHEDULER_ENABLED e se KOMMO_BASE_URL/KOMMO_ACCESS_TOKEN estão setados.',
+    )
+  }
+  if (!out.scheduler.inboundPollEnabled) {
+    out.nextSteps.push(
+      'KOMMO_INBOUND_POLL_ENABLED não está true. Sem isso o scheduler NÃO consulta o dispatcher e mensagens que não passam pela Evolution não chegam no buffer. Set true e redeploy.',
+    )
+  }
+  if (out.scheduler.inboundPollMode !== 'dispatcher' && out.scheduler.inboundPollMode !== 'all') {
+    out.nextSteps.push(
+      `KOMMO_INBOUND_POLL_MODE atual: "${out.scheduler.inboundPollMode}". Pra o cenário Kommo+áudio recomendamos "dispatcher".`,
+    )
+  }
+  if (!out.secrets.openaiKeySet) {
+    out.nextSteps.push('OPENAI_API_KEY não setada — Whisper não vai rodar.')
+  }
+  if (out.dispatcher.ok && out.dispatcher.messagesTotal === 0) {
+    out.nextSteps.push(
+      'Dispatcher devolveu 0 mensagens pro lead. Ou o lead ID está errado, ou o banco-kommo-dispatcher ainda não sincronizou. Tente /api/kommo-dispatcher/probe?path=/health.',
+    )
+  }
+  const failedMedia = out.dispatcher.mediaTests.filter((m) => !m.ok)
+  if (failedMedia.length > 0) {
+    out.nextSteps.push(
+      `Falhou em baixar ${failedMedia.length} mídia(s). Veja o campo .dispatcher.mediaTests — provavelmente a URL precisa de auth diferente ou o token (WHATSAPP_ACCESS_TOKEN / KOMMO_ACCESS_TOKEN) está faltando.`,
+    )
+  }
+  if (out.nextSteps.length === 0) {
+    out.nextSteps.push(
+      'Tudo parece OK por aqui. Olhe os logs do EasyPanel filtrando por "[kommo-poll][dispatcher]" pra ver se a transcrição aparece. Se nada aparecer, é sinal de que o scheduler não está pegando este lead — confira se ele está realmente no pipeline+status configurados.',
+    )
+  }
+
+  res.json(out)
+})
+
 // Dispara um tick do scheduler imediatamente (útil para teste).
 app.post('/api/scheduler/tick', async (_req, res) => {
   try {
