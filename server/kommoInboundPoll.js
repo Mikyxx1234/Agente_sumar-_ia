@@ -574,6 +574,35 @@ const DISPATCHER_VOICE_TYPES = new Set(['voice', 'audio'])
 const DISPATCHER_PICTURE_TYPES = new Set(['picture', 'image'])
 
 /**
+ * Mapeia mimetype/URL → nome de arquivo com extensão correta.
+ * Whisper API usa a EXTENSÃO do filename pra detectar o formato; se a
+ * gente mandar conteúdo .m4a com nome .ogg, ele tenta decodificar
+ * como ogg e estoura. Kommo costuma servir .m4a (audio/mp4) pra
+ * gravações da Cloud API.
+ */
+function deriveAudioFilename(mimeType, urlOrName) {
+  const m = String(mimeType || '').toLowerCase()
+  if (m.includes('m4a')) return 'voice.m4a'
+  if (m.includes('mp4') || m.includes('aac')) return 'voice.m4a'
+  if (m.includes('mp3') || m.includes('mpeg')) return 'voice.mp3'
+  if (m.includes('webm')) return 'voice.webm'
+  if (m.includes('wav')) return 'voice.wav'
+  if (m.includes('flac')) return 'voice.flac'
+  if (m.includes('ogg') || m.includes('opus')) return 'voice.ogg'
+  // Fallback: tenta achar uma extensão na URL/nome (ex.: .../file.m4a).
+  const s = String(urlOrName || '')
+  const match = s.match(/\.([a-z0-9]{2,4})(?:\?|$)/i)
+  if (match) {
+    const ext = match[1].toLowerCase()
+    if (['m4a', 'mp3', 'mp4', 'mpeg', 'mpga', 'ogg', 'wav', 'webm', 'flac'].includes(ext)) {
+      return `voice.${ext}`
+    }
+  }
+  // Última opção — ogg cobre o caso Baileys/WhatsApp Cloud direto.
+  return 'voice.ogg'
+}
+
+/**
  * Processa uma mensagem de áudio do dispatcher: baixa via media_url,
  * transcreve com Whisper, devolve texto pronto pra empurrar no buffer.
  * Garante que SEMPRE devolve algum texto — mesmo em falha — pra IA não
@@ -592,12 +621,13 @@ async function transcribeDispatcherVoice(env, msg, leadId) {
     )
     return '[ÁUDIO RECEBIDO mas o download falhou — peça desculpas e diga que vai pedir pra um consultor escutar ou peça pro lead reenviar/digitar a mensagem.]'
   }
+  const filename = deriveAudioFilename(dl.mimeType, url)
   console.log(
-    `[kommo-poll][dispatcher] download voice OK lead=${leadId} msgId=${msg?.id} ${dl.bytes}B mime=${dl.mimeType || 'n/a'} via ${(dl.attempts || []).join(',')}`,
+    `[kommo-poll][dispatcher] download voice OK lead=${leadId} msgId=${msg?.id} ${dl.bytes}B mime=${dl.mimeType || 'n/a'} filename=${filename} via ${(dl.attempts || []).join(',')}`,
   )
   try {
     const txt = await transcribeAudioBase64(env, dl.base64, {
-      filename: 'voice.ogg',
+      filename,
       mimeType: dl.mimeType || 'audio/ogg',
     })
     if (!txt || !txt.trim()) {
@@ -606,7 +636,7 @@ async function transcribeDispatcherVoice(env, msg, leadId) {
     return `[ÁUDIO TRANSCRITO]: ${txt.trim()}`
   } catch (e) {
     console.error(
-      `[kommo-poll][dispatcher] whisper falhou lead=${leadId} msgId=${msg?.id}: ${e.message}`,
+      `[kommo-poll][dispatcher] whisper falhou lead=${leadId} msgId=${msg?.id} filename=${filename} mime=${dl.mimeType || 'n/a'}: ${e.message}`,
     )
     return '[ÁUDIO RECEBIDO mas houve falha técnica na transcrição — peça desculpas e diga que vai pedir pra um consultor escutar.]'
   }
