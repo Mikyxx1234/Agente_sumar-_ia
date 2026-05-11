@@ -182,6 +182,26 @@ function getBase64(payload) {
 }
 
 /**
+ * Quando o scheduler está em modo `dispatcher` (ou `all`) ele puxa
+ * áudio/imagem direto do `banco-kommo-dispatcher`. Nesse caso, se o
+ * webhook Evolution falhar em processar a mídia, NÃO devemos empurrar
+ * um marcador de falha no buffer — senão a IA recebe DUAS entradas
+ * (transcrição real vinda do dispatcher + "houve falha técnica" do
+ * webhook) e responde uma mistura confusa pro lead (caso real visto
+ * em conversa: "Desculpe, houve uma falha técnica… Sobre o curso de
+ * Administração, R$ 128…").
+ *
+ * Sem dispatcher ativo, mantemos o marcador pra IA pelo menos
+ * reconhecer que veio áudio (Rule 15 do prompt).
+ */
+function isDispatcherPathAvailable(env) {
+  const enabled = String(env.KOMMO_INBOUND_POLL_ENABLED || '').toLowerCase()
+  if (enabled !== 'true' && enabled !== '1' && enabled !== 'yes') return false
+  const mode = String(env.KOMMO_INBOUND_POLL_MODE || 'notes').toLowerCase()
+  return mode === 'dispatcher' || mode === 'all'
+}
+
+/**
  * Devolve o base64 da mídia. Fluxo:
  *   1) Procura inline no payload (Baileys ou Evolution com `download` ligado).
  *   2) Se não achou, baixa via Evolution `/chat/getBase64FromMediaMessage`.
@@ -267,11 +287,18 @@ async function extractMessageText(env, payload, messageType) {
 
     case 'audioMessage': {
       const { base64: b64 } = await resolveMediaBase64(env, payload, 'audio')
+      const dispatcherActive = isDispatcherPathAvailable(env)
       if (!b64) {
-        // Mantemos o marcador entre colchetes pra a IA SEMPRE saber
-        // que veio um áudio (Rule 15 do prompt). Sem isso, o
-        // orquestrador respondia como se nada tivesse chegado e o
-        // cliente ficava sem retorno (caso reportado pelo operador).
+        if (dispatcherActive) {
+          // Silêncio: o pollDispatcher vai pegar o áudio via media_url
+          // no próximo tick do scheduler e transcrever certinho. Sem
+          // isso a IA recebia "áudio falhou" + transcrição real e
+          // pedia desculpa por erro técnico que não existiu.
+          console.log(
+            `[Evolution][audio] sem base64 e dispatcher ativo — pulando push (dispatcher cuidará)`,
+          )
+          return ''
+        }
         return '[ÁUDIO RECEBIDO mas não foi possível baixar o conteúdo. Peça desculpas e diga que vai pedir pra um consultor escutar — ou peça pro lead reenviar/digitar a mensagem.]'
       }
       try {
@@ -279,13 +306,23 @@ async function extractMessageText(env, payload, messageType) {
         // Whisper aceita ogg sem o `codecs=`.
         const txt = await transcribeAudioBase64(env, b64, { filename: 'file.ogg', mimeType: 'audio/ogg' })
         if (!txt || !txt.trim()) {
+          if (dispatcherActive) {
+            console.log(`[Evolution][audio] transcrição vazia e dispatcher ativo — pulando push`)
+            return ''
+          }
           return '[ÁUDIO RECEBIDO mas a transcrição ficou vazia — confirme com o lead se ele pode reenviar ou digitar a mensagem.]'
         }
         // Marca explicitamente que veio de áudio pra a IA poder
-        // se referir a "o que você disse" sem alucinar.
+        // se referir a "o que você disse" sem alucinar. Se o dispatcher
+        // empurrar a mesma transcrição no próximo tick, o
+        // ingestDedupe (hash do texto) descarta o duplicado.
         return `[ÁUDIO TRANSCRITO]: ${txt.trim()}`
       } catch (e) {
         console.error('[Evolution][audio] falha na transcrição:', e.message)
+        if (dispatcherActive) {
+          console.log(`[Evolution][audio] erro na transcrição e dispatcher ativo — pulando push`)
+          return ''
+        }
         return '[ÁUDIO RECEBIDO mas houve falha técnica na transcrição — peça ao lead pra reenviar ou digitar a mensagem.]'
       }
     }
@@ -293,7 +330,14 @@ async function extractMessageText(env, payload, messageType) {
     case 'imageMessage': {
       const { base64: b64 } = await resolveMediaBase64(env, payload, 'image')
       const caption = getImageCaption(payload).trim()
+      const dispatcherActive = isDispatcherPathAvailable(env)
       if (!b64) {
+        if (dispatcherActive) {
+          console.log(
+            `[Evolution][image] sem base64 e dispatcher ativo — pulando push (dispatcher cuidará)`,
+          )
+          return ''
+        }
         // Sem base64 a Vision não roda — mas a IA precisa SABER que
         // recebeu uma imagem pra responder algo (sem isso ela ficava
         // muda, caso real visto na conversa de notas ENEM).
@@ -308,6 +352,10 @@ async function extractMessageText(env, payload, messageType) {
         // bem com texto multi-linha.
         const clean = String(analysis || '').trim()
         if (!clean) {
+          if (dispatcherActive) {
+            console.log(`[Evolution][image] análise vazia e dispatcher ativo — pulando push`)
+            return ''
+          }
           return caption
             ? `[IMAGEM RECEBIDA mas a análise visual ficou vazia. Legenda do lead: "${caption}".]`
             : '[IMAGEM RECEBIDA mas a análise visual ficou vazia. Peça ao lead pra reenviar ou descrever em texto.]'
@@ -315,6 +363,10 @@ async function extractMessageText(env, payload, messageType) {
         return caption ? `${clean}\n\n[Legenda do lead na imagem]: ${caption}` : clean
       } catch (e) {
         console.error('[Evolution][image] falha na análise:', e.message)
+        if (dispatcherActive) {
+          console.log(`[Evolution][image] erro na análise e dispatcher ativo — pulando push`)
+          return ''
+        }
         return caption
           ? `[IMAGEM RECEBIDA mas houve falha técnica ao analisá-la. Legenda do lead: "${caption}". Diga que vai pedir pra um consultor olhar.]`
           : '[IMAGEM RECEBIDA mas houve falha técnica ao analisá-la. Diga que vai pedir pra um consultor olhar.]'
