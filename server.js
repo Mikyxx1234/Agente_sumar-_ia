@@ -705,11 +705,12 @@ app.get('/api/kommo-dispatcher/probe', async (req, res) => {
 })
 
 // Inspeção do poll Kommo (events): lista eventos brutos do log para um lead/contato.
-// Útil para descobrir se a integração de WhatsApp emite eventos de chat no log v4.
+// No browser use a URL completa do backend, ex.:
+//   http://localhost:8000/api/kommo/poll/events?leadId=19884275&hours=48&types=*
+// Em produção troque pelo host público (Easypanel / domínio) + mesma path e query.
 //
-//   GET /api/kommo/poll/events?leadId=19884275&hours=72                (default: incoming+outgoing chat)
+//   GET /api/kommo/poll/events?leadId=19884275&hours=72&types=incoming_chat_message,outgoing_chat_message
 //   GET /api/kommo/poll/events?leadId=19884275&hours=72&types=*        (* = sem filtro de tipo, lista TUDO)
-//   GET /api/kommo/poll/events?leadId=19884275&hours=72&types=incoming_chat_message,incoming_message,chat_message_added
 //   GET /api/kommo/poll/events?entity=contact&entityId=12345&hours=72  (eventos no contato em vez do lead)
 app.get('/api/kommo/poll/events', async (req, res) => {
   try {

@@ -21,6 +21,7 @@ const bootAt = Date.now()
  *   filteredByType: number,
  *   filteredEmpty: number,
  *   filteredOutbound: number,
+ *   filteredCrmSummary: number,
  *   filteredOtherPhone: number,
  *   lastNoteId: number,
  *   pollMode: string,
@@ -173,7 +174,7 @@ export function formatPollDiagLine(leadId) {
   if (!s.warmedUp) {
     return `[poll-kommo][diag] lead=${lid} warmup há ${ago}s — só mensagens NOVAS depois disso entram no buffer | notas existentes=${s.notesTotal} tipos=${types}`
   }
-  const filtered = `filtradas: tipo=${s.filteredByType} vazias=${s.filteredEmpty} saída=${s.filteredOutbound} outroTel=${s.filteredOtherPhone}`
+  const filtered = `filtradas: tipo=${s.filteredByType} vazias=${s.filteredEmpty} saída=${s.filteredOutbound} resumoCRM=${s.filteredCrmSummary ?? 0} outroTel=${s.filteredOtherPhone}`
   let hint = ''
   const types2 = s.typeCounts || {}
   const onlyCommon =

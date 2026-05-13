@@ -348,6 +348,9 @@ export async function getTalkById(env, talkId) {
  * @param {{ types?: string[], fromTs?: number, limit?: number, entity?: 'lead'|'contact', entityId?: number|string }} [opts]
  * @returns {Promise<{ ok: boolean, events: any[], status?: number, error?: string, requestUrl?: string }>}
  */
+/** Tipos que o endpoint GET /api/v4/events rejeita em filter[type] (400 Invalid params). */
+const KOMMO_EVENTS_UNSUPPORTED_FILTER_TYPES = new Set(['incoming_message'])
+
 export async function listLeadEvents(env, leadId, opts = {}) {
   const lid = Number(leadId)
   const entityIdRaw = opts.entityId != null ? Number(opts.entityId) : lid
@@ -356,9 +359,21 @@ export async function listLeadEvents(env, leadId, opts = {}) {
   }
   const entity = String(opts.entity || 'lead').trim().toLowerCase() === 'contact' ? 'contact' : 'lead'
   // types vazio (array vazio) = sem filtro de tipo
-  const typesArr = Array.isArray(opts.types)
+  let typesArr = Array.isArray(opts.types)
     ? opts.types.map((t) => String(t).trim().toLowerCase()).filter(Boolean)
     : ['incoming_chat_message']
+  if (typesArr.length > 0) {
+    const dropped = typesArr.filter((t) => KOMMO_EVENTS_UNSUPPORTED_FILTER_TYPES.has(t))
+    if (dropped.length) {
+      console.warn(
+        `[kommoClient] listLeadEvents: ignorando tipo(s) não aceitos em filter[type] (Kommo 400): ${dropped.join(', ')}`,
+      )
+    }
+    typesArr = typesArr.filter((t) => !KOMMO_EVENTS_UNSUPPORTED_FILTER_TYPES.has(t))
+    if (typesArr.length === 0) {
+      typesArr = ['incoming_chat_message']
+    }
+  }
   const limit = Math.min(250, Math.max(1, Number(opts.limit) || 50))
   const fromTs = Number(opts.fromTs) > 0 ? Math.floor(Number(opts.fromTs)) : 0
 

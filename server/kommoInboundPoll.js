@@ -239,6 +239,28 @@ function isAgentOutboundEcho(text) {
   return AGENT_OUTBOUND_SUFFIX.test(String(text || ''))
 }
 
+/**
+ * Notas `common` de integração / CRM costumam ser resumos em 3ª pessoa ("O candidato realizou…",
+ * "O assistente forneceu…") — não são texto digitado pelo lead no WhatsApp.
+ * Desligue com KOMMO_INBOUND_POLL_SKIP_CRM_SUMMARY_COMMON=false.
+ */
+function isLikelyCrmSummaryCommonNote(text, env) {
+  const off = String(env.KOMMO_INBOUND_POLL_SKIP_CRM_SUMMARY_COMMON ?? 'true').trim().toLowerCase()
+  if (off === 'false' || off === '0' || off === 'no') return false
+  const s = String(text || '').trim()
+  if (s.length < 140) return false
+  const head = s.slice(0, 600)
+  const low = head.toLowerCase()
+  if (/^o candidato\s+(realizou|fez|demonstrou|solicitou|enviou)\b/i.test(s)) return true
+  if (/\bo candidato realizou diversas consultas\b/i.test(low)) return true
+  if (/\bdiversas consultas sobre (preços|informações)\b/i.test(low)) return true
+  if (/\bo assistente\s+(forneceu|informou|respondeu|opinou)\b/i.test(low)) return true
+  if (/houve também tentativas do candidato\b/i.test(low)) return true
+  if (/todas registradas com sucesso e com promessa de contato de consultores\b/i.test(low))
+    return true
+  return false
+}
+
 const SUFFIX_PATTERNS = [
   /-\s+EX-\d{6}-\d{4}-\d{3}\s*$/,
   /-\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/,
@@ -270,6 +292,9 @@ function classifyInboundNote(n, env, contactDigits, types) {
   }
   if (String(n.note_type || '').toLowerCase() === 'common' && isAgentOutboundEcho(rawText)) {
     return { kind: 'skip', reason: 'echo', advance: true, nid }
+  }
+  if (String(n.note_type || '').toLowerCase() === 'common' && isLikelyCrmSummaryCommonNote(rawText, env)) {
+    return { kind: 'skip', reason: 'crm_summary', advance: true, nid }
   }
   const text = stripExecutionSuffix(rawText)
   if (!text) {
@@ -447,6 +472,7 @@ async function pollNotes(env, leadId, sessionId, contactDigits) {
       filteredEmpty: 0,
       filteredOutbound: 0,
       filteredOtherPhone: 0,
+      filteredCrmSummary: 0,
       lastNoteId: st.lastNoteId,
       pollMode: 'notes',
       error: String(list.error || list.status || 'unknown'),
@@ -488,6 +514,7 @@ async function pollNotes(env, leadId, sessionId, contactDigits) {
       filteredEmpty: 0,
       filteredOutbound: 0,
       filteredOtherPhone: 0,
+      filteredCrmSummary: 0,
       lastNoteId: maxId,
       pollMode: 'notes',
     })
@@ -501,6 +528,7 @@ async function pollNotes(env, leadId, sessionId, contactDigits) {
   let filteredEmpty = 0
   let filteredOutbound = 0
   let filteredOtherPhone = 0
+  let filteredCrmSummary = 0
   for (const n of asc) {
     const nid = Number(n.id)
     const c = classifyInboundNote(n, env, contactDigits, types)
@@ -518,6 +546,8 @@ async function pollNotes(env, leadId, sessionId, contactDigits) {
       filteredEmpty += 1
     } else if (c.reason === 'other_phone') {
       filteredOtherPhone += 1
+    } else if (c.reason === 'crm_summary') {
+      filteredCrmSummary += 1
     }
     if (c.advance) {
       maxApplied = Math.max(maxApplied, nid)
@@ -551,26 +581,31 @@ async function pollNotes(env, leadId, sessionId, contactDigits) {
     filteredEmpty,
     filteredOutbound,
     filteredOtherPhone,
+    filteredCrmSummary,
     lastNoteId: Math.max(st.lastNoteId, maxApplied),
     pollMode: 'notes',
   })
   if (isKommoInboundPollDebugLead(env, lid)) {
     console.log(
       `[kommo-poll][debug] notes lead=${lid} notesTotal=${notes.length} fresh=${fresh.length} pushed=${pushed} ` +
-        `filteredByType=${filteredByType} filteredEmpty=${filteredEmpty} lastNoteId=${Math.max(st.lastNoteId, maxApplied)} types=${JSON.stringify(typeCounts)}`,
+        `filteredByType=${filteredByType} filteredEmpty=${filteredEmpty} filteredCrmSummary=${filteredCrmSummary} lastNoteId=${Math.max(st.lastNoteId, maxApplied)} types=${JSON.stringify(typeCounts)}`,
     )
   }
   return pushed
 }
 
+/** Espelha server/kommoClient.js — nunca enviar estes em filter[type] (Kommo 400). */
+const EVENT_TYPES_UNSUPPORTED_IN_FILTER = new Set(['incoming_message'])
+
 function parseEventTypes(env) {
-  const raw = String(
-    env.KOMMO_INBOUND_POLL_EVENT_TYPES || 'incoming_chat_message,incoming_message',
-  ).trim()
-  return raw
+  const raw = String(env.KOMMO_INBOUND_POLL_EVENT_TYPES || 'incoming_chat_message').trim()
+  const out = raw
     .split(/[,\s]+/)
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean)
+    .filter((t) => !EVENT_TYPES_UNSUPPORTED_IN_FILTER.has(t))
+  if (out.length) return out
+  return ['incoming_chat_message']
 }
 
 function getPollEventsFetchLimit(env) {
@@ -757,10 +792,8 @@ async function resolveWabaInboundTextFromAmojo(env, ev, sessionId) {
   return ''
 }
 
-const INCOMING_EVENT_TYPES = new Set([
-  'incoming_chat_message',
-  'incoming_message',
-])
+/** incoming_message não é aceito em filter[type] no v4; eventos com esse type não são buscados. */
+const INCOMING_EVENT_TYPES = new Set(['incoming_chat_message'])
 const OUTGOING_EVENT_TYPES = new Set([
   'outgoing_chat_message',
   'outgoing_message',
@@ -864,6 +897,7 @@ async function resolveWabaStubViaLeadNotes(env, ev, leadId, sessionId) {
     const raw = extractNoteText(n, env)
     if (!raw) continue
     if (nt === 'common' && isAgentOutboundEcho(raw)) continue
+    if (nt === 'common' && isLikelyCrmSummaryCommonNote(raw, env)) continue
     const text = stripExecutionSuffix(raw)
     if (!text) continue
     if (nt === 'sms_in' && contactDigits) {
@@ -952,7 +986,7 @@ async function pollEvents(env, leadId, sessionId, contactId) {
   if (!st.warmed) {
     const maxAt = events.reduce((m, e) => Math.max(m, normalizeKommoEventSec(e?.created_at)), 0)
     const seedAt = maxAt > 0 ? maxAt : Math.floor(Date.now() / 1000)
-    // NÃO colocar incoming_chat_message / incoming_message em seenIds no warmup:
+    // NÃO colocar incoming_chat_message em seenIds no warmup:
     // o warmup não roda extract/Amojo/push — só define o cursor. Se marcar incoming
     // como "visto", eventos WABA (stub sem texto no value_after) ficam bloqueados
     // para sempre (mesclados +1, buffer vazio).
@@ -1037,6 +1071,7 @@ async function pollEvents(env, leadId, sessionId, contactId) {
   let filteredEmpty = 0
   let filteredOutbound = 0
   let filteredOtherType = 0
+  let filteredCrmSummaryEvents = 0
 
   for (const ev of asc) {
     const at = normalizeKommoEventSec(ev?.created_at)
@@ -1117,6 +1152,19 @@ async function pollEvents(env, leadId, sessionId, contactId) {
       continue
     }
 
+    if (isLikelyCrmSummaryCommonNote(cleaned, env)) {
+      filteredCrmSummaryEvents += 1
+      if (evId) {
+        st.seenIds.add(evId)
+        st.emptyIncomingNoText.delete(evId)
+      }
+      maxAt = Math.max(maxAt, at)
+      console.log(
+        `[kommo-poll][events] skip resumo_CRM (não é msg do lead) lead=${lid} eventId=${evId} type=${t} chars=${cleaned.length}`,
+      )
+      continue
+    }
+
     try {
       await pushMessage(env, sessionId, cleaned, { skipDedupe: true })
       pushed += 1
@@ -1175,7 +1223,7 @@ async function pollEvents(env, leadId, sessionId, contactId) {
   })
   if (isKommoInboundPollDebugLead(env, lid)) {
     console.log(
-      `[kommo-poll][debug] events resultado lead=${lid} pushed=${pushed} filteredEmpty=${filteredEmpty} outbound=${filteredOutbound} otherType=${filteredOtherType} newLastSeen=${Math.max(normalizeKommoEventSec(st.lastSeenAt), maxAt)}`,
+      `[kommo-poll][debug] events resultado lead=${lid} pushed=${pushed} filteredEmpty=${filteredEmpty} outbound=${filteredOutbound} otherType=${filteredOtherType} crmSummaryEvents=${filteredCrmSummaryEvents} newLastSeen=${Math.max(normalizeKommoEventSec(st.lastSeenAt), maxAt)}`,
     )
   }
   return pushed
@@ -1432,6 +1480,7 @@ async function pollDispatcher(env, leadId, sessionId) {
   let filteredOutbound = 0
   let filteredNonText = 0
   let filteredEmpty = 0
+  let filteredCrmSummaryDispatcher = 0
   let maxApplied = st.lastMsgId
 
   for (const m of asc) {
@@ -1524,6 +1573,16 @@ async function pollDispatcher(env, leadId, sessionId) {
       continue
     }
 
+    if (isLikelyCrmSummaryCommonNote(cleaned, env)) {
+      filteredCrmSummaryDispatcher += 1
+      st.seenIds.add(mid)
+      maxApplied = Math.max(maxApplied, mid)
+      console.log(
+        `[kommo-poll][dispatcher] skip resumo_CRM lead=${lid} msgId=${mid} chars=${cleaned.length}`,
+      )
+      continue
+    }
+
     try {
       await pushMessage(env, sessionId, cleaned, { skipDedupe: true })
       pushed += 1
@@ -1557,6 +1616,11 @@ async function pollDispatcher(env, leadId, sessionId) {
   } else if (fresh.length > 0) {
     console.log(
       `[kommo-poll][dispatcher] sem inbound novo lead=${lid} fresh=${fresh.length} stats=${JSON.stringify(stats)}`,
+    )
+  }
+  if (filteredCrmSummaryDispatcher > 0) {
+    console.log(
+      `[kommo-poll][dispatcher] lead=${lid} resumo_CRM ignorado=${filteredCrmSummaryDispatcher} (não vai pro buffer)`,
     )
   }
 
@@ -1635,6 +1699,13 @@ async function pollAmojo(env, leadId, sessionId, contactDigits) {
       continue
     }
     if (mtype === 'picture' || mtype === 'sticker' || mtype === 'audio' || mtype === 'voice') {
+      lastM = Math.max(lastM, row.msec_timestamp || 0)
+      continue
+    }
+    if (isLikelyCrmSummaryCommonNote(text, env)) {
+      console.log(
+        `[kommo-poll][amojo] skip resumo_CRM lead=${lid} chars=${text.length}`,
+      )
       lastM = Math.max(lastM, row.msec_timestamp || 0)
       continue
     }

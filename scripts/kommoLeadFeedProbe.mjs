@@ -8,6 +8,7 @@
  *
  * Ajuda a confirmar: a mensagem do WhatsApp aparece em incoming_chat_message
  * mesmo quando a timeline mostra só "notas" common da integração.
+ * (incoming_message em filter[type] costuma dar 400 no Kommo — não usamos aqui.)
  */
 
 import { listLeadNotes, listLeadEvents } from '../server/kommoClient.js'
@@ -46,7 +47,7 @@ if (!Number.isFinite(leadId) || leadId <= 0) {
 
 const env = process.env
 const notes = await listLeadNotes(env, leadId, { limit: 15, order: 'desc' })
-const eventTypes = ['incoming_chat_message', 'incoming_message']
+const eventTypes = ['incoming_chat_message']
 const events = await listLeadEvents(env, leadId, {
   limit: 25,
   entity: 'lead',
@@ -78,7 +79,7 @@ if (!notes.ok) {
 console.log('')
 
 if (!events.ok) {
-  console.log('[events incoming_chat/incoming_message] ERRO', events.status, events.error || events.code)
+  console.log('[events incoming_chat_message] ERRO', events.status, events.error || events.code)
 } else {
   const arr = events.events || []
   console.log(`[events ${eventTypes.join('+')}] ok count=${arr.length}\n`)

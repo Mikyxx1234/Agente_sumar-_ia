@@ -2,6 +2,7 @@
   "name": "agente-comercial-prompts",
   "private": true,
   "version": "1.0.0",
+  "description": "Plataforma de agente comercial de IA: painel React/Vite para gerenciar prompts e diagnósticos, e backend Express que orquestra atendimento via WhatsApp (Evolution API), integração com CRM Kommo, persistência em Supabase e Redis, com tools de localização de polo, inscrição, distribuição para humano, Salesbot (busca em CSV) e schedulers de feedback comercial.",
   "type": "module",
   "scripts": {
     "dev": "vite",
