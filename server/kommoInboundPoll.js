@@ -335,8 +335,17 @@ async function pollNotes(env, leadId, sessionId, contactDigits) {
   if (pushed > 0) {
     console.log(`[kommo-poll][notes] buffer +${pushed} lead=${lid} session=${sessionId}`)
   } else if (fresh.length > 0) {
+    const freshHasCommon = fresh.some((n) => String(n?.note_type || '').toLowerCase() === 'common')
+    const incCommon = String(env.KOMMO_INBOUND_POLL_INCLUDE_COMMON || '').trim().toLowerCase()
+    const commonEnabled = incCommon === 'true' || incCommon === '1' || incCommon === 'yes'
+    let hint = ''
+    if (freshHasCommon && (!types.includes('common') || !commonEnabled)) {
+      hint =
+        ' | DICA: notas "common" (tipico WhatsApp no Kommo) estao fora do filtro. ' +
+        'Adicione "common" em KOMMO_INBOUND_POLL_NOTE_TYPES e defina KOMMO_INBOUND_POLL_INCLUDE_COMMON=true.'
+    }
     console.log(
-      `[kommo-poll][notes] sem inbound novo lead=${lid} fresh=${fresh.length} tipos=${JSON.stringify(typeCounts)} filtroAtivo=${types.join('|')}`,
+      `[kommo-poll][notes] sem inbound novo lead=${lid} fresh=${fresh.length} tipos=${JSON.stringify(typeCounts)} filtroAtivo=${types.join('|')}${hint}`,
     )
   }
   recordNotesTick({
