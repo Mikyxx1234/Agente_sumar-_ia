@@ -27,8 +27,8 @@
  *   KOMMO_SCHEDULER_DEBOUNCE_SEC=15    silêncio mínimo após última mensagem
  *   KOMMO_SCHEDULER_ENABLED=true       chave geral pra ligar/desligar
  *   KOMMO_INBOUND_POLL_ENABLED=true     opcional: preenche buffer a partir do Kommo
- *                                       (notas v4 e, com mode=notes, também eventos de chat
- *                                       por default — ver KOMMO_INBOUND_POLL_NOTES_ALSO_EVENTS).
+ *                                       (eventos v4 de chat antes das notas quando
+ *                                       KOMMO_INBOUND_POLL_NOTES_ALSO_EVENTS está ligado).
  *   KOMMO_INBOUND_POLL_MODE=notes        notes | both | events | dispatcher | amojo
  *   KOMMO_INBOUND_POLL_NOTES_ALSO_EVENTS  com mode=notes, false = só GET …/notes (sem events)
  *   KOMMO_INBOUND_POLL_ALSO_POLL_EVENTS  com mode=both, true = também poll de eventos v4
