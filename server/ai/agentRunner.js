@@ -175,6 +175,9 @@ export async function runAgent(env, input) {
     content: String(m.content || '').slice(0, 200),
   }))
   console.log(
+    `[${executionId}] CARREGOU_HISTORICO msgs=${historyMessages.length} source=${historySource} telefone=${telefone || 'n/a'}`,
+  )
+  console.log(
     `[${executionId}] history loaded: ${historyMessages.length} msgs from ${historySource} (telefone=${telefone || 'n/a'})`,
   )
   if (historyMessages.length > 0) {
@@ -224,6 +227,9 @@ export async function runAgent(env, input) {
     ...historyMessages,
     { role: 'user', content: userMessage },
   ]
+  console.log(
+    `[${executionId}] MONTOU_PROMPT promptsLoaded=${prompts.length} systemChars=${systemMessage.length} historyMsgs=${historyMessages.length} ambiguousNoContext=${ambiguousNoContext} model=${model}`,
+  )
 
   const executors = buildToolExecutors(env, ctx)
   const toolTrace = []

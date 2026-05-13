@@ -733,7 +733,7 @@ async function pollDispatcher(env, leadId, sessionId) {
   if (!list.ok) {
     const errMsg = String(list.error || list.status || 'unknown')
     console.warn(
-      `[kommo-poll][dispatcher] lead=${lid} api ERRO: ${errMsg} cause=${list.cause || 'n/a'} url=${list.requestUrl || 'n/a'} elapsed=${list.elapsedMs ?? '?'}ms`,
+      `[kommo-poll][dispatcher] lead=${lid} api ERRO: ${errMsg} cause=${list.cause || 'n/a'} url=${list.requestUrl || 'n/a'} elapsed=${list.elapsedMs ?? '?'}ms${list.hint ? ` hint=${list.hint}` : ''}`,
     )
     recordDispatcherTick({
       leadId: lid,

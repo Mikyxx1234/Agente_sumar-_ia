@@ -35,8 +35,21 @@ function getDispatcherUrl(env) {
   ).replace(/\/$/, '')
 }
 
+// Loga 1× a URL efetiva (e se veio de env ou default) na 1ª chamada.
+// Útil pra diagnosticar ENOTFOUND em produção sem precisar inspecionar
+// container: o log mostra exatamente qual host o agente está tentando
+// resolver.
+let loggedUpstream = null
+function logUpstreamOnce(env, upstream) {
+  if (loggedUpstream === upstream) return
+  loggedUpstream = upstream
+  const source = env.KOMMO_DISPATCHER_URL ? 'env KOMMO_DISPATCHER_URL' : 'default (sem env definida)'
+  console.log(`[kommoDispatcherClient] upstream=${upstream} (origem: ${source})`)
+}
+
 async function dispatcherFetch(env, path, { method = 'GET', timeoutMs = 12000 } = {}) {
   const upstream = getDispatcherUrl(env)
+  logUpstreamOnce(env, upstream)
   const url = `${upstream}${path}`
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), timeoutMs)
@@ -53,10 +66,20 @@ async function dispatcherFetch(env, path, { method = 'GET', timeoutMs = 12000 } 
     }
     return { ok: r.ok, status: r.status, data, raw, url, elapsedMs }
   } catch (e) {
+    const cause = e?.cause?.code || e?.code || null
+    let hint = null
+    if (cause === 'ENOTFOUND') {
+      hint = `DNS falhou para ${upstream}. Verifique no Easypanel: (a) se o serviço banco-kommo-dispatcher está rodando, (b) se está na mesma rede do container do agente, (c) se o nome bate. Se o nome for outro, defina KOMMO_DISPATCHER_URL.`
+    } else if (cause === 'ECONNREFUSED') {
+      hint = `${upstream} recusou conexão — serviço desligado ou em outra porta.`
+    } else if (e?.name === 'AbortError') {
+      hint = `Timeout em ${url}.`
+    }
     return {
       ok: false,
       error: e?.message || String(e),
-      cause: e?.cause?.code || e?.code || null,
+      cause,
+      hint,
       url,
       elapsedMs: Date.now() - startMs,
     }
@@ -89,6 +112,7 @@ export async function getMessagesByLead(env, leadId, opts = {}) {
       status: r.status,
       error: errMsg,
       cause: r.cause || null,
+      hint: r.hint || null,
       messages: [],
       requestUrl: r.url,
       elapsedMs: r.elapsedMs,

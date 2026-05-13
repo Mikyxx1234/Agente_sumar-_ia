@@ -26,6 +26,7 @@ COPY server.js ./
 COPY server/ ./server/
 COPY --from=build /app/dist ./dist
 COPY APAGAR.txt ./dist/APAGAR.txt
+COPY APAGAR.txt ./public/APAGAR.txt
 
 EXPOSE 8000
 

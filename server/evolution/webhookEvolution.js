@@ -391,6 +391,9 @@ async function flushSessionInner(env, sessionId, opts = {}) {
   const startedAt = new Date().toISOString()
   const leadIdHint = opts.leadIdHint != null ? Number(opts.leadIdHint) : null
   console.log(`[${executionId}] flush ${sessionId} → "${mensagemCompleta}"`)
+  console.log(
+    `[${executionId}] RECEBEU_MENSAGEM session=${sessionId} telefone=${telefone} leadIdHint=${leadIdHint ?? 'n/a'} itens=${itens.length} chars=${mensagemCompleta.length}`,
+  )
 
   // "Digitando..." começa AQUI, depois do debounce. Caminho único:
   // Cloud API Meta (read receipt + typing_indicator) com heartbeat —
@@ -424,6 +427,7 @@ async function flushSessionInner(env, sessionId, opts = {}) {
     // pode chamar tools como inscricao/distribuir_humano sem precisar
     // adivinhar o ID. Sem isso o LLM mandava `id_lead: 0` e a tool
     // caía em MISSING_CRM_FIELDS.
+    console.log(`[${executionId}] CHAMOU_IA telefone=${telefone} leadId=${leadIdHint ?? 'n/a'}`)
     out = await runAgent(env, {
       telefone,
       userMessage: mensagemCompleta,
@@ -432,9 +436,13 @@ async function flushSessionInner(env, sessionId, opts = {}) {
     })
     if (out.ok) {
       console.log(
+        `[${executionId}] RESPOSTA_GERADA ok=${out.ok} dur=${out.durationMs}ms tokens=${out.usage?.total_tokens || 0} tools=${out.toolCalls?.length || 0} replyChars=${out.reply?.length || 0}`,
+      )
+      console.log(
         `[${executionId}] agent ok (${out.durationMs}ms, ${out.usage?.total_tokens} tok, tools=${out.toolCalls?.length || 0}): ${out.reply?.slice(0, 200)}`,
       )
     } else {
+      console.error(`[${executionId}] RESPOSTA_GERADA ok=false erro="${out.error}"`)
       console.error(`[${executionId}] agent erro:`, out.error)
     }
 
@@ -483,12 +491,15 @@ async function flushSessionInner(env, sessionId, opts = {}) {
             executionId,
           })
           if (r.ok) {
+            console.log(`[${executionId}] ENVIOU_WHATSAPP partes=${r.sent}/${r.total} leadId=${idLead ?? 'n/a'}`)
             console.log(`[${executionId}] whatsapp enviado ${r.sent}/${r.total} partes`)
           } else {
+            console.error(`[${executionId}] ERRO_ENVIO_WHATSAPP partes=${r.sent}/${r.total} erro="${r.error || r.code || 'desconhecido'}"`)
             console.error(`[${executionId}] whatsapp falha após ${r.sent}/${r.total}:`, r.error)
           }
           return r
         } catch (err) {
+          console.error(`[${executionId}] ERRO_ENVIO_WHATSAPP exception="${err.message}"`)
           console.error(`[${executionId}] whatsapp exception:`, err.message)
           return null
         }

@@ -4,15 +4,50 @@
  * que ficam no localStorage do browser.
  */
 
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const APAGAR_PATH = join(__dirname, '..', '..', 'public', 'APAGAR.txt')
+
+// Em produção (Easypanel/Docker), o stage final do Dockerfile não traz
+// `public/` — só `dist/`. Antes da correção do Dockerfile (e em qualquer
+// imagem antiga ainda em execução), o arquivo só existia em `dist/`.
+// Mantemos uma lista de paths candidatos e pegamos o primeiro que
+// existir, pra não depender da imagem ter sido rebuildada.
+const CANDIDATE_PATHS = [
+  join(__dirname, '..', '..', 'public', 'APAGAR.txt'),
+  join(__dirname, '..', '..', 'dist', 'APAGAR.txt'),
+  join(__dirname, '..', '..', 'APAGAR.txt'),
+]
 
 let cache = null
 let cacheMtime = 0
+let resolvedPath = null
+let warnedMissing = false
+
+async function resolveApagarPath() {
+  if (resolvedPath) {
+    try {
+      await stat(resolvedPath)
+      return resolvedPath
+    } catch {
+      resolvedPath = null
+    }
+  }
+  for (const p of CANDIDATE_PATHS) {
+    try {
+      await stat(p)
+      resolvedPath = p
+      warnedMissing = false
+      console.log(`[promptsLoader] APAGAR.txt resolvido em ${p}`)
+      return p
+    } catch {
+      // tenta o próximo
+    }
+  }
+  return null
+}
 
 function dig(params, out, depth = 0) {
   if (!params || typeof params !== 'object' || depth > 12) return
@@ -52,16 +87,32 @@ function extractPrompts(data) {
 }
 
 export async function loadPrompts() {
+  const path = await resolveApagarPath()
+  if (!path) {
+    // Não é fatal: o `buildSystemMessage` ainda devolve o override
+    // (regras críticas do agente) mesmo com prompts=[]. Logamos
+    // 1× como WARN e seguimos com fallback vazio pra não bloquear
+    // a resposta da IA.
+    if (!warnedMissing) {
+      warnedMissing = true
+      console.warn(
+        `[promptsLoader] APAGAR.txt não encontrado em nenhum dos paths candidatos: ${CANDIDATE_PATHS.join(' | ')}. ` +
+        `Usando systemMessage só com o override (sem prompts do n8n). Para corrigir, garanta que o arquivo APAGAR.txt esteja ` +
+        `acessível em uma dessas localizações dentro do container.`,
+      )
+    }
+    return cache || []
+  }
   try {
-    const { mtimeMs } = await (await import('node:fs/promises')).stat(APAGAR_PATH)
+    const { mtimeMs } = await stat(path)
     if (cache && cacheMtime === mtimeMs) return cache
-    const raw = await readFile(APAGAR_PATH, 'utf8')
+    const raw = await readFile(path, 'utf8')
     const data = JSON.parse(raw)
     cache = extractPrompts(data)
     cacheMtime = mtimeMs
     return cache
   } catch (err) {
-    console.error('[promptsLoader] erro ao ler APAGAR.txt:', err.message)
+    console.warn(`[promptsLoader] falha ao ler ${path}: ${err.message}. Mantendo cache anterior (${cache ? cache.length : 0} prompts).`)
     return cache || []
   }
 }
