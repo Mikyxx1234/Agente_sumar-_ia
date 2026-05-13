@@ -22,7 +22,10 @@ import { recordWebhookIngress, getWebhookDiagnosticsSnapshot } from './server/ev
 import { getKommoPollSnapshot } from './server/kommoInboundDiagnostics.js'
 import { getModelRegistrySnapshot } from './server/ai/modelRegistry.js'
 import { listLeadNotes, listLeadEvents, listLeadCustomFields } from './server/kommoClient.js'
-import { getMessagesByLead as dispatcherGetMessagesByLead } from './server/kommoDispatcherClient.js'
+import {
+  getMessagesByLead as dispatcherGetMessagesByLead,
+  checkDispatcherHealth,
+} from './server/kommoDispatcherClient.js'
 import { pingBackend, pushMessage, getMessages, clearMessages } from './server/evolution/messageBuffer.js'
 import { getDebounceMs } from './server/evolution/debouncer.js'
 import { runAgent } from './server/ai/agentRunner.js'
@@ -1607,6 +1610,65 @@ app.listen(PORT, () => {
   const sched = startAgentScheduler(process.env)
   if (!sched.started) {
     console.log(`[Server] Agent scheduler: ${sched.reason}`)
+  }
+
+  // Probe do dispatcher no boot — falha silenciosa é a pior coisa em
+  // produção. Se modo=dispatcher e ele não estiver acessível, a IA
+  // não vai responder mensagens novas. Logamos isso de forma BEM
+  // visível para o operador detectar de imediato nos logs do EasyPanel,
+  // mas NÃO derrubamos o processo (regra: outras rotas — health,
+  // playground, salesbot — continuam úteis pra debug).
+  const pollMode = String(process.env.KOMMO_INBOUND_POLL_MODE || 'notes').trim().toLowerCase()
+  const pollEnabled = ['true', '1', 'yes'].includes(
+    String(process.env.KOMMO_INBOUND_POLL_ENABLED || '').trim().toLowerCase(),
+  )
+  if (pollEnabled && (pollMode === 'dispatcher' || pollMode === 'all')) {
+    if (!process.env.KOMMO_DISPATCHER_URL) {
+      console.warn(
+        '[Server] AVISO: KOMMO_INBOUND_POLL_MODE=' + pollMode +
+        ' mas KOMMO_DISPATCHER_URL nao foi definida. Caindo no default ' +
+        'http://banco-kommo-dispatcher:8000. Se o servico no EasyPanel ' +
+        'tem outro nome, defina KOMMO_DISPATCHER_URL no servico do agente.',
+      )
+    }
+    checkDispatcherHealth(process.env).then((h) => {
+      if (h.ok) {
+        console.log(
+          `[Server] dispatcher health OK upstream=${h.upstream} status=${h.status} elapsed=${h.elapsedMs}ms configuredFromEnv=${h.configuredFromEnv}`,
+        )
+        return
+      }
+      const banner = [
+        '',
+        '================================================================',
+        ' DISPATCHER INACESSIVEL — IA NAO VAI RESPONDER LEADS NOVOS',
+        '================================================================',
+        ` URL tentada : ${h.upstream}`,
+        ` Origem URL  : ${h.configuredFromEnv ? 'env KOMMO_DISPATCHER_URL' : 'default hardcoded (nenhuma env setada)'}`,
+        ` Causa       : ${h.cause || 'desconhecida'}`,
+        ` Erro        : ${h.error || 'n/a'}`,
+        ` Tempo       : ${h.elapsedMs}ms`,
+        ` Hint        : ${h.hint || 'verifique nome do servico, status e porta no EasyPanel.'}`,
+        '',
+        ' ACOES no EasyPanel:',
+        '  1. Abra o projeto e confirme que o servico do dispatcher esta rodando.',
+        '  2. Pegue o NOME EXATO do servico e a PORTA INTERNA dele.',
+        '  3. No servico do AGENTE, defina:',
+        '       KOMMO_DISPATCHER_URL=http://<nome-do-servico>:<porta>',
+        '  4. Restart APENAS do servico do agente.',
+        '  5. Confirme novamente neste log: deve aparecer "dispatcher health OK".',
+        '',
+        ' Salesbot e outras rotas continuam funcionando — a IA conversacional',
+        ' por WhatsApp e que esta bloqueada ate isto ser resolvido.',
+        '================================================================',
+        '',
+      ].join('\n')
+      console.error(banner)
+    }).catch((err) => {
+      // Defesa contra exceção não capturada — o health check já não
+      // deveria lançar, mas se lançar não deixamos o processo morrer.
+      console.error('[Server] dispatcher health probe exception:', err?.message || err)
+    })
   }
 }).on('error', (err) => {
   console.error('[Server] Listen error:', err.message)

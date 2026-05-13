@@ -125,6 +125,61 @@ export async function getMessagesByLead(env, leadId, opts = {}) {
 }
 
 /**
+ * Health check leve do dispatcher. Faz GET /openapi.json (FastAPI sempre
+ * expõe) com timeout curto. Usado no boot do servidor pra detectar
+ * imediatamente se o agente vai conseguir conversar com o dispatcher
+ * (que é a porta de entrada das mensagens novas no modo dispatcher).
+ *
+ * Não lança — retorna sempre { ok, ... } pra o caller decidir o que
+ * fazer (logar banner, abortar boot, etc).
+ *
+ * @param {Record<string,string>} env
+ * @param {{ timeoutMs?: number }} [opts]
+ */
+export async function checkDispatcherHealth(env, opts = {}) {
+  const upstream = getDispatcherUrl(env)
+  const timeoutMs = Number(opts.timeoutMs) || 5000
+  const url = `${upstream}/openapi.json`
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
+  const startMs = Date.now()
+  try {
+    const r = await fetch(url, { method: 'GET', signal: ctrl.signal })
+    const elapsedMs = Date.now() - startMs
+    return {
+      ok: r.ok,
+      status: r.status,
+      upstream,
+      url,
+      elapsedMs,
+      configuredFromEnv: Boolean(env.KOMMO_DISPATCHER_URL),
+    }
+  } catch (e) {
+    const cause = e?.cause?.code || e?.code || null
+    let hint = null
+    if (cause === 'ENOTFOUND') {
+      hint = `DNS nao resolveu ${upstream}. No EasyPanel: confirme nome do servico, projeto, status e porta interna; defina KOMMO_DISPATCHER_URL com o nome correto.`
+    } else if (cause === 'ECONNREFUSED') {
+      hint = `${upstream} recusou conexao (servico desligado ou em outra porta).`
+    } else if (e?.name === 'AbortError') {
+      hint = `Timeout em ${timeoutMs}ms tentando ${url}.`
+    }
+    return {
+      ok: false,
+      error: e?.message || String(e),
+      cause,
+      hint,
+      upstream,
+      url,
+      elapsedMs: Date.now() - startMs,
+      configuredFromEnv: Boolean(env.KOMMO_DISPATCHER_URL),
+    }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
  * Força o dispatcher a re-sincronizar mensagens desse lead com o Kommo
  * (Playwright/scraping). Pode ser lento (>15s); só use se realmente
  * precisar — o dispatcher já tem polling próprio.
