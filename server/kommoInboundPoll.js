@@ -240,24 +240,43 @@ function isAgentOutboundEcho(text) {
 }
 
 /**
- * Notas `common` de integração / CRM costumam ser resumos em 3ª pessoa ("O candidato realizou…",
- * "O assistente forneceu…") — não são texto digitado pelo lead no WhatsApp.
+ * Tipos de nota Kommo onde integrações costumam gravar resumo de CRM (não é o texto cru do WhatsApp).
+ * `sms_in` costuma ser SMS real — não aplicamos o heurístico de resumo nele.
+ */
+function noteTypeMayCarryIntegrationSummary(noteType) {
+  const t = String(noteType || '').toLowerCase()
+  return t === 'common' || t === 'service_message' || t === 'extended_service_message'
+}
+
+/**
+ * Resumos em 3ª pessoa ("O candidato realizou…", "O assistente forneceu…") em
+ * common / service_message / extended_service_message — não tratar como mensagem do lead.
  * Desligue com KOMMO_INBOUND_POLL_SKIP_CRM_SUMMARY_COMMON=false.
  */
 function isLikelyCrmSummaryCommonNote(text, env) {
   const off = String(env.KOMMO_INBOUND_POLL_SKIP_CRM_SUMMARY_COMMON ?? 'true').trim().toLowerCase()
   if (off === 'false' || off === '0' || off === 'no') return false
   const s = String(text || '').trim()
-  if (s.length < 140) return false
-  const head = s.slice(0, 600)
+  if (s.length < 100) return false
+  const head = s.slice(0, 800)
   const low = head.toLowerCase()
   if (/^o candidato\s+(realizou|fez|demonstrou|solicitou|enviou)\b/i.test(s)) return true
+  if (/^a candidata\s+(realizou|fez|demonstrou|solicitou|enviou)\b/i.test(s)) return true
   if (/\bo candidato realizou diversas consultas\b/i.test(low)) return true
   if (/\bdiversas consultas sobre (preços|informações)\b/i.test(low)) return true
   if (/\bo assistente\s+(forneceu|informou|respondeu|opinou)\b/i.test(low)) return true
   if (/houve também tentativas do candidato\b/i.test(low)) return true
   if (/todas registradas com sucesso e com promessa de contato de consultores\b/i.test(low))
     return true
+  // Resumo longo de jornada + cursos + consultores (comum em notas de integração / BI)
+  if (
+    s.length >= 220 &&
+    /\b(o|a)\s+candidat[oa]\b/i.test(s) &&
+    /\b(curso|graduaç|cursos|vestibular|inscri)\b/i.test(low) &&
+    /\b(consultor|atendente|assistente)\b/i.test(low)
+  ) {
+    return true
+  }
   return false
 }
 
@@ -293,7 +312,7 @@ function classifyInboundNote(n, env, contactDigits, types) {
   if (String(n.note_type || '').toLowerCase() === 'common' && isAgentOutboundEcho(rawText)) {
     return { kind: 'skip', reason: 'echo', advance: true, nid }
   }
-  if (String(n.note_type || '').toLowerCase() === 'common' && isLikelyCrmSummaryCommonNote(rawText, env)) {
+  if (noteTypeMayCarryIntegrationSummary(n.note_type) && isLikelyCrmSummaryCommonNote(rawText, env)) {
     return { kind: 'skip', reason: 'crm_summary', advance: true, nid }
   }
   const text = stripExecutionSuffix(rawText)
@@ -897,7 +916,7 @@ async function resolveWabaStubViaLeadNotes(env, ev, leadId, sessionId) {
     const raw = extractNoteText(n, env)
     if (!raw) continue
     if (nt === 'common' && isAgentOutboundEcho(raw)) continue
-    if (nt === 'common' && isLikelyCrmSummaryCommonNote(raw, env)) continue
+    if (noteTypeMayCarryIntegrationSummary(nt) && isLikelyCrmSummaryCommonNote(raw, env)) continue
     const text = stripExecutionSuffix(raw)
     if (!text) continue
     if (nt === 'sms_in' && contactDigits) {
@@ -1122,8 +1141,11 @@ async function pollEvents(env, leadId, sessionId, contactId) {
           console.log(
             `[kommo-poll][events] sem_texto lead=${lid} eventId=${evId} type=${t} tentativa=${next} createdAt=${at} value_after=${vaShape} preview=${preview}` +
               (amojoConfigured(env)
-                ? ' | Amojo tentado; sem texto. Ou notas: INCLUDE_COMMON + common em NOTE_TYPES e WABA_NOTES_FALLBACK.'
-                : ' | Sem Amojo: fallback notas (common). Evento fica pendente até haver texto ou 60 ticks.'),
+                ? ' | Amojo configurado mas sem texto resolvido (histórico/talk). Verifique Chats API e KOMMO_LEAD_CHAT_MAP.'
+                : ' | DIAG: sem KOMMO_CHANNEL_SECRET+KOMMO_CHANNEL_SCOPE_ID o Amojo não roda — evento WABA vem só como stub no v4 (sem body). ' +
+                  'O texto real costuma vir do Chats API (Amojo) ou do banco-kommo-dispatcher. Opções: (1) configurar Chats API; ' +
+                  '(2) KOMMO_DISPATCHER_URL + mode all/both+dispatcher; (3) KOMMO_INBOUND_POLL_WABA_NOTES_FALLBACK=false se o fallback em notas pegar resumo de CRM. ' +
+                  'Evento fica pendente até haver texto ou 60 ticks.'),
           )
         }
         if (next >= 60) {
