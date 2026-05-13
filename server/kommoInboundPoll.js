@@ -694,13 +694,26 @@ async function pollEvents(env, leadId, sessionId, contactId) {
   if (!st.warmed) {
     const maxAt = events.reduce((m, e) => Math.max(m, normalizeKommoEventSec(e?.created_at)), 0)
     const seedAt = maxAt > 0 ? maxAt : Math.floor(Date.now() / 1000)
+    // NÃO colocar incoming_chat_message / incoming_message em seenIds no warmup:
+    // o warmup não roda extract/Amojo/push — só define o cursor. Se marcar incoming
+    // como "visto", eventos WABA (stub sem texto no value_after) ficam bloqueados
+    // para sempre (mesclados +1, buffer vazio).
+    const seenIds = new Set()
+    for (const e of events) {
+      const id = e?.id != null ? String(e.id) : ''
+      if (!id) continue
+      const t = String(e?.type || '').toLowerCase()
+      if (!INCOMING_EVENT_TYPES.has(t)) {
+        seenIds.add(id)
+      }
+    }
     eventState.set(lid, {
       warmed: true,
       lastSeenAt: seedAt,
-      seenIds: new Set(events.map((e) => String(e.id)).filter(Boolean)),
+      seenIds,
     })
     console.log(
-      `[kommo-poll][events] warmup lead=${lid} session=${sessionId} lastSeenAt=${seedAt} eventos=${events.length} tipos=${JSON.stringify(typeCounts)} url=${list.requestUrl || 'n/a'}`,
+      `[kommo-poll][events] warmup lead=${lid} session=${sessionId} lastSeenAt=${seedAt} eventos=${events.length} tipos=${JSON.stringify(typeCounts)} seenIdsNaoIncoming=${seenIds.size} url=${list.requestUrl || 'n/a'}`,
     )
     recordEventsTick({
       leadId: lid,
