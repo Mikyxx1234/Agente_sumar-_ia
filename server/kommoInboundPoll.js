@@ -659,6 +659,56 @@ function mergeEventsById(primary, secondary) {
   return { merged: [...byId.values()], addedFromSecondary: added }
 }
 
+/**
+ * Sem Amojo: stub WABA no evento não traz `text`, mas o Kommo costuma espelhar
+ * a mensagem nas notas do lead. Cruzamos `created_at` da nota com o do evento.
+ * Desligue: KOMMO_INBOUND_POLL_WABA_NOTES_FALLBACK=false
+ */
+async function resolveWabaStubViaLeadNotes(env, ev, leadId, sessionId) {
+  const off = String(env.KOMMO_INBOUND_POLL_WABA_NOTES_FALLBACK ?? 'true').trim().toLowerCase()
+  if (off === 'false' || off === '0' || off === 'no') return ''
+  if (!extractWabaRelayRefs(ev)) return ''
+  const lid = Number(leadId)
+  if (!Number.isFinite(lid) || lid <= 0) return ''
+  const types = parseNoteTypes(env)
+  const win = Number(env.KOMMO_INBOUND_POLL_WABA_NOTE_TIME_WINDOW_SEC)
+  const windowSec = Number.isFinite(win) && win > 0 ? Math.min(win, 7200) : 900
+  const nowSec = Math.floor(Date.now() / 1000)
+  const evAt = normalizeKommoEventSec(ev?.created_at)
+  const list = await listLeadNotes(env, lid, { limit: 40, order: 'desc' })
+  if (!list.ok || !list.notes?.length) return ''
+  const contactDigits = sessionToContactDigits(sessionId)
+  for (const n of list.notes) {
+    const nt = String(n.note_type || '').toLowerCase()
+    if (!types.includes(nt)) continue
+    if (nt === 'common') {
+      const inc = String(env.KOMMO_INBOUND_POLL_INCLUDE_COMMON || '').trim().toLowerCase()
+      if (!(inc === 'true' || inc === '1' || inc === 'yes')) continue
+    }
+    const raw = extractNoteText(n, env)
+    if (!raw) continue
+    if (nt === 'common' && isAgentOutboundEcho(raw)) continue
+    const text = stripExecutionSuffix(raw)
+    if (!text) continue
+    if (nt === 'sms_in' && contactDigits) {
+      const np = normalizeDigits(n.params?.phone || '')
+      if (np && !phoneDigitsMatch(np, contactDigits)) continue
+    }
+    const nAt = normalizeKommoEventSec(n.created_at)
+    if (evAt > 0 && evAt >= nowSec - 86400 * 800) {
+      if (Math.abs(nAt - evAt) > windowSec) continue
+    } else {
+      if (nAt < nowSec - 900) continue
+    }
+    const nid = n.id != null ? String(n.id) : ''
+    console.log(
+      `[kommo-poll][events] waba_notes_fallback lead=${lid} noteId=${nid || 'n/a'} type=${nt} janela=${windowSec}s texto="${text.slice(0, 80)}"`,
+    )
+    return text
+  }
+  return ''
+}
+
 async function pollEvents(env, leadId, sessionId, contactId) {
   const lid = Number(leadId)
   const types = parseEventTypes(env)
@@ -838,6 +888,9 @@ async function pollEvents(env, leadId, sessionId, contactId) {
       text = await resolveWabaInboundTextFromAmojo(env, ev, sessionId)
     }
     if (!text) {
+      text = await resolveWabaStubViaLeadNotes(env, ev, lid, sessionId)
+    }
+    if (!text) {
       filteredEmpty += 1
       if (evId) st.seenIds.add(evId)
       maxAt = Math.max(maxAt, at)
@@ -857,8 +910,8 @@ async function pollEvents(env, leadId, sessionId, contactId) {
       console.log(
         `[kommo-poll][events] sem_texto lead=${lid} eventId=${evId} type=${t} createdAt=${at} value_after=${vaShape} preview=${preview}` +
           (amojoConfigured(env)
-            ? ' | dica: com WABA o CRM pode omitir o texto no evento; o fill via Amojo já foi tentado (KOMMO_CHANNEL_SECRET + KOMMO_CHANNEL_SCOPE_ID).'
-            : ' | dica: evento WABA sem texto — configure KOMMO_CHANNEL_SECRET + KOMMO_CHANNEL_SCOPE_ID (canal WhatsApp) para buscar o body no histórico Amojo, ou use notas (common) com INCLUDE_COMMON.'),
+            ? ' | Amojo tentado; sem texto. Verifique assinatura Amojo / histórico. Ou notas: INCLUDE_COMMON + common em NOTE_TYPES e WABA_NOTES_FALLBACK.'
+            : ' | Sem KOMMO_CHANNEL_SECRET/SCOPE_ID (Amojo). Fallback notas: INCLUDE_COMMON=true, common em NOTE_TYPES (WABA_NOTES_FALLBACK default ligado).'),
       )
       continue
     }
