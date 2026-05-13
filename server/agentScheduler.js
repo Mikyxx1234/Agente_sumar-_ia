@@ -41,7 +41,7 @@ import { listLeadsByStatus, bulkGetContactsByIds, extractContactPhone } from './
 import { phoneToWhatsAppSessionId } from './phoneWhatsApp.js'
 import { getMessages, getLastTouchedAt } from './evolution/messageBuffer.js'
 import { flushSession } from './evolution/webhookEvolution.js'
-import { syncKommoInboundToBuffer, isKommoInboundPollEnabled } from './kommoInboundPoll.js'
+import { syncKommoInboundToBuffer, isKommoInboundPollEnabled, normalizeKommoInboundPollMode } from './kommoInboundPoll.js'
 import {
   formatPollDiagLine,
   formatEventsDiagLine,
@@ -208,7 +208,7 @@ export async function runSchedulerTick(env) {
       if (!messages || messages.length === 0) {
         stats.skippedNoMessages += 1
         const pollOn = isKommoInboundPollEnabled(env)
-        const mode = String(env.KOMMO_INBOUND_POLL_MODE || 'notes').replace(/^\uFEFF/, '').trim().toLowerCase()
+        const mode = normalizeKommoInboundPollMode(env.KOMMO_INBOUND_POLL_MODE)
         const showDetail = Boolean(whitelist) || isSchedulerVerbose(env)
         // Antes o diag só rodava com KOMMO_AGENT_TEST_LEAD_IDS — em produção
         // ficava silencioso e parecia que "nada executava". Sempre logamos 1

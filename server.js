@@ -30,7 +30,7 @@ import { pingBackend, pushMessage, getMessages, clearMessages } from './server/e
 import { getDebounceMs } from './server/evolution/debouncer.js'
 import { runAgent } from './server/ai/agentRunner.js'
 import { startAgentScheduler, runSchedulerTick, isSchedulerRunning } from './server/agentScheduler.js'
-import { maybeFallbackPollModeWhenDispatcherDown } from './server/kommoInboundPoll.js'
+import { maybeFallbackPollModeWhenDispatcherDown, normalizeKommoInboundPollMode } from './server/kommoInboundPoll.js'
 import { runSalesbotCsv, extractLeadIdFromWebhookBody, probePos } from './server/salesbot/csvSearch.js'
 import { saveSalesbotExecution } from './server/salesbot/telemetry.js'
 import { reindexPos } from './server/salesbot/reindexPos.js'
@@ -1285,7 +1285,7 @@ app.get('/api/agent/diagnose', async (req, res) => {
       enabledFlag: env.KOMMO_SCHEDULER_ENABLED ?? null,
       testWhitelist: env.KOMMO_AGENT_TEST_LEAD_IDS || null,
       inboundPollEnabled: String(env.KOMMO_INBOUND_POLL_ENABLED || 'false').toLowerCase() === 'true',
-      inboundPollMode: env.KOMMO_INBOUND_POLL_MODE || 'notes (default)',
+      inboundPollMode: normalizeKommoInboundPollMode(env.KOMMO_INBOUND_POLL_MODE),
       warmupFreshSec: env.KOMMO_INBOUND_WARMUP_FRESH_SEC || '120 (default)',
     },
     secrets: {
@@ -1611,24 +1611,21 @@ app.listen(PORT, async () => {
   const pollEnabledBoot = ['true', '1', 'yes'].includes(
     String(process.env.KOMMO_INBOUND_POLL_ENABLED || '').trim().toLowerCase(),
   )
-  const pollModeBoot = String(process.env.KOMMO_INBOUND_POLL_MODE || 'notes')
-    .replace(/^\uFEFF/, '')
-    .trim()
-    .toLowerCase()
+  const pollModeBoot = normalizeKommoInboundPollMode(process.env.KOMMO_INBOUND_POLL_MODE)
   if (pollEnabledBoot && (pollModeBoot === 'dispatcher' || pollModeBoot === 'all')) {
     const fb = await maybeFallbackPollModeWhenDispatcherDown(process.env)
     if (fb.changed) {
       console.log(
-        `[Server] Kommo inbound poll: enabled=true mode=${process.env.KOMMO_INBOUND_POLL_MODE} (fallback de "${fb.from}" porque dispatcher inacessivel)`,
+        `[Server] Kommo inbound poll: enabled=true mode=${normalizeKommoInboundPollMode(process.env.KOMMO_INBOUND_POLL_MODE)} (fallback de "${fb.from}" porque dispatcher inacessivel)`,
       )
     } else {
       console.log(
-        `[Server] Kommo inbound poll: enabled=true mode=${process.env.KOMMO_INBOUND_POLL_MODE || 'notes'} (${fb.reason || 'ok'})`,
+        `[Server] Kommo inbound poll: enabled=true mode=${normalizeKommoInboundPollMode(process.env.KOMMO_INBOUND_POLL_MODE)} (${fb.reason || 'ok'})`,
       )
     }
   } else {
     console.log(
-      `[Server] Kommo inbound poll: enabled=${pollEnabledBoot} mode=${process.env.KOMMO_INBOUND_POLL_MODE || 'notes'}`,
+      `[Server] Kommo inbound poll: enabled=${pollEnabledBoot} mode=${pollModeBoot}`,
     )
   }
 
@@ -1643,10 +1640,7 @@ app.listen(PORT, async () => {
   // visível para o operador detectar de imediato nos logs do EasyPanel,
   // mas NÃO derrubamos o processo (regra: outras rotas — health,
   // playground, salesbot — continuam úteis pra debug).
-  const pollMode = String(process.env.KOMMO_INBOUND_POLL_MODE || 'notes')
-    .replace(/^\uFEFF/, '')
-    .trim()
-    .toLowerCase()
+  const pollMode = normalizeKommoInboundPollMode(process.env.KOMMO_INBOUND_POLL_MODE)
   const pollEnabled = pollEnabledBoot
   if (pollEnabled && (pollMode === 'dispatcher' || pollMode === 'all')) {
     if (!process.env.KOMMO_DISPATCHER_URL) {

@@ -3,6 +3,7 @@
  *
  * Modos (KOMMO_INBOUND_POLL_MODE):
  *   - notes (default): GET /api/v4/leads/{id}/notes — só Bearer KOMMO_*.
+ *     (O valor `note` no .env é aceito como alias de `notes`.)
  *   - events: GET /api/v4/events?filter[type]=incoming_chat_message — só Bearer KOMMO_*
  *     (mais robusto, pega mensagem mesmo quando não vira nota).
  *   - amojo: histórico Amojo — precisa KOMMO_CHANNEL_SECRET + KOMMO_CHANNEL_SCOPE_ID + chat_id
@@ -60,11 +61,18 @@ function pollEnabled(env) {
   return isKommoInboundPollEnabled(env)
 }
 
-function pollMode(env) {
-  return String(env.KOMMO_INBOUND_POLL_MODE || 'notes')
+/** Modo efetivo do poll (use no scheduler, boot e checks). */
+export function normalizeKommoInboundPollMode(raw) {
+  let m = String(raw ?? 'notes')
     .replace(/^\uFEFF/, '')
     .trim()
     .toLowerCase()
+  if (m === 'note') m = 'notes'
+  return m
+}
+
+function pollMode(env) {
+  return normalizeKommoInboundPollMode(env.KOMMO_INBOUND_POLL_MODE)
 }
 
 let loggedDispatcherFallback = false
@@ -412,30 +420,156 @@ function countEventTypes(events) {
 }
 
 /**
- * Extrai o texto da mensagem do `value_after` do evento. O Kommo retorna esse
- * campo em formatos diferentes dependendo da integração:
- *   - array: [{ message: { id, text } }]
- *   - objeto: { message: { id, text } }
- *   - às vezes: { note: { text } } ou { text: '...' }
+ * Extrai o texto da mensagem do `value_after` / `value_before` do evento.
+ * WABA costuma mandar em `value_after` só stubs `{ message: { id, talk_id, origin: waba } }`
+ * sem `text` — aí o texto vem do histórico Amojo (ver resolveWabaInboundTextFromAmojo).
  */
 function extractEventMessage(ev) {
-  const raw = ev?.value_after
   const candidates = []
-  if (Array.isArray(raw)) {
-    for (const item of raw) candidates.push(item)
-  } else if (raw && typeof raw === 'object') {
-    candidates.push(raw)
+  for (const raw of [ev?.value_after, ev?.value_before]) {
+    if (raw == null) continue
+    if (Array.isArray(raw)) {
+      for (const item of raw) candidates.push(item)
+    } else if (typeof raw === 'object') {
+      candidates.push(raw)
+    }
   }
+  let stubMessageId = null
   for (const c of candidates) {
     if (!c || typeof c !== 'object') continue
     const m = c.message || c.note || c
-    const text = m?.text ?? m?.body ?? c.text
     const messageId = m?.id ?? c?.id ?? null
+    const text = m?.text ?? m?.body ?? m?.content ?? c.text ?? c.body ?? c.content
     if (text != null && String(text).trim()) {
       return { text: String(text).trim(), messageId: messageId ? String(messageId) : null }
     }
+    if (m && typeof m === 'object' && (m.id != null || m.talk_id != null)) {
+      stubMessageId = messageId != null ? String(messageId) : stubMessageId
+    }
   }
-  return { text: '', messageId: null }
+  return { text: '', messageId: stubMessageId }
+}
+
+/** Dígitos do telefone a partir de `5511...@s.whatsapp.net`. */
+function sessionToContactDigits(sessionId) {
+  const local = String(sessionId || '').split('@')[0] || ''
+  return normalizeDigits(local)
+}
+
+/**
+ * Evento WABA: `value_after` com message.id + talk_id, sem texto.
+ * @returns {{ talkId: number, messageId: string } | null}
+ */
+function extractWabaRelayRefs(ev) {
+  const tryBlock = (raw) => {
+    const items = Array.isArray(raw) ? raw : raw && typeof raw === 'object' ? [raw] : []
+    for (const item of items) {
+      const msg = item?.message
+      if (!msg || typeof msg !== 'object') continue
+      const origin = String(msg.origin || '').toLowerCase()
+      const tid = msg.talk_id ?? msg.talkId
+      const mid = msg.id
+      if (tid == null || tid === '') continue
+      const talkId = Number(tid)
+      if (!Number.isFinite(talkId) || talkId <= 0) continue
+      if (
+        origin &&
+        origin !== 'waba' &&
+        origin !== 'whatsapp' &&
+        origin !== 'whatsapp_business'
+      ) {
+        continue
+      }
+      return { talkId, messageId: mid != null ? String(mid) : '' }
+    }
+    return null
+  }
+  const strict = tryBlock(ev?.value_after) || tryBlock(ev?.value_before)
+  if (strict) return strict
+  const loose = (raw) => {
+    const items = Array.isArray(raw) ? raw : raw && typeof raw === 'object' ? [raw] : []
+    for (const item of items) {
+      const msg = item?.message
+      if (!msg || typeof msg !== 'object') continue
+      const tid = msg.talk_id ?? msg.talkId
+      const mid = msg.id
+      if (tid == null || tid === '') continue
+      const talkId = Number(tid)
+      if (!Number.isFinite(talkId) || talkId <= 0) continue
+      return { talkId, messageId: mid != null ? String(mid) : '' }
+    }
+    return null
+  }
+  return loose(ev?.value_after) || loose(ev?.value_before)
+}
+
+/**
+ * Preenche texto de evento incoming_chat_message WABA quando o CRM não manda body no evento.
+ * Exige KOMMO_CHANNEL_SECRET + KOMMO_CHANNEL_SCOPE_ID (mesmo conjunto do mode=amojo).
+ */
+async function resolveWabaInboundTextFromAmojo(env, ev, sessionId) {
+  const off = String(env.KOMMO_INBOUND_POLL_WABA_AMOJO_FILL ?? 'true').trim().toLowerCase()
+  if (off === 'false' || off === '0' || off === 'no') return ''
+  if (!amojoConfigured(env)) return ''
+  const refs = extractWabaRelayRefs(ev)
+  if (!refs) return ''
+  const scopeId = String(env.KOMMO_CHANNEL_SCOPE_ID || '').trim()
+  const talk = await getTalkById(env, refs.talkId)
+  if (!talk.ok || !talk.talk?.chat_id) {
+    console.warn(
+      `[kommo-poll][events] waba_amojo_fill: getTalkById(${refs.talkId}) falhou:`,
+      talk.error || talk.status || '?',
+    )
+    return ''
+  }
+  const chatId = String(talk.talk.chat_id)
+  const hist = await fetchAmojoChatHistory(env, {
+    scopeId,
+    conversationId: chatId,
+    limit: 50,
+    offset: 0,
+  })
+  if (!hist.ok || !hist.messages?.length) {
+    console.warn(
+      `[kommo-poll][events] waba_amojo_fill: histórico Amojo falhou/vazio chat_id=${chatId.slice(0, 12)}…:`,
+      hist.error || hist.status || '?',
+    )
+    return ''
+  }
+  const contactDigits = sessionToContactDigits(sessionId)
+  const wantId = refs.messageId
+  const rows = [...hist.messages].sort((a, b) => (a.msec_timestamp || 0) - (b.msec_timestamp || 0))
+  if (wantId) {
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const row = rows[i]
+      const mid = String(row?.message?.id ?? row?.id ?? '')
+      if (mid && mid === wantId) {
+        const inner = row?.message
+        const t = inner?.text ?? inner?.body ?? inner?.content
+        if (t != null && String(t).trim()) {
+          console.log(
+            `[kommo-poll][events] waba_amojo_fill: texto resolvido msgId=${wantId} chat_id=${chatId.slice(0, 12)}…`,
+          )
+          return String(t).trim()
+        }
+      }
+    }
+  }
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i]
+    if (!isAmojoInboundRow(row, contactDigits)) continue
+    const inner = row?.message
+    const mtype = String(inner?.type || '').toLowerCase()
+    if (mtype && mtype !== 'text') continue
+    const t = inner?.text ?? inner?.body ?? inner?.content
+    if (t != null && String(t).trim()) {
+      console.log(
+        `[kommo-poll][events] waba_amojo_fill: última inbound text (msgId alvo ausente ou sem match) chat_id=${chatId.slice(0, 12)}…`,
+      )
+      return String(t).trim()
+    }
+  }
+  return ''
 }
 
 const INCOMING_EVENT_TYPES = new Set([
@@ -599,7 +733,10 @@ async function pollEvents(env, leadId, sessionId, contactId) {
       continue
     }
 
-    const { text, messageId } = extractEventMessage(ev)
+    let { text, messageId } = extractEventMessage(ev)
+    if (!text) {
+      text = await resolveWabaInboundTextFromAmojo(env, ev, sessionId)
+    }
     if (!text) {
       filteredEmpty += 1
       if (evId) st.seenIds.add(evId)
@@ -618,7 +755,10 @@ async function pollEvents(env, leadId, sessionId, contactId) {
         preview = '(unserializable)'
       }
       console.log(
-        `[kommo-poll][events] sem_texto lead=${lid} eventId=${evId} type=${t} createdAt=${at} value_after=${vaShape} preview=${preview}`,
+        `[kommo-poll][events] sem_texto lead=${lid} eventId=${evId} type=${t} createdAt=${at} value_after=${vaShape} preview=${preview}` +
+          (amojoConfigured(env)
+            ? ' | dica: com WABA o CRM pode omitir o texto no evento; o fill via Amojo já foi tentado (KOMMO_CHANNEL_SECRET + KOMMO_CHANNEL_SCOPE_ID).'
+            : ' | dica: evento WABA sem texto — configure KOMMO_CHANNEL_SECRET + KOMMO_CHANNEL_SCOPE_ID (canal WhatsApp) para buscar o body no histórico Amojo, ou use notas (common) com INCLUDE_COMMON.'),
       )
       continue
     }

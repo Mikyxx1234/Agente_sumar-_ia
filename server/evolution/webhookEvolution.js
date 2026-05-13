@@ -33,6 +33,7 @@ import { generateExecutionId, saveExecution } from '../ai/executionTelemetry.js'
 import { rememberWamid, getWamids } from './sessionWamid.js'
 import { startTypingHeartbeat } from '../whatsappTypingHeartbeat.js'
 import { canonicalWhatsAppSessionId, phoneToWhatsAppSessionId } from '../phoneWhatsApp.js'
+import { normalizeKommoInboundPollMode } from '../kommoInboundPoll.js'
 import { enqueueCloudInboundPending, matchContactToPending, markCloudBridgeExpectsContact, shouldBufferOrphanContact, clearCloudBridgeContactWindow, bufferOrphanContact } from './cloudInboundPending.js'
 import { recordSyncOutcome, recordBufferWrite, recordAsyncError } from './webhookDiagnostics.js'
 
@@ -197,7 +198,7 @@ function getBase64(payload) {
 function isDispatcherPathAvailable(env) {
   const enabled = String(env.KOMMO_INBOUND_POLL_ENABLED || '').toLowerCase()
   if (enabled !== 'true' && enabled !== '1' && enabled !== 'yes') return false
-  const mode = String(env.KOMMO_INBOUND_POLL_MODE || 'notes').replace(/^\uFEFF/, '').trim().toLowerCase()
+  const mode = normalizeKommoInboundPollMode(env.KOMMO_INBOUND_POLL_MODE)
   return mode === 'dispatcher' || mode === 'all'
 }
 
