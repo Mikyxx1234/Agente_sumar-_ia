@@ -46,10 +46,11 @@ if (!Number.isFinite(leadId) || leadId <= 0) {
 
 const env = process.env
 const notes = await listLeadNotes(env, leadId, { limit: 15, order: 'desc' })
+const eventTypes = ['incoming_chat_message', 'incoming_message']
 const events = await listLeadEvents(env, leadId, {
-  limit: 15,
+  limit: 25,
   entity: 'lead',
-  types: ['incoming_chat_message'],
+  types: eventTypes,
 })
 
 console.log('\n=== Kommo lead feed probe ===\n')
@@ -77,10 +78,10 @@ if (!notes.ok) {
 console.log('')
 
 if (!events.ok) {
-  console.log('[events incoming_chat_message] ERRO', events.status, events.error || events.code)
+  console.log('[events incoming_chat/incoming_message] ERRO', events.status, events.error || events.code)
 } else {
   const arr = events.events || []
-  console.log(`[events incoming_chat_message] ok count=${arr.length}\n`)
+  console.log(`[events ${eventTypes.join('+')}] ok count=${arr.length}\n`)
   for (const e of arr.slice(0, 8)) {
     const txt = extractEventText(e)
     const short = txt.replace(/\s+/g, ' ').trim().slice(0, 100)

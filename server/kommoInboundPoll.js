@@ -57,7 +57,7 @@ import {
 const noteState = new Map()
 /** @type {Map<number, { warmed: boolean, lastMsec: number }>} */
 const amojoState = new Map()
-/** @type {Map<number, { warmed: boolean, lastSeenAt: number, seenIds: Set<string> }>} */
+/** @type {Map<number, { warmed: boolean, lastSeenAt: number, seenIds: Set<string>, emptyIncomingNoText?: Map<string, number> }>} */
 const eventState = new Map()
 /** @type {Map<number, { warmed: boolean, lastMsgId: number, seenIds: Set<number> }>} */
 const dispatcherState = new Map()
@@ -564,11 +564,35 @@ async function pollNotes(env, leadId, sessionId, contactDigits) {
 }
 
 function parseEventTypes(env) {
-  const raw = String(env.KOMMO_INBOUND_POLL_EVENT_TYPES || 'incoming_chat_message').trim()
+  const raw = String(
+    env.KOMMO_INBOUND_POLL_EVENT_TYPES || 'incoming_chat_message,incoming_message',
+  ).trim()
   return raw
     .split(/[,\s]+/)
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean)
+}
+
+function getPollEventsFetchLimit(env) {
+  const v = Number(env.KOMMO_INBOUND_POLL_EVENTS_LIMIT)
+  if (Number.isFinite(v) && v > 0) return Math.min(250, Math.max(1, Math.floor(v)))
+  return 250
+}
+
+function ensureEventPollState(lid) {
+  let st = eventState.get(lid)
+  if (!st) {
+    st = {
+      warmed: false,
+      lastSeenAt: 0,
+      seenIds: new Set(),
+      emptyIncomingNoText: new Map(),
+    }
+    eventState.set(lid, st)
+    return st
+  }
+  if (!st.emptyIncomingNoText) st.emptyIncomingNoText = new Map()
+  return st
 }
 
 function countEventTypes(events) {
@@ -864,16 +888,13 @@ async function resolveWabaStubViaLeadNotes(env, ev, leadId, sessionId) {
 async function pollEvents(env, leadId, sessionId, contactId) {
   const lid = Number(leadId)
   const types = parseEventTypes(env)
-  let st = eventState.get(lid) || {
-    warmed: false,
-    lastSeenAt: 0,
-    seenIds: new Set(),
-  }
+  const st = ensureEventPollState(lid)
+  const evLimit = getPollEventsFetchLimit(env)
 
   const cursorSec = normalizeKommoEventSec(st.lastSeenAt)
   const fromTs =
     st.warmed && cursorSec > 0 ? Math.max(0, cursorSec - 1) : 0
-  const list = await listLeadEvents(env, lid, { types, fromTs, limit: 50 })
+  const list = await listLeadEvents(env, lid, { types, fromTs, limit: evLimit })
 
   if (!list.ok) {
     const errMsg = String(list.error || list.status || 'unknown')
@@ -908,7 +929,7 @@ async function pollEvents(env, leadId, sessionId, contactId) {
       entityId: cid,
       types,
       fromTs,
-      limit: 50,
+      limit: evLimit,
     })
     if (listC.ok) {
       const { merged, addedFromSecondary } = mergeEventsById(events, listC.events || [])
@@ -948,6 +969,7 @@ async function pollEvents(env, leadId, sessionId, contactId) {
       warmed: true,
       lastSeenAt: seedAt,
       seenIds,
+      emptyIncomingNoText: st.emptyIncomingNoText || new Map(),
     })
     console.log(
       `[kommo-poll][events] warmup lead=${lid} session=${sessionId} lastSeenAt=${seedAt} eventos=${events.length} tipos=${JSON.stringify(typeCounts)} seenIdsNaoIncoming=${seenIds.size} url=${list.requestUrl || 'n/a'}`,
@@ -1044,27 +1066,39 @@ async function pollEvents(env, leadId, sessionId, contactId) {
     }
     if (!text) {
       filteredEmpty += 1
-      if (evId) st.seenIds.add(evId)
-      maxAt = Math.max(maxAt, at)
-      const vaShape = Array.isArray(ev?.value_after)
-        ? `array[${ev.value_after.length}]`
-        : ev?.value_after && typeof ev.value_after === 'object'
-          ? `object{${Object.keys(ev.value_after).join(',')}}`
-          : ev?.value_after === null
-            ? 'null'
-            : typeof ev?.value_after
-      let preview = ''
-      try {
-        preview = JSON.stringify(ev?.value_after ?? null).slice(0, 280)
-      } catch {
-        preview = '(unserializable)'
+      if (evId) {
+        const prev = st.emptyIncomingNoText.get(evId) || 0
+        const next = prev + 1
+        st.emptyIncomingNoText.set(evId, next)
+        if (next === 1 || next === 30) {
+          const vaShape = Array.isArray(ev?.value_after)
+            ? `array[${ev.value_after.length}]`
+            : ev?.value_after && typeof ev.value_after === 'object'
+              ? `object{${Object.keys(ev.value_after).join(',')}}`
+              : ev?.value_after === null
+                ? 'null'
+                : typeof ev?.value_after
+          let preview = ''
+          try {
+            preview = JSON.stringify(ev?.value_after ?? null).slice(0, 280)
+          } catch {
+            preview = '(unserializable)'
+          }
+          console.log(
+            `[kommo-poll][events] sem_texto lead=${lid} eventId=${evId} type=${t} tentativa=${next} createdAt=${at} value_after=${vaShape} preview=${preview}` +
+              (amojoConfigured(env)
+                ? ' | Amojo tentado; sem texto. Ou notas: INCLUDE_COMMON + common em NOTE_TYPES e WABA_NOTES_FALLBACK.'
+                : ' | Sem Amojo: fallback notas (common). Evento fica pendente até haver texto ou 60 ticks.'),
+          )
+        }
+        if (next >= 60) {
+          st.seenIds.add(evId)
+          console.warn(
+            `[kommo-poll][events] lead=${lid} eventId=${evId} incoming sem texto após ${next} ticks — marcando visto`,
+          )
+        }
       }
-      console.log(
-        `[kommo-poll][events] sem_texto lead=${lid} eventId=${evId} type=${t} createdAt=${at} value_after=${vaShape} preview=${preview}` +
-          (amojoConfigured(env)
-            ? ' | Amojo tentado; sem texto. Verifique assinatura Amojo / histórico. Ou notas: INCLUDE_COMMON + common em NOTE_TYPES e WABA_NOTES_FALLBACK.'
-            : ' | Sem KOMMO_CHANNEL_SECRET/SCOPE_ID (Amojo). Fallback notas: INCLUDE_COMMON=true, common em NOTE_TYPES (WABA_NOTES_FALLBACK default ligado).'),
-      )
+      maxAt = Math.max(maxAt, at)
       continue
     }
 
@@ -1086,7 +1120,10 @@ async function pollEvents(env, leadId, sessionId, contactId) {
     try {
       await pushMessage(env, sessionId, cleaned, { skipDedupe: true })
       pushed += 1
-      if (evId) st.seenIds.add(evId)
+      if (evId) {
+        st.seenIds.add(evId)
+        st.emptyIncomingNoText.delete(evId)
+      }
       maxAt = Math.max(maxAt, at)
       console.log(
         `[kommo-poll][events] +1 lead=${lid} session=${sessionId} eventId=${evId} msgId=${messageId || 'n/a'} createdAt=${at} text="${cleaned.slice(0, 80)}"`,
@@ -1107,6 +1144,7 @@ async function pollEvents(env, leadId, sessionId, contactId) {
     warmed: true,
     lastSeenAt: Math.max(normalizeKommoEventSec(st.lastSeenAt), maxAt),
     seenIds: st.seenIds,
+    emptyIncomingNoText: st.emptyIncomingNoText,
   })
 
   if (pushed > 0) {
@@ -1679,9 +1717,9 @@ export async function syncKommoInboundToBuffer(env, { leadId, sessionId, phone, 
     await runAmojo()
     return { pushed, byMode }
   }
-  await runNotes()
   if (alsoPollEventsWithNotes(env)) {
     await runEvents()
   }
+  await runNotes()
   return { pushed, byMode }
 }
