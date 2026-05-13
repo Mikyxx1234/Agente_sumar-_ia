@@ -13,14 +13,19 @@
  *     mesma rede do EasyPanel. Usa GET /api/kommo/messages/by-lead/{id}.
  *     Se o serviço não existir (ENOTFOUND), o boot pode forçar `both` — ver
  *     maybeFallbackPollModeWhenDispatcherDown e KOMMO_INBOUND_POLL_DISPATCHER_FALLBACK.
- *   - both: roda notes + events (ambos filtrados por dedupe; útil quando você não sabe qual
- *     fonte sua integração usa).
+ *   - both: só notas por padrão (Kommo Bearer, sem Amojo). Eventos da v4 só se
+ *     KOMMO_INBOUND_POLL_ALSO_POLL_EVENTS=true (útil p/ integrações sem nota).
  *   - all: notes + events + amojo (Amojo só roda se as envs estiverem setadas).
  *
- * Warmup: no primeiro tick por lead, grava o cursor no último item existente e não empurra
- * mensagens antigas (evita reprocessar histórico inteiro após deploy).
+ * Warmup: no primeiro tick por lead, grava o cursor no último id de nota existente e não
+ * empurra o histórico inteiro. Se o id mais alto for de nota do agente/sistema acima da
+ * última mensagem do cliente, o cursor “passava por cima” do cliente (fresh=0 para sempre);
+ * nesse caso, com KOMMO_INBOUND_POLL_NOTES_TAIL_SEED_ON_WARMUP ligado (default), empurra
+ * uma vez a última mensagem inbound elegível antes dessa cauda (dedupe via Redis quando
+ * REDIS_URL/REDIS_HOST existir).
  */
 
+import Redis from 'ioredis'
 import { pushMessage } from './evolution/messageBuffer.js'
 import {
   listLeadNotes,
@@ -75,14 +80,21 @@ function pollMode(env) {
   return normalizeKommoInboundPollMode(env.KOMMO_INBOUND_POLL_MODE)
 }
 
+/** Em mode=both, rodar poll de eventos v4 (opcional; default false = só notas Kommo). */
+function alsoPollEventsInBoth(env) {
+  const v = String(env.KOMMO_INBOUND_POLL_ALSO_POLL_EVENTS ?? '')
+    .trim()
+    .toLowerCase()
+  return v === 'true' || v === '1' || v === 'yes'
+}
+
 let loggedDispatcherFallback = false
 
 /**
  * Se o poll estiver em modo `dispatcher` ou `all` mas o serviço HTTP
  * do dispatcher não existir (ENOTFOUND) ou estiver parado
- * (ECONNREFUSED), força `KOMMO_INBOUND_POLL_MODE=both` em runtime
- * (notas + eventos na API v4 do Kommo). Assim a IA volta a responder
- * sem precisar criar o banco-kommo-dispatcher no Easypanel.
+ * (ECONNREFUSED), força `KOMMO_INBOUND_POLL_MODE=notes` em runtime
+ * (apenas GET /api/v4/leads/{id}/notes — Bearer Kommo, sem dispatcher/Amojo).
  *
  * Desligue com KOMMO_INBOUND_POLL_DISPATCHER_FALLBACK=false se quiser
  * manter falha explícita até o dispatcher existir.
@@ -106,23 +118,23 @@ export async function maybeFallbackPollModeWhenDispatcherDown(env) {
   if (cause !== 'ENOTFOUND' && cause !== 'ECONNREFUSED') {
     console.warn(
       `[kommo-poll] dispatcher health falhou (${cause || h.error}) — mantendo modo=${mode}. ` +
-        `Se persistir, defina KOMMO_INBOUND_POLL_MODE=both ou corrija KOMMO_DISPATCHER_URL.`,
+        `Se persistir, defina KOMMO_INBOUND_POLL_MODE=notes ou corrija KOMMO_DISPATCHER_URL.`,
     )
     return { changed: false, reason: 'transient_or_other', mode }
   }
   const was = mode
-  env.KOMMO_INBOUND_POLL_MODE = 'both'
-  process.env.KOMMO_INBOUND_POLL_MODE = 'both'
+  env.KOMMO_INBOUND_POLL_MODE = 'notes'
+  process.env.KOMMO_INBOUND_POLL_MODE = 'notes'
   if (!loggedDispatcherFallback) {
     loggedDispatcherFallback = true
     console.error(
       `[kommo-poll] FALLBACK AUTOMATICO: modo era "${was}" mas o dispatcher em ${h.upstream} ` +
-        `esta inacessivel (${cause}). Forcando KOMMO_INBOUND_POLL_MODE=both (Kommo API v4: notas + eventos). ` +
-        `Se precisava de Amojo (mode=all), use KOMMO_INBOUND_POLL_MODE=amojo ou corrija o dispatcher. ` +
+        `esta inacessivel (${cause}). Forcando KOMMO_INBOUND_POLL_MODE=notes (somente notas v4 / Bearer). ` +
+        `Eventos WABA sem texto exigem Amojo ou notas common — evitamos mode=both aqui. ` +
         `Para desligar este fallback: KOMMO_INBOUND_POLL_DISPATCHER_FALLBACK=false`,
     )
   }
-  return { changed: true, from: was, to: 'both', reason: 'dispatcher_unreachable' }
+  return { changed: true, from: was, to: 'notes', reason: 'dispatcher_unreachable' }
 }
 
 function normalizeDigits(phone) {
@@ -141,11 +153,20 @@ function phoneDigitsMatch(a, b) {
 function parseNoteTypes(env) {
   const raw =
     env.KOMMO_INBOUND_POLL_NOTE_TYPES ||
-    'sms_in,extended_service_message,service_message'
+    'sms_in,extended_service_message,service_message,common'
   return raw
     .split(/[,\s]+/)
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean)
+}
+
+function isCommonInboundEnabled(env) {
+  const types = parseNoteTypes(env)
+  if (!types.includes('common')) return false
+  const inc = String(env.KOMMO_INBOUND_POLL_INCLUDE_COMMON || '').trim().toLowerCase()
+  if (inc === 'false' || inc === '0' || inc === 'no') return false
+  if (inc === 'true' || inc === '1' || inc === 'yes') return true
+  return inc === ''
 }
 
 /**
@@ -180,10 +201,7 @@ function extractNoteText(note, env) {
   if (t === 'extended_service_message' || t === 'service_message') {
     return extractParamsInboundText(p) || String(p.text || '').trim()
   }
-  const incCommon = String(env.KOMMO_INBOUND_POLL_INCLUDE_COMMON || '')
-    .trim()
-    .toLowerCase()
-  if (t === 'common' && (incCommon === 'true' || incCommon === '1' || incCommon === 'yes')) {
+  if (t === 'common' && isCommonInboundEnabled(env)) {
     return extractParamsInboundText(p) || String(p.text || '').trim()
   }
   return ''
@@ -216,6 +234,134 @@ function stripExecutionSuffix(text) {
     s = s.replace(re, '')
   }
   return s.trim()
+}
+
+/**
+ * Classifica uma nota do Kommo para o mesmo critério do loop de poll (inbound vs skip).
+ * @returns {{ kind: 'push', text: string, nid: number } | { kind: 'skip', reason: string, advance: boolean, nid: number }}
+ */
+function classifyInboundNote(n, env, contactDigits, types) {
+  const nid = Number(n.id) || 0
+  if (isOutboundNoteType(n.note_type)) {
+    return { kind: 'skip', reason: 'outbound_type', advance: true, nid }
+  }
+  if (!types.includes(String(n.note_type || '').toLowerCase())) {
+    return { kind: 'skip', reason: 'type', advance: true, nid }
+  }
+  const rawText = extractNoteText(n, env)
+  if (!rawText) {
+    return { kind: 'skip', reason: 'empty', advance: true, nid }
+  }
+  if (String(n.note_type || '').toLowerCase() === 'common' && isAgentOutboundEcho(rawText)) {
+    return { kind: 'skip', reason: 'echo', advance: true, nid }
+  }
+  const text = stripExecutionSuffix(rawText)
+  if (!text) {
+    return { kind: 'skip', reason: 'strip_empty', advance: true, nid }
+  }
+  if (String(n.note_type || '').toLowerCase() === 'sms_in' && contactDigits) {
+    const np = normalizeDigits(n.params?.phone || '')
+    if (np && !phoneDigitsMatch(np, contactDigits)) {
+      return { kind: 'skip', reason: 'other_phone', advance: false, nid }
+    }
+  }
+  return { kind: 'push', text, nid }
+}
+
+function findTailBlockedInboundForWarmup(notes, env, contactDigits, types) {
+  const maxAll = notes.reduce((m, n) => Math.max(m, Number(n.id) || 0), 0)
+  if (!notes.length || !maxAll) return null
+  const byDesc = [...notes].sort((a, b) => (Number(b.id) || 0) - (Number(a.id) || 0))
+  for (const n of byDesc) {
+    const c = classifyInboundNote(n, env, contactDigits, types)
+    if (c.kind !== 'push') continue
+    const nid = c.nid
+    const higher = notes.filter((x) => (Number(x.id) || 0) > nid)
+    const allHigherNonInbound = higher.every(
+      (x) => classifyInboundNote(x, env, contactDigits, types).kind !== 'push',
+    )
+    if (allHigherNonInbound && maxAll > nid) {
+      return { text: c.text, nid, maxAll }
+    }
+  }
+  return null
+}
+
+function isNotesTailSeedOn(env) {
+  const v = String(env.KOMMO_INBOUND_POLL_NOTES_TAIL_SEED_ON_WARMUP ?? 'true')
+    .trim()
+    .toLowerCase()
+  if (v === '0' || v === 'false' || v === 'no' || v === 'off') return false
+  return true
+}
+
+let _tailSeedRedis = null
+const _tailSeedMemOk = new Set()
+
+function buildTailSeedRedisClient(env) {
+  const commonOpts = {
+    lazyConnect: true,
+    enableAutoPipelining: true,
+    maxRetriesPerRequest: 2,
+    retryStrategy: (times) => (times > 3 ? null : Math.min(times * 200, 2000)),
+    connectTimeout: 3000,
+    enableOfflineQueue: false,
+  }
+  if (env.REDIS_URL) return new Redis(env.REDIS_URL, commonOpts)
+  if (env.REDIS_HOST) {
+    return new Redis({
+      host: env.REDIS_HOST || '127.0.0.1',
+      port: Number(env.REDIS_PORT || 6379),
+      password: env.REDIS_PASSWORD || undefined,
+      db: Number(env.REDIS_DB || 0),
+      tls: String(env.REDIS_TLS || '').toLowerCase() === 'true' ? {} : undefined,
+      ...commonOpts,
+    })
+  }
+  return null
+}
+
+function getTailSeedRedis(env) {
+  if (!env.REDIS_URL && !env.REDIS_HOST) return null
+  if (!_tailSeedRedis) {
+    _tailSeedRedis = buildTailSeedRedisClient(env)
+    _tailSeedRedis.on('error', (err) => {
+      console.warn('[kommo-poll][notes] tail-seed Redis error:', err.message)
+    })
+  }
+  return _tailSeedRedis
+}
+
+/**
+ * Garante no máximo um tail-seed por (lead, noteId) entre restarts (Redis SET NX) ou,
+ * sem Redis, só dentro do mesmo processo.
+ * @returns {Promise<{ ok: boolean, reason?: string }>}
+ */
+async function tryTailSeedOnce(env, leadId, noteId) {
+  const memKey = `${leadId}:${noteId}`
+  const redisKey = `kommo:poll:tailseed:v1:${leadId}:${noteId}`
+  const ttlRaw = Number(env.KOMMO_INBOUND_POLL_TAIL_SEED_DEDUPE_SEC)
+  const ttlSec =
+    Number.isFinite(ttlRaw) && ttlRaw > 0 ? Math.min(Math.floor(ttlRaw), 2592000) : 604800
+  const client = getTailSeedRedis(env)
+  if (client) {
+    try {
+      if (client.status === 'wait') {
+        await Promise.race([
+          client.connect(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('connect timeout')), 3500)),
+        ])
+      }
+      const r = await client.set(redisKey, '1', 'EX', ttlSec, 'NX')
+      if (r !== 'OK') return { ok: false, reason: 'dedup' }
+      return { ok: true }
+    } catch (e) {
+      console.warn(`[kommo-poll][notes] tail-seed Redis indisponível (${e.message}) — dedupe só em memória neste processo`)
+    }
+  }
+  if (_tailSeedMemOk.has(memKey)) return { ok: false, reason: 'dedup' }
+  _tailSeedMemOk.add(memKey)
+  return { ok: true }
 }
 
 async function resolveChatId(env, leadId) {
@@ -270,7 +416,7 @@ async function pollNotes(env, leadId, sessionId, contactDigits) {
   const lid = Number(leadId)
   let st = noteState.get(lid) || { warmed: false, lastNoteId: 0 }
   const types = parseNoteTypes(env)
-  const list = await listLeadNotes(env, lid, { limit: 80, order: 'desc' })
+  const list = await listLeadNotes(env, lid, { limit: 120, order: 'desc' })
   if (!list.ok) {
     console.warn(`[kommo-poll][notes] lead=${lid}:`, list.error || list.status)
     recordNotesTick({
@@ -295,6 +441,21 @@ async function pollNotes(env, leadId, sessionId, contactDigits) {
   const typeCounts = countTypes(notes)
   if (!st.warmed) {
     const maxId = notes.reduce((m, n) => Math.max(m, Number(n.id) || 0), 0)
+    const tail = findTailBlockedInboundForWarmup(notes, env, contactDigits, types)
+    if (tail && isNotesTailSeedOn(env)) {
+      const gate = await tryTailSeedOnce(env, lid, tail.nid)
+      if (gate.ok) {
+        await pushMessage(env, sessionId, tail.text, { skipDedupe: true })
+        console.log(
+          `[kommo-poll][notes] warmup tail-seed lead=${lid} noteId=${tail.nid} maxNoteId=${tail.maxAll} ` +
+            `(última nota no timeline tinha id maior que a última msg inbound — evita buffer eternamente vazio)`,
+        )
+      } else if (gate.reason === 'dedup') {
+        console.log(
+          `[kommo-poll][notes] warmup tail-seed omitido (já deduplicado) lead=${lid} noteId=${tail.nid}`,
+        )
+      }
+    }
     noteState.set(lid, { warmed: true, lastNoteId: maxId })
     console.log(
       `[kommo-poll][notes] warmup lead=${lid} lastNoteId=${maxId} notas=${notes.length} tipos=${JSON.stringify(typeCounts)}`,
@@ -326,59 +487,37 @@ async function pollNotes(env, leadId, sessionId, contactDigits) {
   let filteredOtherPhone = 0
   for (const n of asc) {
     const nid = Number(n.id)
-    if (isOutboundNoteType(n.note_type)) {
-      filteredOutbound += 1
-      maxApplied = Math.max(maxApplied, nid)
+    const c = classifyInboundNote(n, env, contactDigits, types)
+    if (c.kind === 'push') {
+      await pushMessage(env, sessionId, c.text, { skipDedupe: true })
+      maxApplied = Math.max(maxApplied, c.nid)
+      pushed += 1
       continue
     }
-    if (!types.includes(String(n.note_type || '').toLowerCase())) {
+    if (c.reason === 'outbound_type' || c.reason === 'echo') {
+      filteredOutbound += 1
+    } else if (c.reason === 'type') {
       filteredByType += 1
-      maxApplied = Math.max(maxApplied, nid)
-      continue
-    }
-    const rawText = extractNoteText(n, env)
-    if (!rawText) {
+    } else if (c.reason === 'empty' || c.reason === 'strip_empty') {
       filteredEmpty += 1
+    } else if (c.reason === 'other_phone') {
+      filteredOtherPhone += 1
+    }
+    if (c.advance) {
       maxApplied = Math.max(maxApplied, nid)
-      continue
     }
-    if (String(n.note_type || '').toLowerCase() === 'common' && isAgentOutboundEcho(rawText)) {
-      filteredOutbound += 1
-      maxApplied = Math.max(maxApplied, nid)
-      continue
-    }
-    const text = stripExecutionSuffix(rawText)
-    if (!text) {
-      filteredEmpty += 1
-      maxApplied = Math.max(maxApplied, nid)
-      continue
-    }
-    if (String(n.note_type || '').toLowerCase() === 'sms_in' && contactDigits) {
-      const np = normalizeDigits(n.params?.phone || '')
-      if (np && !phoneDigitsMatch(np, contactDigits)) {
-        filteredOtherPhone += 1
-        continue
-      }
-    }
-    // skipDedupe: mensagens vindas do Kommo têm id de nota distinto; o dedupe
-    // global (sessão+texto em 120s) faria "oi"+"oi" sumirem do buffer e o poll
-    // ainda avançava lastNoteId — buffer vazio permanente (caso real).
-    await pushMessage(env, sessionId, text, { skipDedupe: true })
-    maxApplied = Math.max(maxApplied, nid)
-    pushed += 1
   }
   noteState.set(lid, { warmed: true, lastNoteId: Math.max(st.lastNoteId, maxApplied) })
   if (pushed > 0) {
     console.log(`[kommo-poll][notes] buffer +${pushed} lead=${lid} session=${sessionId}`)
   } else if (fresh.length > 0) {
     const freshHasCommon = fresh.some((n) => String(n?.note_type || '').toLowerCase() === 'common')
-    const incCommon = String(env.KOMMO_INBOUND_POLL_INCLUDE_COMMON || '').trim().toLowerCase()
-    const commonEnabled = incCommon === 'true' || incCommon === '1' || incCommon === 'yes'
     let hint = ''
-    if (freshHasCommon && (!types.includes('common') || !commonEnabled)) {
+    if (freshHasCommon && !isCommonInboundEnabled(env)) {
       hint =
         ' | DICA: notas "common" (tipico WhatsApp no Kommo) estao fora do filtro. ' +
-        'Adicione "common" em KOMMO_INBOUND_POLL_NOTE_TYPES e defina KOMMO_INBOUND_POLL_INCLUDE_COMMON=true.'
+        'Remova common de KOMMO_INBOUND_POLL_NOTE_TYPES ou defina KOMMO_INBOUND_POLL_INCLUDE_COMMON=false explicitamente; ' +
+        'com common na lista, INCLUDE_COMMON vazio = ligado.'
     }
     console.log(
       `[kommo-poll][notes] sem inbound novo lead=${lid} fresh=${fresh.length} tipos=${JSON.stringify(typeCounts)} filtroAtivo=${types.join('|')}${hint}`,
@@ -681,10 +820,7 @@ async function resolveWabaStubViaLeadNotes(env, ev, leadId, sessionId) {
   for (const n of list.notes) {
     const nt = String(n.note_type || '').toLowerCase()
     if (!types.includes(nt)) continue
-    if (nt === 'common') {
-      const inc = String(env.KOMMO_INBOUND_POLL_INCLUDE_COMMON || '').trim().toLowerCase()
-      if (!(inc === 'true' || inc === '1' || inc === 'yes')) continue
-    }
+    if (nt === 'common' && !isCommonInboundEnabled(env)) continue
     const raw = extractNoteText(n, env)
     if (!raw) continue
     if (nt === 'common' && isAgentOutboundEcho(raw)) continue
@@ -1515,7 +1651,9 @@ export async function syncKommoInboundToBuffer(env, { leadId, sessionId, phone, 
   }
   if (mode === 'both') {
     await runNotes()
-    await runEvents()
+    if (alsoPollEventsInBoth(env)) {
+      await runEvents()
+    }
     return { pushed, byMode }
   }
   if (mode === 'all') {

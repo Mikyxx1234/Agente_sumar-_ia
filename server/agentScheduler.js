@@ -26,11 +26,14 @@
  *   KOMMO_SCHEDULER_INTERVAL_SEC=30    intervalo entre ticks
  *   KOMMO_SCHEDULER_DEBOUNCE_SEC=15    silêncio mínimo após última mensagem
  *   KOMMO_SCHEDULER_ENABLED=true       chave geral pra ligar/desligar
- *   KOMMO_INBOUND_POLL_ENABLED=true     opcional: preenche buffer a partir de notas
- *                                       ou histórico Amojo (sem Evolution webhook).
- *   KOMMO_INBOUND_POLL_MODE=notes       notes | amojo | both (default notes)
- *   KOMMO_INBOUND_POLL_NOTE_TYPES=…     tipos de nota considerados inbound
- *   KOMMO_CHANNEL_SECRET / SCOPE_ID    só p/ mode amojo ou both
+ *   KOMMO_INBOUND_POLL_ENABLED=true     opcional: preenche buffer a partir das notas
+ *                                       do lead (GET v4/leads/{id}/notes, só Bearer).
+ *   KOMMO_INBOUND_POLL_MODE=notes        notes | both (só notas) | events | dispatcher | amojo
+ *   KOMMO_INBOUND_POLL_ALSO_POLL_EVENTS  com mode=both, true = também poll de eventos v4
+ *   KOMMO_INBOUND_POLL_NOTES_TAIL_SEED_ON_WARMUP  default true — evita buffer vazio quando
+ *                                       o maior id de nota é do agente acima da última msg do cliente.
+ *   KOMMO_INBOUND_POLL_NOTE_TYPES=…     tipos de nota considerados inbound (default inclui common)
+ *   KOMMO_CHANNEL_SECRET / SCOPE_ID    só p/ mode=amojo (histórico Chats)
  *   KOMMO_LEAD_CHAT_MAP={"19884275":"uuid-chat"}  opcional — chat_id por lead
  *   KOMMO_AGENT_TEST_LEAD_IDS          (opcional) whitelist CSV de lead ids em teste
  *   KOMMO_SCHEDULER_VERBOSE=true       loga URLs longas do poll quando buffer vazio

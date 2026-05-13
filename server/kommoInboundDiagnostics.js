@@ -180,14 +180,14 @@ export function formatPollDiagLine(leadId) {
     Object.keys(types2).length === 1 && Object.keys(types2)[0] === 'common'
   if (s.notesTotal === 0) {
     hint =
-      ' | dica: lead sem notas; tente KOMMO_INBOUND_POLL_MODE=events (ou both) para ler do log de eventos do Kommo, que normalmente tem incoming_chat_message mesmo quando não vira nota.'
+      ' | dica: lead sem notas na API v4. Eventos: mode=both + KOMMO_INBOUND_POLL_ALSO_POLL_EVENTS=true (WABA sem texto no evento ainda precisa de nota common ou Amojo).'
   } else if (s.pushedCount === 0 && s.filteredByType > 0 && onlyCommon) {
     hint =
-      ' | dica: todas as notas são "common" (WhatsApp deste setup grava mensagens como common). Ative KOMMO_INBOUND_POLL_INCLUDE_COMMON=true e adicione common em KOMMO_INBOUND_POLL_NOTE_TYPES.'
+      ' | dica: notas só "common". Default: common já está em NOTE_TYPES e INCLUDE_COMMON vazio = ligado; use INCLUDE_COMMON=false só para desligar.'
   } else if (s.pushedCount === 0 && s.filteredByType > 0) {
     hint = ` | dica: notas presentes mas tipo não cobre; ajuste KOMMO_INBOUND_POLL_NOTE_TYPES com os tipos vistos acima.`
   } else if (s.pushedCount === 0 && s.notesTotal > 0 && s.freshCount === 0) {
-    hint = ` | nada novo desde lastNoteId=${s.lastNoteId} (há ${ago}s)`
+    hint = ` | nada novo desde lastNoteId=${s.lastNoteId} (há ${ago}s). Se a última nota no Kommo for do agente acima da msg do cliente, use tail-seed no warmup (default KOMMO_INBOUND_POLL_NOTES_TAIL_SEED_ON_WARMUP=true) e reinicie o processo.`
   }
   return `[poll-kommo][diag] lead=${lid} mode=${s.pollMode} notas=${s.notesTotal} tipos=${types} fresh=${s.freshCount} pushed=${s.pushedCount} ${filtered} lastNoteId=${s.lastNoteId} (há ${ago}s)${hint}`
 }
@@ -250,7 +250,7 @@ export function formatEventsDiagLine(leadId) {
   let hint = ''
   if (s.eventsTotal === 0 && s.freshCount === 0) {
     hint =
-      ' | dica: zero eventos no log do Kommo é comum no WhatsApp Cloud — o inbound costuma vir das NOTAS (tipo common). Use KOMMO_INBOUND_POLL_MODE=notes ou both com KOMMO_INBOUND_POLL_INCLUDE_COMMON=true e "common" em KOMMO_INBOUND_POLL_NOTE_TYPES. mode=amojo exige canal + secrets.'
+      ' | dica: zero eventos no log do Kommo é comum no WhatsApp Cloud — o inbound costuma vir das NOTAS (tipo common). Use KOMMO_INBOUND_POLL_MODE=notes ou both (sem ALSO_POLL_EVENTS); "common" já entra no default de NOTE_TYPES. mode=amojo exige canal + secrets.'
   } else if (s.pushedCount === 0 && s.eventsTotal > 0 && s.freshCount === 0) {
     hint = ` | nada novo desde lastSeenAt=${s.lastSeenAt} (há ${ago}s)`
   } else if (s.pushedCount === 0 && s.filteredEmpty > 0) {
