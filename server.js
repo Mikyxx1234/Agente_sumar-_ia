@@ -27,6 +27,8 @@ import {
   listLeadCustomFields,
   tryListTalksForLead,
   getTalkById,
+  getLeadContactIds,
+  listContactChats,
 } from './server/kommoClient.js'
 import { fetchAmojoChatHistory } from './server/kommoAmojoHistory.js'
 import {
@@ -1020,8 +1022,21 @@ app.get('/api/kommo/poll/chat-history', async (req, res) => {
 
     const talksListed = await tryListTalksForLead(env, leadId)
     const talks = talksListed.talks || []
+    const contactIds = await getLeadContactIds(env, leadId)
+    const contactChatsByContact = []
+    for (const cid of contactIds) {
+      const cc = await listContactChats(env, cid)
+      contactChatsByContact.push({
+        contactId: cid,
+        ok: cc.ok,
+        status: cc.status,
+        error: cc.error || null,
+        chats: cc.chats || [],
+      })
+    }
+
     const talksSlim = talks.map((t) => ({
-      id: t?.id,
+      id: t?.id ?? t?.talk_id,
       contact_id: t?.contact_id,
       entity_id: t?.entity_id,
       entity_type: t?.entity_type,
@@ -1031,16 +1046,16 @@ app.get('/api/kommo/poll/chat-history', async (req, res) => {
 
     const talkDetails = []
     for (const t of talks.slice(0, maxTalkDetails)) {
-      const tid = Number(t?.id)
-      if (!Number.isFinite(tid) || tid <= 0) continue
-      const detail = await getTalkById(env, tid)
+      const rawTid = t?.id ?? t?.talk_id
+      if (rawTid == null || rawTid === '') continue
+      const detail = await getTalkById(env, rawTid)
       if (!detail.ok) {
-        talkDetails.push({ talkId: tid, ok: false, error: detail.error || detail.status })
+        talkDetails.push({ talkId: rawTid, ok: false, error: detail.error || detail.status })
         continue
       }
       const talk = detail.talk || {}
       talkDetails.push({
-        talkId: tid,
+        talkId: rawTid,
         ok: true,
         chat_id: talk.chat_id != null ? String(talk.chat_id) : null,
         contact_id: talk.contact_id,
@@ -1055,6 +1070,11 @@ app.get('/api/kommo/poll/chat-history', async (req, res) => {
     const chatIds = new Set()
     const fromMap = getLeadChatIdFromEnvMap(env, leadId)
     if (fromMap) chatIds.add(fromMap)
+    for (const block of contactChatsByContact) {
+      for (const ch of block.chats || []) {
+        if (ch.chat_id) chatIds.add(String(ch.chat_id))
+      }
+    }
     for (const row of talkDetails) {
       if (row.ok && row.chat_id) chatIds.add(row.chat_id)
     }
@@ -1110,7 +1130,10 @@ app.get('/api/kommo/poll/chat-history', async (req, res) => {
       kommoDocs: {
         chatHistory: 'https://developers.kommo.com/reference/chat-history',
         talkById: 'https://developers.kommo.com/reference/get-conversation',
+        contactChats: 'https://developers.kommo.com/reference/get-contact-chats',
       },
+      contactIds,
+      contactChatsByContact,
       talks: {
         listOk: talksListed.ok !== false,
         listError: talksListed.error || null,
@@ -1127,7 +1150,7 @@ app.get('/api/kommo/poll/chat-history', async (req, res) => {
         results: amojoChats,
       },
       hint:
-        'O REST v4 não expõe GET /leads/{id}/messages com o texto do WhatsApp; use talks → chat_id + histórico Chats API (este endpoint) ou o teu banco-kommo-dispatcher (/api/kommo/poll/dispatcher).',
+        'Texto WhatsApp: GET /api/v4/contacts/chats?contact_id= (ver contactChatsByContact) ou talks+chat_id; corpo das mensagens: Chats API history (Amojo) com KOMMO_CHANNEL_SECRET+SCOPE ou dispatcher /api/kommo/poll/dispatcher.',
     })
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })

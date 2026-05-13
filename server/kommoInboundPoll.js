@@ -37,6 +37,8 @@ import {
   listLeadEvents,
   tryListTalksForLead,
   getTalkById,
+  getLeadContactIds,
+  listContactChats,
 } from './kommoClient.js'
 import { fetchAmojoChatHistory } from './kommoAmojoHistory.js'
 import {
@@ -445,6 +447,14 @@ async function resolveChatId(env, leadId) {
   if (tid) {
     const d = await getTalkById(env, tid)
     if (d.ok && d.talk?.chat_id) return String(d.talk.chat_id)
+  }
+  const contactIds = await getLeadContactIds(env, leadId)
+  for (const cid of contactIds) {
+    const cc = await listContactChats(env, cid)
+    if (!cc.ok) continue
+    for (const row of cc.chats || []) {
+      if (row.chat_id) return String(row.chat_id)
+    }
   }
   return null
 }

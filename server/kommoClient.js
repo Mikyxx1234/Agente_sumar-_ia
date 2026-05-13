@@ -214,7 +214,30 @@ export async function listLeadNotes(env, leadId, { limit = 50, order = 'desc' } 
 }
 
 /**
+ * IDs de contatos ligados ao lead (embed `contacts` + `main_contact_id`).
+ * @returns { Promise<number[]> }
+ */
+export async function getLeadContactIds(env, leadId) {
+  const lid = Number(leadId)
+  if (!Number.isFinite(lid) || lid <= 0) return []
+  const r = await kommoFetch(env, `/api/v4/leads/${lid}?with=contacts`)
+  if (!r.ok) return []
+  const lead = r.data
+  const out = []
+  const main = Number(lead?.main_contact_id)
+  if (Number.isFinite(main) && main > 0) out.push(main)
+  const embedded = lead?._embedded?.contacts || []
+  for (const c of embedded) {
+    const id = Number(c?.id)
+    if (Number.isFinite(id) && id > 0) out.push(id)
+  }
+  return [...new Set(out)]
+}
+
+/**
  * Tenta listar talks vinculados ao lead (para obter chat_id → histórico Amojo).
+ * Inclui talks com entity_id = lead OU = contato(s) do lead (WhatsApp costuma
+ * ficar no contato).
  *
  * @returns { ok, talks: object[], error? }
  */
@@ -223,18 +246,66 @@ export async function tryListTalksForLead(env, leadId) {
   if (!Number.isFinite(lid) || lid <= 0) {
     return { ok: false, error: 'leadId inválido', talks: [] }
   }
-  const attempts = [
-    `/api/v4/talks?limit=20&filter[entity_id][0]=${lid}&filter[entity_type][0]=lead`,
-    `/api/v4/talks?limit=20&filter[entity_id][0]=${lid}`,
-    `/api/v4/talks?limit=20&filter[entity_id]=${lid}`,
+  const contactIds = await getLeadContactIds(env, lid)
+  const acceptable = new Set([lid, ...contactIds])
+
+  const leadPaths = [
+    `/api/v4/talks?limit=50&filter[entity_id][0]=${lid}&filter[entity_type][0]=lead`,
+    `/api/v4/talks?limit=50&filter[entity_id][0]=${lid}`,
+    `/api/v4/talks?limit=50&filter[entity_id]=${lid}`,
   ]
-  for (const path of attempts) {
+  const contactPaths = []
+  for (const cid of contactIds.slice(0, 8)) {
+    contactPaths.push(`/api/v4/talks?limit=50&filter[entity_id][0]=${cid}&filter[entity_type][0]=contact`)
+    contactPaths.push(`/api/v4/talks?limit=50&filter[entity_id][0]=${cid}`)
+  }
+
+  const byId = new Map()
+  const ingest = (talks) => {
+    if (!Array.isArray(talks)) return
+    for (const t of talks) {
+      const eid = Number(t?.entity_id)
+      if (!acceptable.has(eid)) continue
+      const id = t?.id ?? t?.talk_id
+      if (id == null || id === '') continue
+      const key = String(id)
+      if (!byId.has(key)) byId.set(key, t)
+    }
+  }
+
+  for (const path of [...leadPaths, ...contactPaths]) {
     const r = await kommoFetch(env, path)
     if (!r.ok) continue
-    const talks = r.data?._embedded?.talks || []
-    if (Array.isArray(talks) && talks.length > 0) return { ok: true, talks }
+    ingest(r.data?._embedded?.talks || [])
   }
-  return { ok: true, talks: [] }
+
+  const talks = [...byId.values()]
+  if (talks.length === 0) {
+    console.warn(
+      `[kommoClient] tryListTalksForLead lead=${lid}: nenhum talk com entity_id em {lead, contatos}=` +
+        `${[...acceptable].join(',')}. contactIds=${contactIds.join(',') || 'nenhum'}`,
+    )
+  }
+  return { ok: true, talks }
+}
+
+/**
+ * Chats (chat_id da Chats API) ligados a um contato — REST v4.
+ * @see https://developers.kommo.com/reference/get-contact-chats
+ * @returns { Promise<{ ok: boolean, chats: any[], status?: number, error?: string }> }
+ */
+export async function listContactChats(env, contactId) {
+  const cid = Number(contactId)
+  if (!Number.isFinite(cid) || cid <= 0) {
+    return { ok: false, error: 'contactId inválido', chats: [] }
+  }
+  const r = await kommoFetch(env, `/api/v4/contacts/chats?contact_id=${cid}`)
+  if (!r.ok) {
+    return { ok: false, status: r.status, error: summarizeError(r), chats: [] }
+  }
+  if (r.status === 204) return { ok: true, chats: [], status: 204 }
+  const chats = r.data?._embedded?.chats || []
+  return { ok: true, chats, status: r.status }
 }
 
 // Cache de mapeamento "nome do campo" → field_id (em memória, por
@@ -314,11 +385,12 @@ export async function resolveLeadFieldIdByName(env, names) {
  * @returns { ok, talk?, error? }
  */
 export async function getTalkById(env, talkId) {
-  const tid = Number(talkId)
-  if (!Number.isFinite(tid) || tid <= 0) {
+  const raw = talkId != null ? String(talkId).trim() : ''
+  if (!raw) {
     return { ok: false, error: 'talkId inválido' }
   }
-  const r = await kommoFetch(env, `/api/v4/talks/${tid}`)
+  const segment = encodeURIComponent(raw)
+  const r = await kommoFetch(env, `/api/v4/talks/${segment}`)
   if (!r.ok) {
     return { ok: false, status: r.status, error: summarizeError(r) }
   }
