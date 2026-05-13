@@ -175,7 +175,7 @@ export async function runSchedulerTick(env) {
         stats.skippedNoMessages += 1
         if (whitelist) {
           const pollOn = isKommoInboundPollEnabled(env)
-          const mode = String(env.KOMMO_INBOUND_POLL_MODE || 'notes').trim().toLowerCase()
+          const mode = String(env.KOMMO_INBOUND_POLL_MODE || 'notes').replace(/^\uFEFF/, '').trim().toLowerCase()
           console.log(
             `[scheduler] buffer vazio session=${sessionId} lead=${lead.id} mode=${pollOn ? mode : 'webhook'} — sem inbound novo neste tick.`,
           )

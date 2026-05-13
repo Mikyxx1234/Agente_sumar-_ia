@@ -197,7 +197,7 @@ function getBase64(payload) {
 function isDispatcherPathAvailable(env) {
   const enabled = String(env.KOMMO_INBOUND_POLL_ENABLED || '').toLowerCase()
   if (enabled !== 'true' && enabled !== '1' && enabled !== 'yes') return false
-  const mode = String(env.KOMMO_INBOUND_POLL_MODE || 'notes').toLowerCase()
+  const mode = String(env.KOMMO_INBOUND_POLL_MODE || 'notes').replace(/^\uFEFF/, '').trim().toLowerCase()
   return mode === 'dispatcher' || mode === 'all'
 }
 

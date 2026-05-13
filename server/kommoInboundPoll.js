@@ -10,6 +10,8 @@
  *   - dispatcher: lê do banco-kommo-dispatcher (FastAPI) que já mantém cache
  *     atualizado das mensagens. RECOMENDADO quando esse serviço existe na
  *     mesma rede do EasyPanel. Usa GET /api/kommo/messages/by-lead/{id}.
+ *     Se o serviço não existir (ENOTFOUND), o boot pode forçar `both` — ver
+ *     maybeFallbackPollModeWhenDispatcherDown e KOMMO_INBOUND_POLL_DISPATCHER_FALLBACK.
  *   - both: roda notes + events (ambos filtrados por dedupe; útil quando você não sabe qual
  *     fonte sua integração usa).
  *   - all: notes + events + amojo (Amojo só roda se as envs estiverem setadas).
@@ -26,7 +28,10 @@ import {
   getTalkById,
 } from './kommoClient.js'
 import { fetchAmojoChatHistory } from './kommoAmojoHistory.js'
-import { getMessagesByLead as dispatcherGetMessagesByLead } from './kommoDispatcherClient.js'
+import {
+  getMessagesByLead as dispatcherGetMessagesByLead,
+  checkDispatcherHealth,
+} from './kommoDispatcherClient.js'
 import { digitsToWhatsAppLocalPart } from './phoneWhatsApp.js'
 import { transcribeAudioBase64, analyzeImageBase64 } from './evolution/openaiMedia.js'
 import { downloadUrlAsBase64 } from './mediaDownloader.js'
@@ -56,7 +61,60 @@ function pollEnabled(env) {
 }
 
 function pollMode(env) {
-  return String(env.KOMMO_INBOUND_POLL_MODE || 'notes').trim().toLowerCase()
+  return String(env.KOMMO_INBOUND_POLL_MODE || 'notes')
+    .replace(/^\uFEFF/, '')
+    .trim()
+    .toLowerCase()
+}
+
+let loggedDispatcherFallback = false
+
+/**
+ * Se o poll estiver em modo `dispatcher` ou `all` mas o serviço HTTP
+ * do dispatcher não existir (ENOTFOUND) ou estiver parado
+ * (ECONNREFUSED), força `KOMMO_INBOUND_POLL_MODE=both` em runtime
+ * (notas + eventos na API v4 do Kommo). Assim a IA volta a responder
+ * sem precisar criar o banco-kommo-dispatcher no Easypanel.
+ *
+ * Desligue com KOMMO_INBOUND_POLL_DISPATCHER_FALLBACK=false se quiser
+ * manter falha explícita até o dispatcher existir.
+ *
+ * @param {Record<string,string>} env  process.env (mutável)
+ * @returns {Promise<{ changed: boolean, from?: string, to?: string, reason?: string }>}
+ */
+export async function maybeFallbackPollModeWhenDispatcherDown(env) {
+  if (!pollEnabled(env)) return { changed: false, reason: 'poll_disabled' }
+  const fb = String(env.KOMMO_INBOUND_POLL_DISPATCHER_FALLBACK ?? 'true').trim().toLowerCase()
+  if (fb === 'false' || fb === '0' || fb === 'no') {
+    return { changed: false, reason: 'fallback_disabled_by_env' }
+  }
+  const mode = pollMode(env)
+  if (mode !== 'dispatcher' && mode !== 'all') {
+    return { changed: false, reason: 'not_dispatcher_mode', mode }
+  }
+  const h = await checkDispatcherHealth(env, { timeoutMs: 5000 })
+  if (h.ok) return { changed: false, reason: 'dispatcher_reachable', mode }
+  const cause = h.cause || ''
+  if (cause !== 'ENOTFOUND' && cause !== 'ECONNREFUSED') {
+    console.warn(
+      `[kommo-poll] dispatcher health falhou (${cause || h.error}) — mantendo modo=${mode}. ` +
+        `Se persistir, defina KOMMO_INBOUND_POLL_MODE=both ou corrija KOMMO_DISPATCHER_URL.`,
+    )
+    return { changed: false, reason: 'transient_or_other', mode }
+  }
+  const was = mode
+  env.KOMMO_INBOUND_POLL_MODE = 'both'
+  process.env.KOMMO_INBOUND_POLL_MODE = 'both'
+  if (!loggedDispatcherFallback) {
+    loggedDispatcherFallback = true
+    console.error(
+      `[kommo-poll] FALLBACK AUTOMATICO: modo era "${was}" mas o dispatcher em ${h.upstream} ` +
+        `esta inacessivel (${cause}). Forcando KOMMO_INBOUND_POLL_MODE=both (Kommo API v4: notas + eventos). ` +
+        `Se precisava de Amojo (mode=all), use KOMMO_INBOUND_POLL_MODE=amojo ou corrija o dispatcher. ` +
+        `Para desligar este fallback: KOMMO_INBOUND_POLL_DISPATCHER_FALLBACK=false`,
+    )
+  }
+  return { changed: true, from: was, to: 'both', reason: 'dispatcher_unreachable' }
 }
 
 function normalizeDigits(phone) {

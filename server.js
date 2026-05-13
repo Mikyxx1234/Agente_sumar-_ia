@@ -30,6 +30,7 @@ import { pingBackend, pushMessage, getMessages, clearMessages } from './server/e
 import { getDebounceMs } from './server/evolution/debouncer.js'
 import { runAgent } from './server/ai/agentRunner.js'
 import { startAgentScheduler, runSchedulerTick, isSchedulerRunning } from './server/agentScheduler.js'
+import { maybeFallbackPollModeWhenDispatcherDown } from './server/kommoInboundPoll.js'
 import { runSalesbotCsv, extractLeadIdFromWebhookBody, probePos } from './server/salesbot/csvSearch.js'
 import { saveSalesbotExecution } from './server/salesbot/telemetry.js'
 import { reindexPos } from './server/salesbot/reindexPos.js'
@@ -1588,7 +1589,7 @@ app.get('*path', (_req, res) => {
   res.sendFile(join(__dirname, 'dist', 'index.html'))
 })
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   const maps = process.env.GOOGLE_MAPS_API_KEY || process.env.VITE_GOOGLE_MAPS_API_KEY
   console.log(`[Server] Listening on port ${PORT}`)
   console.log(`[Server] Supabase proxy (IA): ${SUPABASE_URL ? 'active' : 'DISABLED'}`)
@@ -1607,6 +1608,30 @@ app.listen(PORT, () => {
   } catch { /* ignore */ }
   console.log(`[Server] Polos: table=${poloTable} host=${poloHostLabel}`)
 
+  const pollEnabledBoot = ['true', '1', 'yes'].includes(
+    String(process.env.KOMMO_INBOUND_POLL_ENABLED || '').trim().toLowerCase(),
+  )
+  const pollModeBoot = String(process.env.KOMMO_INBOUND_POLL_MODE || 'notes')
+    .replace(/^\uFEFF/, '')
+    .trim()
+    .toLowerCase()
+  if (pollEnabledBoot && (pollModeBoot === 'dispatcher' || pollModeBoot === 'all')) {
+    const fb = await maybeFallbackPollModeWhenDispatcherDown(process.env)
+    if (fb.changed) {
+      console.log(
+        `[Server] Kommo inbound poll: enabled=true mode=${process.env.KOMMO_INBOUND_POLL_MODE} (fallback de "${fb.from}" porque dispatcher inacessivel)`,
+      )
+    } else {
+      console.log(
+        `[Server] Kommo inbound poll: enabled=true mode=${process.env.KOMMO_INBOUND_POLL_MODE || 'notes'} (${fb.reason || 'ok'})`,
+      )
+    }
+  } else {
+    console.log(
+      `[Server] Kommo inbound poll: enabled=${pollEnabledBoot} mode=${process.env.KOMMO_INBOUND_POLL_MODE || 'notes'}`,
+    )
+  }
+
   const sched = startAgentScheduler(process.env)
   if (!sched.started) {
     console.log(`[Server] Agent scheduler: ${sched.reason}`)
@@ -1618,10 +1643,11 @@ app.listen(PORT, () => {
   // visível para o operador detectar de imediato nos logs do EasyPanel,
   // mas NÃO derrubamos o processo (regra: outras rotas — health,
   // playground, salesbot — continuam úteis pra debug).
-  const pollMode = String(process.env.KOMMO_INBOUND_POLL_MODE || 'notes').trim().toLowerCase()
-  const pollEnabled = ['true', '1', 'yes'].includes(
-    String(process.env.KOMMO_INBOUND_POLL_ENABLED || '').trim().toLowerCase(),
-  )
+  const pollMode = String(process.env.KOMMO_INBOUND_POLL_MODE || 'notes')
+    .replace(/^\uFEFF/, '')
+    .trim()
+    .toLowerCase()
+  const pollEnabled = pollEnabledBoot
   if (pollEnabled && (pollMode === 'dispatcher' || pollMode === 'all')) {
     if (!process.env.KOMMO_DISPATCHER_URL) {
       console.warn(
