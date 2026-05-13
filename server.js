@@ -21,7 +21,14 @@ import { downloadUrlAsBase64 } from './server/mediaDownloader.js'
 import { recordWebhookIngress, getWebhookDiagnosticsSnapshot } from './server/evolution/webhookDiagnostics.js'
 import { getKommoPollSnapshot } from './server/kommoInboundDiagnostics.js'
 import { getModelRegistrySnapshot } from './server/ai/modelRegistry.js'
-import { listLeadNotes, listLeadEvents, listLeadCustomFields } from './server/kommoClient.js'
+import {
+  listLeadNotes,
+  listLeadEvents,
+  listLeadCustomFields,
+  tryListTalksForLead,
+  getTalkById,
+} from './server/kommoClient.js'
+import { fetchAmojoChatHistory } from './server/kommoAmojoHistory.js'
 import {
   getMessagesByLead as dispatcherGetMessagesByLead,
   checkDispatcherHealth,
@@ -971,6 +978,157 @@ app.get('/api/kommo/lead-fields', async (req, res) => {
     }
     fields.sort((a, b) => String(a.name).localeCompare(String(b.name), 'pt-BR'))
     res.json({ ok: true, total: fields.length, cached: out.cached, fields })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+/**
+ * Lê `KOMMO_LEAD_CHAT_MAP` JSON: { "19884275": "<uuid-conversa-amojo>" }.
+ */
+function getLeadChatIdFromEnvMap(env, leadId) {
+  const raw = String(env.KOMMO_LEAD_CHAT_MAP || '').trim()
+  if (!raw) return null
+  try {
+    const j = JSON.parse(raw)
+    const lid = String(leadId)
+    const v = j[lid] ?? j[Number(leadId)]
+    if (v == null) return null
+    const s = String(v).trim()
+    return s || null
+  } catch {
+    return null
+  }
+}
+
+// Histórico de chat Kommo (Chats API / Amojo) para um lead — o que a doc chama de
+// "Get chat history": precisa de talk → chat_id e KOMMO_CHANNEL_SECRET + scope.
+// @see https://developers.kommo.com/reference/chat-history
+// @see https://developers.kommo.com/reference/get-conversation (GET /api/v4/talks/{id})
+//
+//   GET https://<seu-host>/api/kommo/poll/chat-history?leadId=19884275&historyLimit=30
+app.get('/api/kommo/poll/chat-history', async (req, res) => {
+  try {
+    const env = process.env
+    const leadId = Number(req.query.leadId)
+    if (!Number.isFinite(leadId) || leadId <= 0) {
+      res.status(400).json({ ok: false, error: 'leadId é obrigatório (?leadId=...)' })
+      return
+    }
+    const historyLimit = Math.min(50, Math.max(1, Number(req.query.historyLimit) || 30))
+    const maxTalkDetails = Math.min(15, Math.max(1, Number(req.query.maxTalks) || 8))
+
+    const talksListed = await tryListTalksForLead(env, leadId)
+    const talks = talksListed.talks || []
+    const talksSlim = talks.map((t) => ({
+      id: t?.id,
+      contact_id: t?.contact_id,
+      entity_id: t?.entity_id,
+      entity_type: t?.entity_type,
+      is_in_work: t?.is_in_work,
+      origin: t?.origin,
+    }))
+
+    const talkDetails = []
+    for (const t of talks.slice(0, maxTalkDetails)) {
+      const tid = Number(t?.id)
+      if (!Number.isFinite(tid) || tid <= 0) continue
+      const detail = await getTalkById(env, tid)
+      if (!detail.ok) {
+        talkDetails.push({ talkId: tid, ok: false, error: detail.error || detail.status })
+        continue
+      }
+      const talk = detail.talk || {}
+      talkDetails.push({
+        talkId: tid,
+        ok: true,
+        chat_id: talk.chat_id != null ? String(talk.chat_id) : null,
+        contact_id: talk.contact_id,
+        entity_id: talk.entity_id,
+        entity_type: talk.entity_type,
+        origin: talk.origin,
+      })
+    }
+
+    const scopeId = String(env.KOMMO_CHANNEL_SCOPE_ID || '').trim()
+    const secretOk = Boolean(String(env.KOMMO_CHANNEL_SECRET || '').trim())
+    const chatIds = new Set()
+    const fromMap = getLeadChatIdFromEnvMap(env, leadId)
+    if (fromMap) chatIds.add(fromMap)
+    for (const row of talkDetails) {
+      if (row.ok && row.chat_id) chatIds.add(row.chat_id)
+    }
+
+    const amojoChats = []
+    if (!secretOk || !scopeId) {
+      amojoChats.push({
+        conversationId: null,
+        skipped: true,
+        reason: 'Defina KOMMO_CHANNEL_SECRET e KOMMO_CHANNEL_SCOPE_ID para chamar o histórico Amojo (doc: Get chat history).',
+      })
+    } else {
+      for (const conversationId of chatIds) {
+        const hist = await fetchAmojoChatHistory(env, {
+          scopeId,
+          conversationId,
+          limit: historyLimit,
+          offset: 0,
+        })
+        if (!hist.ok) {
+          amojoChats.push({
+            conversationId,
+            ok: false,
+            error: hist.error || String(hist.status || 'erro'),
+            status: hist.status || null,
+          })
+          continue
+        }
+        const rows = hist.messages || []
+        const sample = rows.slice(-15).map((row) => {
+          const inner = row?.message || {}
+          const text = String(inner.text ?? inner.body ?? inner.content ?? '').trim()
+          return {
+            message_id: inner.id != null ? String(inner.id) : row?.id != null ? String(row.id) : null,
+            type: inner.type || null,
+            text: text.length > 400 ? `${text.slice(0, 400)}…` : text,
+            msec_timestamp: row.msec_timestamp ?? null,
+            sender_phone: row?.sender?.phone ?? null,
+          }
+        })
+        amojoChats.push({
+          conversationId,
+          ok: true,
+          messageCount: rows.length,
+          sample,
+        })
+      }
+    }
+
+    res.json({
+      ok: true,
+      leadId,
+      kommoDocs: {
+        chatHistory: 'https://developers.kommo.com/reference/chat-history',
+        talkById: 'https://developers.kommo.com/reference/get-conversation',
+      },
+      talks: {
+        listOk: talksListed.ok !== false,
+        listError: talksListed.error || null,
+        count: talks.length,
+        items: talksSlim,
+      },
+      talksDetail: talkDetails,
+      leadChatMapEntry: fromMap || null,
+      amojo: {
+        secretConfigured: secretOk,
+        scopeIdConfigured: Boolean(scopeId),
+        scopeIdPreview: scopeId ? `${scopeId.slice(0, 8)}…` : null,
+        chatIdsTried: [...chatIds],
+        results: amojoChats,
+      },
+      hint:
+        'O REST v4 não expõe GET /leads/{id}/messages com o texto do WhatsApp; use talks → chat_id + histórico Chats API (este endpoint) ou o teu banco-kommo-dispatcher (/api/kommo/poll/dispatcher).',
+    })
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })
   }
