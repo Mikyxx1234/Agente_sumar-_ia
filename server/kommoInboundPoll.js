@@ -213,18 +213,20 @@ function isOutboundNoteType(noteType) {
 }
 
 /**
- * Notas que o próprio agente cria têm sufixo ` - EX-YYMMDD-HHMM-NNN` (ver
- * generateExecutionId + sendMessageWithNote). Não tratar como inbound, senão
- * a resposta da IA volta como pergunta no próximo tick.
+ * Notas que o próprio agente cria vêm de sendMessageWithNote: `${part} - ${execId}`
+ * com execId tipo EX-YYMMDD-HHMM-NNN (ver generateExecutionId). No timeline do Kommo
+ * o sufixo às vezes aparece como " - EX-…" e às vezes " -EX-…" (sem espaço antes de EX).
+ * Se o filtro for estrito demais, a nota common da resposta da IA entra como "inbound".
  */
-const AGENT_OUTBOUND_SUFFIX = /\s-\sEX-\d{6}-\d{4}-\d{3}\s*$/
+const AGENT_OUTBOUND_SUFFIX = /\s-\s*EX-\d{6}-\d{4}-\d{3}\s*$/i
 
 function isAgentOutboundEcho(text) {
   return AGENT_OUTBOUND_SUFFIX.test(String(text || ''))
 }
 
 const SUFFIX_PATTERNS = [
-  /-\s+EX-\d{6}-\d{4}-\d{3}\s*$/,
+  /\s-\s*EX-\d{6}-\d{4}-\d{3}\s*$/i,
+  /-\s+EX-\d{6}-\d{4}-\d{3}\s*$/i,
   /-\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/,
 ]
 
@@ -252,7 +254,7 @@ function classifyInboundNote(n, env, contactDigits, types) {
   if (!rawText) {
     return { kind: 'skip', reason: 'empty', advance: true, nid }
   }
-  if (String(n.note_type || '').toLowerCase() === 'common' && isAgentOutboundEcho(rawText)) {
+  if (isAgentOutboundEcho(rawText)) {
     return { kind: 'skip', reason: 'echo', advance: true, nid }
   }
   const text = stripExecutionSuffix(rawText)
@@ -823,7 +825,7 @@ async function resolveWabaStubViaLeadNotes(env, ev, leadId, sessionId) {
     if (nt === 'common' && !isCommonInboundEnabled(env)) continue
     const raw = extractNoteText(n, env)
     if (!raw) continue
-    if (nt === 'common' && isAgentOutboundEcho(raw)) continue
+    if (isAgentOutboundEcho(raw)) continue
     const text = stripExecutionSuffix(raw)
     if (!text) continue
     if (nt === 'sms_in' && contactDigits) {
