@@ -4,6 +4,11 @@
  * Modos (KOMMO_INBOUND_POLL_MODE):
  *   - notes (default): GET /api/v4/leads/{id}/notes — só Bearer KOMMO_*.
  *     (O valor `note` no .env é aceito como alias de `notes`.)
+ *     Por padrão também consulta eventos v4 `incoming_chat_message` após as notas
+ *     (KOMMO_INBOUND_POLL_NOTES_ALSO_EVENTS, default true): no Kommo a linha do tempo
+ *     mistura “notas” (common, integração, IA) com mensagens de chat; o texto que o
+ *     lead manda no WhatsApp costuma existir no feed de eventos mesmo quando a nota
+ *     common ainda não reflete ou reflete só o eco da integração.
  *   - events: GET /api/v4/events?filter[type]=incoming_chat_message — só Bearer KOMMO_*
  *     (mais robusto, pega mensagem mesmo quando não vira nota).
  *   - amojo: histórico Amojo — precisa KOMMO_CHANNEL_SECRET + KOMMO_CHANNEL_SCOPE_ID + chat_id
@@ -86,6 +91,17 @@ function alsoPollEventsInBoth(env) {
     .trim()
     .toLowerCase()
   return v === 'true' || v === '1' || v === 'yes'
+}
+
+/**
+ * Em mode=notes, após poll de notas, rodar também eventos v4 (incoming_chat_message).
+ * Default true: captura mensagens de chat do WhatsApp no Kommo sem Amojo; desligue com
+ * KOMMO_INBOUND_POLL_NOTES_ALSO_EVENTS=false se quiser estritamente só GET .../notes.
+ */
+function alsoPollEventsWithNotes(env) {
+  const v = String(env.KOMMO_INBOUND_POLL_NOTES_ALSO_EVENTS ?? 'true').trim().toLowerCase()
+  if (v === 'false' || v === '0' || v === 'no' || v === 'off') return false
+  return true
 }
 
 let loggedDispatcherFallback = false
@@ -213,20 +229,18 @@ function isOutboundNoteType(noteType) {
 }
 
 /**
- * Notas que o próprio agente cria vêm de sendMessageWithNote: `${part} - ${execId}`
- * com execId tipo EX-YYMMDD-HHMM-NNN (ver generateExecutionId). No timeline do Kommo
- * o sufixo às vezes aparece como " - EX-…" e às vezes " -EX-…" (sem espaço antes de EX).
- * Se o filtro for estrito demais, a nota common da resposta da IA entra como "inbound".
+ * Notas que o próprio agente cria têm sufixo ` - EX-YYMMDD-HHMM-NNN` (ver
+ * generateExecutionId + sendMessageWithNote). Não tratar como inbound, senão
+ * a resposta da IA volta como pergunta no próximo tick.
  */
-const AGENT_OUTBOUND_SUFFIX = /\s-\s*EX-\d{6}-\d{4}-\d{3}\s*$/i
+const AGENT_OUTBOUND_SUFFIX = /\s-\sEX-\d{6}-\d{4}-\d{3}\s*$/
 
 function isAgentOutboundEcho(text) {
   return AGENT_OUTBOUND_SUFFIX.test(String(text || ''))
 }
 
 const SUFFIX_PATTERNS = [
-  /\s-\s*EX-\d{6}-\d{4}-\d{3}\s*$/i,
-  /-\s+EX-\d{6}-\d{4}-\d{3}\s*$/i,
+  /-\s+EX-\d{6}-\d{4}-\d{3}\s*$/,
   /-\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/,
 ]
 
@@ -254,7 +268,7 @@ function classifyInboundNote(n, env, contactDigits, types) {
   if (!rawText) {
     return { kind: 'skip', reason: 'empty', advance: true, nid }
   }
-  if (isAgentOutboundEcho(rawText)) {
+  if (String(n.note_type || '').toLowerCase() === 'common' && isAgentOutboundEcho(rawText)) {
     return { kind: 'skip', reason: 'echo', advance: true, nid }
   }
   const text = stripExecutionSuffix(rawText)
@@ -825,7 +839,7 @@ async function resolveWabaStubViaLeadNotes(env, ev, leadId, sessionId) {
     if (nt === 'common' && !isCommonInboundEnabled(env)) continue
     const raw = extractNoteText(n, env)
     if (!raw) continue
-    if (isAgentOutboundEcho(raw)) continue
+    if (nt === 'common' && isAgentOutboundEcho(raw)) continue
     const text = stripExecutionSuffix(raw)
     if (!text) continue
     if (nt === 'sms_in' && contactDigits) {
@@ -1666,5 +1680,8 @@ export async function syncKommoInboundToBuffer(env, { leadId, sessionId, phone, 
     return { pushed, byMode }
   }
   await runNotes()
+  if (alsoPollEventsWithNotes(env)) {
+    await runEvents()
+  }
   return { pushed, byMode }
 }

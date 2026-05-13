@@ -26,9 +26,11 @@
  *   KOMMO_SCHEDULER_INTERVAL_SEC=30    intervalo entre ticks
  *   KOMMO_SCHEDULER_DEBOUNCE_SEC=15    silêncio mínimo após última mensagem
  *   KOMMO_SCHEDULER_ENABLED=true       chave geral pra ligar/desligar
- *   KOMMO_INBOUND_POLL_ENABLED=true     opcional: preenche buffer a partir das notas
- *                                       do lead (GET v4/leads/{id}/notes, só Bearer).
- *   KOMMO_INBOUND_POLL_MODE=notes        notes | both (só notas) | events | dispatcher | amojo
+ *   KOMMO_INBOUND_POLL_ENABLED=true     opcional: preenche buffer a partir do Kommo
+ *                                       (notas v4 e, com mode=notes, também eventos de chat
+ *                                       por default — ver KOMMO_INBOUND_POLL_NOTES_ALSO_EVENTS).
+ *   KOMMO_INBOUND_POLL_MODE=notes        notes | both | events | dispatcher | amojo
+ *   KOMMO_INBOUND_POLL_NOTES_ALSO_EVENTS  com mode=notes, false = só GET …/notes (sem events)
  *   KOMMO_INBOUND_POLL_ALSO_POLL_EVENTS  com mode=both, true = também poll de eventos v4
  *   KOMMO_INBOUND_POLL_NOTES_TAIL_SEED_ON_WARMUP  default true — evita buffer vazio quando
  *                                       o maior id de nota é do agente acima da última msg do cliente.
