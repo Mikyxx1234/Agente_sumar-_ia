@@ -33,13 +33,14 @@
  *   KOMMO_CHANNEL_SECRET / SCOPE_ID    só p/ mode amojo ou both
  *   KOMMO_LEAD_CHAT_MAP={"19884275":"uuid-chat"}  opcional — chat_id por lead
  *   KOMMO_AGENT_TEST_LEAD_IDS          (opcional) whitelist CSV de lead ids em teste
+ *   KOMMO_SCHEDULER_VERBOSE=true       loga URLs longas do poll quando buffer vazio
+ *                                      (senão só 1 linha resumida por lead).
  */
 
 import { listLeadsByStatus, bulkGetContactsByIds, extractContactPhone } from './kommoClient.js'
 import { phoneToWhatsAppSessionId } from './phoneWhatsApp.js'
 import { getMessages, getLastTouchedAt } from './evolution/messageBuffer.js'
 import { flushSession } from './evolution/webhookEvolution.js'
-import { formatSchedulerDiagnosticLine } from './evolution/webhookDiagnostics.js'
 import { syncKommoInboundToBuffer, isKommoInboundPollEnabled } from './kommoInboundPoll.js'
 import {
   formatPollDiagLine,
@@ -58,6 +59,13 @@ const DEFAULT_DEBOUNCE_SEC = 5
 
 let intervalHandle = null
 let running = false
+
+/** Evita flood: aviso de funil vazio no máx. 1x / 90s. */
+let lastEmptyFunnelWarnMs = 0
+
+function isSchedulerVerbose(env) {
+  return ['true', '1', 'yes'].includes(String(env.KOMMO_SCHEDULER_VERBOSE || '').trim().toLowerCase())
+}
 
 function getIntervalMs(env) {
   const v = Number(env.KOMMO_SCHEDULER_INTERVAL_SEC)
@@ -127,7 +135,19 @@ export async function runSchedulerTick(env) {
       console.log(`[scheduler] whitelist ativa — ${leads.length}/${leadsAll.length} leads passaram (ids permitidos: ${[...whitelist].join(',')})`)
     }
   }
-  if (!leads.length) return stats
+  if (!leads.length) {
+    const now = Date.now()
+    if (now - lastEmptyFunnelWarnMs > 90_000) {
+      lastEmptyFunnelWarnMs = now
+      console.warn(
+        `[scheduler] nenhum lead em pipeline_id=${pipelineId} status_id=${statusId}. ` +
+          'O poll de notas/eventos NAO roda para leads fora dessa etapa. ' +
+          'Confira no Kommo se o lead esta exatamente neste status (automacoes "TI Movido para..." podem tirar o lead da etapa que a IA escuta). ' +
+          'Ajuste KOMMO_AGENT_PIPELINE_ID / KOMMO_AGENT_STATUS_ID ou realoque o lead.',
+      )
+    }
+    return stats
+  }
 
   // 2) Coletar contact IDs e bulk-fetch
   const contactIds = []
@@ -173,31 +193,31 @@ export async function runSchedulerTick(env) {
       ])
       if (!messages || messages.length === 0) {
         stats.skippedNoMessages += 1
-        if (whitelist) {
-          const pollOn = isKommoInboundPollEnabled(env)
-          const mode = String(env.KOMMO_INBOUND_POLL_MODE || 'notes').replace(/^\uFEFF/, '').trim().toLowerCase()
-          console.log(
-            `[scheduler] buffer vazio session=${sessionId} lead=${lead.id} mode=${pollOn ? mode : 'webhook'} — sem inbound novo neste tick.`,
-          )
-          if (pollOn) {
-            if (mode === 'dispatcher') {
-              console.log(formatDispatcherDiagLine(lead.id))
-            } else if (mode === 'events') {
-              console.log(formatEventsDiagLine(lead.id))
-            } else if (mode === 'both') {
-              console.log(formatPollDiagLine(lead.id))
-              console.log(formatEventsDiagLine(lead.id))
-            } else if (mode === 'all') {
-              console.log(formatPollDiagLine(lead.id))
-              console.log(formatEventsDiagLine(lead.id))
-              console.log(formatDispatcherDiagLine(lead.id))
-            } else if (mode === 'amojo') {
-              console.log(`[poll-kommo][diag] lead=${lead.id} mode=amojo — verifique KOMMO_CHANNEL_SECRET / SCOPE_ID / chat_id`)
-            } else {
-              console.log(formatPollDiagLine(lead.id))
-            }
+        const pollOn = isKommoInboundPollEnabled(env)
+        const mode = String(env.KOMMO_INBOUND_POLL_MODE || 'notes').replace(/^\uFEFF/, '').trim().toLowerCase()
+        const showDetail = Boolean(whitelist) || isSchedulerVerbose(env)
+        // Antes o diag só rodava com KOMMO_AGENT_TEST_LEAD_IDS — em produção
+        // ficava silencioso e parecia que "nada executava". Sempre logamos 1
+        // linha; URLs longas só com whitelist ou KOMMO_SCHEDULER_VERBOSE=true.
+        console.log(
+          `[scheduler] buffer vazio session=${sessionId} lead=${lead.id} mode=${pollOn ? mode : 'webhook'} — sem inbound novo neste tick.`,
+        )
+        if (pollOn && showDetail) {
+          if (mode === 'dispatcher') {
+            console.log(formatDispatcherDiagLine(lead.id))
+          } else if (mode === 'events') {
+            console.log(formatEventsDiagLine(lead.id))
+          } else if (mode === 'both') {
+            console.log(formatPollDiagLine(lead.id))
+            console.log(formatEventsDiagLine(lead.id))
+          } else if (mode === 'all') {
+            console.log(formatPollDiagLine(lead.id))
+            console.log(formatEventsDiagLine(lead.id))
+            console.log(formatDispatcherDiagLine(lead.id))
+          } else if (mode === 'amojo') {
+            console.log(`[poll-kommo][diag] lead=${lead.id} mode=amojo — verifique KOMMO_CHANNEL_SECRET / SCOPE_ID / chat_id`)
           } else {
-            console.log(formatSchedulerDiagnosticLine())
+            console.log(formatPollDiagLine(lead.id))
           }
         }
         return
