@@ -187,7 +187,7 @@ export function formatPollDiagLine(leadId) {
   } else if (s.pushedCount === 0 && s.filteredByType > 0) {
     hint = ` | dica: notas presentes mas tipo não cobre; ajuste KOMMO_INBOUND_POLL_NOTE_TYPES com os tipos vistos acima.`
   } else if (s.pushedCount === 0 && s.notesTotal > 0 && s.freshCount === 0) {
-    hint = ` | nada novo desde lastNoteId=${s.lastNoteId} (há ${ago}s). Se a última nota no Kommo for do agente acima da msg do cliente, use tail-seed no warmup (default KOMMO_INBOUND_POLL_NOTES_TAIL_SEED_ON_WARMUP=true) e reinicie o processo.`
+    hint = ` | nada novo desde lastNoteId=${s.lastNoteId} (há ${ago}s). Mensagem de WhatsApp pode estar só em eventos v4: com mode=notes deixe KOMMO_INBOUND_POLL_NOTES_ALSO_EVENTS=true (default) ou rode scripts/kommoLeadFeedProbe.mjs LEAD_ID.`
   }
   return `[poll-kommo][diag] lead=${lid} mode=${s.pollMode} notas=${s.notesTotal} tipos=${types} fresh=${s.freshCount} pushed=${s.pushedCount} ${filtered} lastNoteId=${s.lastNoteId} (há ${ago}s)${hint}`
 }
