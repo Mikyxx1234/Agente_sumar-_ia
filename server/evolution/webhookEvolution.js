@@ -13,6 +13,9 @@
  *   4) Lembra o wamid (Cloud API) pra o "digitando..." conseguir usar.
  *   5) Empurra no buffer (TTL automático no Redis).
  *
+ * Opcional: EVOLUTION_INGEST_PHONE_ALLOWLIST — CSV de dígitos; se setado, só
+ * esses remetentes entram no buffer (Evolution). Vazio = todos.
+ *
  * NÃO chama Kommo, NÃO dispara IA, NÃO agenda flush. Tudo isso é
  * responsabilidade do agentScheduler.
  *
@@ -154,6 +157,34 @@ function normalizeContactPhoneToSessionId(phone) {
 function normalizeTelefone(sessionId) {
   if (!sessionId) return ''
   return String(sessionId).split('@')[0].replace(/[^0-9]/g, '')
+}
+
+/**
+ * Lista opcional de telefones (só dígitos) que podem entrar no buffer via
+ * webhook Evolution. Vazio = qualquer número (comportamento atual).
+ * Ex.: EVOLUTION_INGEST_PHONE_ALLOWLIST=5511945722117
+ * Comparação aceita sufixo (ex.: 11945722117 vs 5511945722117).
+ */
+function parseEvolutionIngestPhoneAllowlist(env) {
+  const raw = String(env.EVOLUTION_INGEST_PHONE_ALLOWLIST || '').trim()
+  if (!raw) return null
+  const set = new Set()
+  for (const part of raw.split(/[,\s;]+/)) {
+    const d = String(part).replace(/[^0-9]/g, '')
+    if (d) set.add(d)
+  }
+  return set.size > 0 ? set : null
+}
+
+function isEvolutionIngestPhoneAllowed(env, sessionId) {
+  const allow = parseEvolutionIngestPhoneAllowlist(env)
+  if (!allow) return true
+  const digits = normalizeTelefone(sessionId)
+  if (!digits) return false
+  for (const a of allow) {
+    if (digits === a || digits.endsWith(a) || a.endsWith(digits)) return true
+  }
+  return false
 }
 
 function getPushName(payload) {
@@ -675,12 +706,17 @@ export function makeEvolutionWebhookHandler(env) {
           console.warn(`[Evolution][contact] extract vazio session=${sessionId} type=${pending.messageType}`)
           sync('contact_extract_empty', `${sessionId} type=${pending.messageType}`)
         } else {
-          if (pending.messageId) rememberWamid(sessionId, pending.messageId)
-          await pushMessage(env, sessionId, clean)
-          recordBufferWrite(sessionId)
-          clearCloudBridgeContactWindow(instance)
-          console.log('[Evolution][cloud] buffer', sessionId, String(clean).slice(0, 120), evtName)
-          sync('contact_matched_buffer_ok', sessionId)
+          if (!isEvolutionIngestPhoneAllowed(env, sessionId)) {
+            console.log(`[Evolution][contact] skip ingest_phone_allowlist session=${sessionId}`)
+            sync('contact_skipped_phone_allowlist', sessionId)
+          } else {
+            if (pending.messageId) rememberWamid(sessionId, pending.messageId)
+            await pushMessage(env, sessionId, clean)
+            recordBufferWrite(sessionId)
+            clearCloudBridgeContactWindow(instance)
+            console.log('[Evolution][cloud] buffer', sessionId, String(clean).slice(0, 120), evtName)
+            sync('contact_matched_buffer_ok', sessionId)
+          }
         }
       } catch (err) {
         console.error('[Evolution][contact] erro ao bufferizar:', err.message)
@@ -754,6 +790,10 @@ export function makeEvolutionWebhookHandler(env) {
               recordAsyncError('cloud_immediate_empty', hit.sessionId)
               return
             }
+            if (!isEvolutionIngestPhoneAllowed(env, hit.sessionId)) {
+              console.log(`[Evolution][cloud] skip ingest_phone_allowlist session=${hit.sessionId}`)
+              return
+            }
             if (messageId) rememberWamid(hit.sessionId, messageId)
             await pushMessage(env, hit.sessionId, clean)
             recordBufferWrite(hit.sessionId)
@@ -785,6 +825,10 @@ export function makeEvolutionWebhookHandler(env) {
         if (!clean) {
           console.warn(`[Evolution] ${messageType} sem conteúdo utilizável (${sessionId})`)
           recordAsyncError('msg_async_empty', `${messageType} ${sessionId}`)
+          return
+        }
+        if (!isEvolutionIngestPhoneAllowed(env, sessionId)) {
+          console.log(`[Evolution] skip ingest_phone_allowlist session=${sessionId}`)
           return
         }
         console.log(`[Evolution] ${messageType} ← ${sessionId} (${pushName}): "${clean.slice(0, 140)}"`)
