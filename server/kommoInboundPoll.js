@@ -140,18 +140,43 @@ function parseNoteTypes(env) {
     .filter(Boolean)
 }
 
+/**
+ * Texto inbound em `params` de notas Kommo — WhatsApp Cloud / canais variam
+ * (`text`, `body`, objeto `message`, etc.).
+ */
+function extractParamsInboundText(p) {
+  if (p == null) return ''
+  if (typeof p === 'string') return p.trim()
+  if (typeof p !== 'object') return String(p).trim()
+  for (const k of ['text', 'body', 'content', 'message_text', 'msg', 'caption']) {
+    const v = p[k]
+    if (v != null && String(v).trim()) return String(v).trim()
+  }
+  const msg = p.message
+  if (msg && typeof msg === 'object') {
+    for (const k of ['text', 'body', 'content']) {
+      const v = msg[k]
+      if (v != null && String(v).trim()) return String(v).trim()
+    }
+  }
+  if (typeof p.message === 'string' && p.message.trim()) return p.message.trim()
+  return ''
+}
+
 function extractNoteText(note, env) {
   const t = String(note?.note_type || '').toLowerCase()
   const p = note?.params || {}
-  if (t === 'sms_in') return String(p.text || '').trim()
+  if (t === 'sms_in') {
+    return extractParamsInboundText(p) || String(p.text || '').trim()
+  }
   if (t === 'extended_service_message' || t === 'service_message') {
-    return String(p.text || '').trim()
+    return extractParamsInboundText(p) || String(p.text || '').trim()
   }
   const incCommon = String(env.KOMMO_INBOUND_POLL_INCLUDE_COMMON || '')
     .trim()
     .toLowerCase()
   if (t === 'common' && (incCommon === 'true' || incCommon === '1' || incCommon === 'yes')) {
-    return String(p.text || '').trim()
+    return extractParamsInboundText(p) || String(p.text || '').trim()
   }
   return ''
 }
@@ -327,7 +352,10 @@ async function pollNotes(env, leadId, sessionId, contactDigits) {
         continue
       }
     }
-    await pushMessage(env, sessionId, text)
+    // skipDedupe: mensagens vindas do Kommo têm id de nota distinto; o dedupe
+    // global (sessão+texto em 120s) faria "oi"+"oi" sumirem do buffer e o poll
+    // ainda avançava lastNoteId — buffer vazio permanente (caso real).
+    await pushMessage(env, sessionId, text, { skipDedupe: true })
     maxApplied = Math.max(maxApplied, nid)
     pushed += 1
   }
@@ -419,7 +447,27 @@ const OUTGOING_EVENT_TYPES = new Set([
   'outgoing_message',
 ])
 
-async function pollEvents(env, leadId, sessionId) {
+function mergeEventsById(primary, secondary) {
+  const a = Array.isArray(primary) ? primary : []
+  const b = Array.isArray(secondary) ? secondary : []
+  const byId = new Map()
+  for (const e of a) {
+    const id = e?.id != null ? String(e.id) : ''
+    if (id) byId.set(id, e)
+  }
+  let added = 0
+  for (const e of b) {
+    const id = e?.id != null ? String(e.id) : ''
+    if (!id) continue
+    if (!byId.has(id)) {
+      byId.set(id, e)
+      added += 1
+    }
+  }
+  return { merged: [...byId.values()], addedFromSecondary: added }
+}
+
+async function pollEvents(env, leadId, sessionId, contactId) {
   const lid = Number(leadId)
   const types = parseEventTypes(env)
   let st = eventState.get(lid) || {
@@ -456,7 +504,32 @@ async function pollEvents(env, leadId, sessionId) {
     return 0
   }
 
-  const events = list.events || []
+  let events = list.events || []
+  const cid = contactId != null && Number.isFinite(Number(contactId)) ? Number(contactId) : 0
+  if (cid > 0) {
+    const listC = await listLeadEvents(env, lid, {
+      entity: 'contact',
+      entityId: cid,
+      types,
+      fromTs,
+      limit: 50,
+    })
+    if (listC.ok) {
+      const { merged, addedFromSecondary } = mergeEventsById(events, listC.events || [])
+      if (addedFromSecondary > 0) {
+        console.log(
+          `[kommo-poll][events] lead=${lid}: mesclados +${addedFromSecondary} evento(s) entity=contact contactId=${cid}`,
+        )
+      }
+      events = merged
+    } else {
+      console.warn(
+        `[kommo-poll][events] lead=${lid} poll contact=${cid} falhou:`,
+        listC.error || listC.status || 'unknown',
+      )
+    }
+  }
+
   const typeCounts = countEventTypes(events)
 
   if (!st.warmed) {
@@ -566,7 +639,7 @@ async function pollEvents(env, leadId, sessionId) {
     }
 
     try {
-      await pushMessage(env, sessionId, cleaned)
+      await pushMessage(env, sessionId, cleaned, { skipDedupe: true })
       pushed += 1
       if (evId) st.seenIds.add(evId)
       maxAt = Math.max(maxAt, at)
@@ -891,7 +964,7 @@ async function pollDispatcher(env, leadId, sessionId) {
     if (DISPATCHER_VOICE_TYPES.has(messageType)) {
       try {
         const transcribed = await transcribeDispatcherVoice(env, m, lid)
-        await pushMessage(env, sessionId, transcribed)
+        await pushMessage(env, sessionId, transcribed, { skipDedupe: true })
         pushed += 1
         st.seenIds.add(mid)
         maxApplied = Math.max(maxApplied, mid)
@@ -914,7 +987,7 @@ async function pollDispatcher(env, leadId, sessionId) {
     if (DISPATCHER_PICTURE_TYPES.has(messageType)) {
       try {
         const described = await analyzeDispatcherPicture(env, m, lid)
-        await pushMessage(env, sessionId, described)
+        await pushMessage(env, sessionId, described, { skipDedupe: true })
         pushed += 1
         st.seenIds.add(mid)
         maxApplied = Math.max(maxApplied, mid)
@@ -964,7 +1037,7 @@ async function pollDispatcher(env, leadId, sessionId) {
     }
 
     try {
-      await pushMessage(env, sessionId, cleaned)
+      await pushMessage(env, sessionId, cleaned, { skipDedupe: true })
       pushed += 1
       st.seenIds.add(mid)
       maxApplied = Math.max(maxApplied, mid)
@@ -1077,7 +1150,7 @@ async function pollAmojo(env, leadId, sessionId, contactDigits) {
       lastM = Math.max(lastM, row.msec_timestamp || 0)
       continue
     }
-    await pushMessage(env, sessionId, text)
+    await pushMessage(env, sessionId, text, { skipDedupe: true })
     lastM = Math.max(lastM, row.msec_timestamp || 0)
     pushed += 1
   }
@@ -1094,7 +1167,7 @@ async function pollAmojo(env, leadId, sessionId, contactDigits) {
  * @param {{ leadId: number, sessionId: string, phone: string }} p
  * @returns { Promise<{ pushed: number, byMode: Record<string, number> }> }
  */
-export async function syncKommoInboundToBuffer(env, { leadId, sessionId, phone }) {
+export async function syncKommoInboundToBuffer(env, { leadId, sessionId, phone, contactId }) {
   if (!pollEnabled(env)) return { pushed: 0, byMode: {} }
   const mode = pollMode(env)
   const contactDigits = normalizeDigits(phone)
@@ -1107,7 +1180,7 @@ export async function syncKommoInboundToBuffer(env, { leadId, sessionId, phone }
     pushed += n
   }
   const runEvents = async () => {
-    const n = await pollEvents(env, leadId, sessionId)
+    const n = await pollEvents(env, leadId, sessionId, contactId)
     byMode.events = n
     pushed += n
   }

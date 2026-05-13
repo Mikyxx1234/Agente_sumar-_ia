@@ -250,9 +250,7 @@ export function formatEventsDiagLine(leadId) {
   let hint = ''
   if (s.eventsTotal === 0 && s.freshCount === 0) {
     hint =
-      ' | dica: zero eventos retornados — sua integração WhatsApp pode não emitir incoming_chat_message no log do Kommo. Confirme abrindo /api/kommo/poll/events?leadId=' +
-      lid +
-      '. Se vier vazio, parta para mode=amojo.'
+      ' | dica: zero eventos no log do Kommo é comum no WhatsApp Cloud — o inbound costuma vir das NOTAS (tipo common). Use KOMMO_INBOUND_POLL_MODE=notes ou both com KOMMO_INBOUND_POLL_INCLUDE_COMMON=true e "common" em KOMMO_INBOUND_POLL_NOTE_TYPES. mode=amojo exige canal + secrets.'
   } else if (s.pushedCount === 0 && s.eventsTotal > 0 && s.freshCount === 0) {
     hint = ` | nada novo desde lastSeenAt=${s.lastSeenAt} (há ${ago}s)`
   } else if (s.pushedCount === 0 && s.filteredEmpty > 0) {

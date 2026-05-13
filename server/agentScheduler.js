@@ -173,17 +173,31 @@ export async function runSchedulerTick(env) {
     try {
       const cs = lead?._embedded?.contacts || []
       let phone = null
+      /** Contato cujo telefone bate com a sessão — usado no poll de eventos entity=contact. */
+      let contactIdForPoll = null
       for (const c of cs) {
         const detail = contactById.get(Number(c.id))
         if (!detail) continue
         const p = extractContactPhone(detail)
-        if (p) { phone = p; break }
+        if (p) {
+          phone = p
+          contactIdForPoll = Number(c.id)
+          break
+        }
       }
       if (!phone) return
       const sessionId = buildSessionId(phone)
       if (!sessionId) return
 
-      await syncKommoInboundToBuffer(env, { leadId: Number(lead.id), sessionId, phone })
+      await syncKommoInboundToBuffer(env, {
+        leadId: Number(lead.id),
+        sessionId,
+        phone,
+        contactId:
+          contactIdForPoll != null && Number.isFinite(contactIdForPoll) && contactIdForPoll > 0
+            ? contactIdForPoll
+            : null,
+      })
 
       // Lê messages e o lastTouchedAt em paralelo — são entradas
       // separadas no buffer (Redis/Supabase) e independentes.
