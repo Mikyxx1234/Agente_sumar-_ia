@@ -399,6 +399,12 @@ async function pollNotes(env, leadId, sessionId, contactDigits) {
     lastNoteId: Math.max(st.lastNoteId, maxApplied),
     pollMode: 'notes',
   })
+  if (isKommoInboundPollDebugLead(env, lid)) {
+    console.log(
+      `[kommo-poll][debug] notes lead=${lid} notesTotal=${notes.length} fresh=${fresh.length} pushed=${pushed} ` +
+        `filteredByType=${filteredByType} filteredEmpty=${filteredEmpty} lastNoteId=${Math.max(st.lastNoteId, maxApplied)} types=${JSON.stringify(typeCounts)}`,
+    )
+  }
   return pushed
 }
 
@@ -604,6 +610,35 @@ function getEventCatchupWindowSec(env) {
   return Math.min(Math.max(v, 60), 86400 * 30)
 }
 
+/**
+ * Inbound com `id` ainda não processado: pode ter `created_at` anos antes do
+ * cursor (API contact vs lead). Sem teto, enfileiraríamos décadas de eventos.
+ * Default 10 anos; reduza se precisar (ex.: 86400 = 1 dia).
+ */
+function getUnseenIncomingMaxAgeSec(env) {
+  const v = Number(env.KOMMO_INBOUND_POLL_UNSEEN_INCOMING_MAX_AGE_SEC)
+  if (Number.isFinite(v) && v > 0) return Math.min(v, 86400 * 365 * 30)
+  return 86400 * 365 * 10
+}
+
+/**
+ * Log detalhado do poll: `KOMMO_INBOUND_POLL_DEBUG=true` ou lista em
+ * `KOMMO_INBOUND_POLL_DEBUG_LEAD_IDS=19884275,21208023`.
+ */
+export function isKommoInboundPollDebugLead(env, leadId) {
+  const flag = String(env.KOMMO_INBOUND_POLL_DEBUG || '').trim().toLowerCase()
+  if (flag === 'true' || flag === '1' || flag === 'yes' || flag === 'all') return true
+  const raw = String(env.KOMMO_INBOUND_POLL_DEBUG_LEAD_IDS || '').trim()
+  if (!raw) return false
+  const lid = Number(leadId)
+  if (!Number.isFinite(lid) || lid <= 0) return false
+  return raw
+    .split(/[,\s]+/)
+    .map((s) => Number(String(s).trim()))
+    .filter((n) => Number.isFinite(n) && n > 0)
+    .includes(lid)
+}
+
 function mergeEventsById(primary, secondary) {
   const a = Array.isArray(primary) ? primary : []
   const b = Array.isArray(secondary) ? secondary : []
@@ -737,24 +772,37 @@ async function pollEvents(env, leadId, sessionId, contactId) {
   const cursor = normalizeKommoEventSec(st.lastSeenAt)
   const catchupSec = getEventCatchupWindowSec(env)
   const catchupFloor = catchupSec > 0 ? Math.max(0, cursor - catchupSec) : cursor
+  const nowSec = Math.floor(Date.now() / 1000)
+  const unseenIncomingAgeFloor = Math.max(0, nowSec - getUnseenIncomingMaxAgeSec(env))
 
   const fresh = events.filter((e) => {
     const id = e?.id != null ? String(e.id) : ''
     if (id && st.seenIds.has(id)) return false
     const at = normalizeKommoEventSec(e?.created_at)
     const t = String(e?.type || '').toLowerCase()
-    if (at >= cursor) return true
-    if (
-      catchupSec > 0 &&
-      id &&
-      INCOMING_EVENT_TYPES.has(t) &&
-      at >= catchupFloor &&
-      at > 0
-    ) {
-      return true
+    if (INCOMING_EVENT_TYPES.has(t) && id) {
+      if (at >= unseenIncomingAgeFloor) return true
+      return at >= cursor || (catchupSec > 0 && at >= catchupFloor)
     }
-    return false
+    return at >= cursor
   })
+
+  if (isKommoInboundPollDebugLead(env, lid)) {
+    const samp = events
+      .filter((e) => INCOMING_EVENT_TYPES.has(String(e?.type || '').toLowerCase()))
+      .slice(0, 14)
+      .map((e) => ({
+        id: e?.id != null ? String(e.id) : '',
+        at: normalizeKommoEventSec(e?.created_at),
+        seen: Boolean(e?.id != null && st.seenIds.has(String(e.id))),
+        inFresh: fresh.some((x) => String(x?.id) === String(e?.id)),
+      }))
+    console.log(
+      `[kommo-poll][debug] events lead=${lid} session=${String(sessionId).slice(0, 32)}… ` +
+        `cursor=${cursor} catchupSec=${catchupSec} catchupFloor=${catchupFloor} unseenAgeFloor=${unseenIncomingAgeFloor} ` +
+        `events=${events.length} fresh=${fresh.length} seenIds=${st.seenIds.size} sample=${JSON.stringify(samp)}`,
+    )
+  }
 
   const asc = [...fresh].sort(
     (a, b) => normalizeKommoEventSec(a?.created_at) - normalizeKommoEventSec(b?.created_at),
@@ -882,6 +930,11 @@ async function pollEvents(env, leadId, sessionId, contactId) {
     requestUrl: list.requestUrl || null,
     httpStatus: list.status || null,
   })
+  if (isKommoInboundPollDebugLead(env, lid)) {
+    console.log(
+      `[kommo-poll][debug] events resultado lead=${lid} pushed=${pushed} filteredEmpty=${filteredEmpty} outbound=${filteredOutbound} otherType=${filteredOtherType} newLastSeen=${Math.max(normalizeKommoEventSec(st.lastSeenAt), maxAt)}`,
+    )
+  }
   return pushed
 }
 

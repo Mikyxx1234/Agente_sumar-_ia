@@ -41,7 +41,12 @@ import { listLeadsByStatus, bulkGetContactsByIds, extractContactPhone } from './
 import { phoneToWhatsAppSessionId } from './phoneWhatsApp.js'
 import { getMessages, getLastTouchedAt } from './evolution/messageBuffer.js'
 import { flushSession } from './evolution/webhookEvolution.js'
-import { syncKommoInboundToBuffer, isKommoInboundPollEnabled, normalizeKommoInboundPollMode } from './kommoInboundPoll.js'
+import {
+  syncKommoInboundToBuffer,
+  isKommoInboundPollEnabled,
+  normalizeKommoInboundPollMode,
+  isKommoInboundPollDebugLead,
+} from './kommoInboundPoll.js'
 import {
   formatPollDiagLine,
   formatEventsDiagLine,
@@ -189,7 +194,7 @@ export async function runSchedulerTick(env) {
       const sessionId = buildSessionId(phone)
       if (!sessionId) return
 
-      await syncKommoInboundToBuffer(env, {
+      const syncRes = await syncKommoInboundToBuffer(env, {
         leadId: Number(lead.id),
         sessionId,
         phone,
@@ -198,6 +203,11 @@ export async function runSchedulerTick(env) {
             ? contactIdForPoll
             : null,
       })
+      if (isKommoInboundPollDebugLead(env, Number(lead.id))) {
+        console.log(
+          `[scheduler][debug] pós-sync lead=${lead.id} session=${sessionId} pushed=${syncRes.pushed} byMode=${JSON.stringify(syncRes.byMode)}`,
+        )
+      }
 
       // Lê messages e o lastTouchedAt em paralelo — são entradas
       // separadas no buffer (Redis/Supabase) e independentes.
