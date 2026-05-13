@@ -581,6 +581,29 @@ const OUTGOING_EVENT_TYPES = new Set([
   'outgoing_message',
 ])
 
+/** Kommo: `created_at` em Unix segundos; alguns payloads usam ms. */
+function normalizeKommoEventSec(ts) {
+  const n = Number(ts)
+  if (!Number.isFinite(n) || n <= 0) return 0
+  if (n > 1_000_000_000_000) return Math.floor(n / 1000)
+  return Math.floor(n)
+}
+
+/**
+ * Eventos do entity=contact podem ter `created_at` um pouco antes do cursor
+ * calculado só com eventos do lead — ficavam fora de `fresh` para sempre
+ * (merge logava +1, buffer vazio). Incluímos inbound ainda não visto nessa
+ * janela. Default 7d; 0 = só at >= cursor (comportamento estrito).
+ */
+function getEventCatchupWindowSec(env) {
+  const raw = env.KOMMO_INBOUND_POLL_EVENT_CATCHUP_SEC
+  if (raw == null || String(raw).trim() === '') return 86400 * 7
+  const v = Number(raw)
+  if (!Number.isFinite(v) || v < 0) return 86400 * 7
+  if (v === 0) return 0
+  return Math.min(Math.max(v, 60), 86400 * 30)
+}
+
 function mergeEventsById(primary, secondary) {
   const a = Array.isArray(primary) ? primary : []
   const b = Array.isArray(secondary) ? secondary : []
@@ -610,7 +633,9 @@ async function pollEvents(env, leadId, sessionId, contactId) {
     seenIds: new Set(),
   }
 
-  const fromTs = st.warmed && st.lastSeenAt > 0 ? st.lastSeenAt : 0
+  const cursorSec = normalizeKommoEventSec(st.lastSeenAt)
+  const fromTs =
+    st.warmed && cursorSec > 0 ? Math.max(0, cursorSec - 1) : 0
   const list = await listLeadEvents(env, lid, { types, fromTs, limit: 50 })
 
   if (!list.ok) {
@@ -652,7 +677,7 @@ async function pollEvents(env, leadId, sessionId, contactId) {
       const { merged, addedFromSecondary } = mergeEventsById(events, listC.events || [])
       if (addedFromSecondary > 0) {
         console.log(
-          `[kommo-poll][events] lead=${lid}: mesclados +${addedFromSecondary} evento(s) entity=contact contactId=${cid}`,
+          `[kommo-poll][events] lead=${lid}: mesclados +${addedFromSecondary} evento(s) extra(s) entity=contact contactId=${cid} (podem ser mais recentes que o log do lead; cursor=${cursorSec}s)`,
         )
       }
       events = merged
@@ -667,7 +692,7 @@ async function pollEvents(env, leadId, sessionId, contactId) {
   const typeCounts = countEventTypes(events)
 
   if (!st.warmed) {
-    const maxAt = events.reduce((m, e) => Math.max(m, Number(e.created_at) || 0), 0)
+    const maxAt = events.reduce((m, e) => Math.max(m, normalizeKommoEventSec(e?.created_at)), 0)
     const seedAt = maxAt > 0 ? maxAt : Math.floor(Date.now() / 1000)
     eventState.set(lid, {
       warmed: true,
@@ -696,26 +721,40 @@ async function pollEvents(env, leadId, sessionId, contactId) {
     return 0
   }
 
+  const cursor = normalizeKommoEventSec(st.lastSeenAt)
+  const catchupSec = getEventCatchupWindowSec(env)
+  const catchupFloor = catchupSec > 0 ? Math.max(0, cursor - catchupSec) : cursor
+
   const fresh = events.filter((e) => {
-    const at = Number(e?.created_at) || 0
-    if (at < st.lastSeenAt) return false
     const id = e?.id != null ? String(e.id) : ''
     if (id && st.seenIds.has(id)) return false
-    return true
+    const at = normalizeKommoEventSec(e?.created_at)
+    const t = String(e?.type || '').toLowerCase()
+    if (at >= cursor) return true
+    if (
+      catchupSec > 0 &&
+      id &&
+      INCOMING_EVENT_TYPES.has(t) &&
+      at >= catchupFloor &&
+      at > 0
+    ) {
+      return true
+    }
+    return false
   })
 
   const asc = [...fresh].sort(
-    (a, b) => (Number(a?.created_at) || 0) - (Number(b?.created_at) || 0),
+    (a, b) => normalizeKommoEventSec(a?.created_at) - normalizeKommoEventSec(b?.created_at),
   )
 
   let pushed = 0
-  let maxAt = st.lastSeenAt
+  let maxAt = cursor
   let filteredEmpty = 0
   let filteredOutbound = 0
   let filteredOtherType = 0
 
   for (const ev of asc) {
-    const at = Number(ev?.created_at) || 0
+    const at = normalizeKommoEventSec(ev?.created_at)
     const t = String(ev?.type || '').toLowerCase()
     const evId = ev?.id != null ? String(ev.id) : ''
 
@@ -800,7 +839,7 @@ async function pollEvents(env, leadId, sessionId, contactId) {
 
   eventState.set(lid, {
     warmed: true,
-    lastSeenAt: Math.max(st.lastSeenAt, maxAt),
+    lastSeenAt: Math.max(normalizeKommoEventSec(st.lastSeenAt), maxAt),
     seenIds: st.seenIds,
   })
 
@@ -825,7 +864,7 @@ async function pollEvents(env, leadId, sessionId, contactId) {
     filteredEmpty,
     filteredOutbound,
     filteredOtherType,
-    lastSeenAt: Math.max(st.lastSeenAt, maxAt),
+    lastSeenAt: Math.max(normalizeKommoEventSec(st.lastSeenAt), maxAt),
     pollMode: 'events',
     requestUrl: list.requestUrl || null,
     httpStatus: list.status || null,
