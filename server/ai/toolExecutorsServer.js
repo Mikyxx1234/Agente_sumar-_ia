@@ -65,6 +65,50 @@ function extractGradeLink(metadata) {
 }
 
 /**
+ * Extrai a info estruturada de estágio do metadata, se preenchida.
+ * Espera-se metadata.estagio = { tem: boolean, quantidade?, carga_total_horas?, detalhe? }.
+ *
+ * Retorna null se ausente ou inválido. Sem esse marcador a IA segue a
+ * Rule 18 do prompt e chama distribuir_humano quando perguntada sobre
+ * estágio — não inventa.
+ */
+function extractEstagioInfo(metadata) {
+  if (!metadata || typeof metadata !== 'object') return null
+  const raw = metadata.estagio
+  if (!raw || typeof raw !== 'object') return null
+  if (typeof raw.tem !== 'boolean') return null
+  const out = { tem: raw.tem }
+  if (raw.tem === true) {
+    if (Number.isFinite(Number(raw.quantidade))) out.quantidade = Number(raw.quantidade)
+    if (Number.isFinite(Number(raw.carga_total_horas))) out.carga_total_horas = Number(raw.carga_total_horas)
+    if (typeof raw.detalhe === 'string' && raw.detalhe.trim()) out.detalhe = raw.detalhe.trim()
+    if (typeof raw.observacao === 'string' && raw.observacao.trim()) out.observacao = raw.observacao.trim()
+  }
+  return out
+}
+
+/**
+ * Monta o texto do marcador [ESTAGIO: ...] a partir do extract.
+ * Retorna a parte INTERNA — o caller envolve em colchetes (igual ao
+ * padrão de STATUS DA GRADE).
+ */
+function formatEstagioMarker(info) {
+  if (!info) return null
+  if (info.tem === false) {
+    return 'ESTAGIO: NAO — nao ha disciplina de estagio supervisionado obrigatorio neste curso'
+  }
+  // tem === true a partir daqui
+  const partes = []
+  if (info.quantidade != null) partes.push(`${info.quantidade} disciplina${info.quantidade === 1 ? '' : 's'} obrigatoria${info.quantidade === 1 ? '' : 's'}`)
+  if (info.carga_total_horas != null) partes.push(`${info.carga_total_horas}h totais`)
+  const head = partes.length > 0 ? partes.join(', ') : 'estagio supervisionado obrigatorio'
+  let texto = `ESTAGIO: SIM — ${head}`
+  if (info.detalhe) texto += `. ${info.detalhe}`
+  if (info.observacao) texto += ` (${info.observacao})`
+  return texto
+}
+
+/**
  * Procura, recursivamente em qualquer profundidade do metadata, valores
  * pra um conjunto de chaves alvo — case-insensitive. Aceita strings JSON
  * aninhadas (como `metadata.Metadata` que é uma string `{"curso":...}`)
@@ -230,11 +274,24 @@ async function vectorSearch(env, ctx, toolName, rpcName, query, matchCount = 10)
     .map((d) => {
       const base = d?.content || ''
       if (isCourseTool) {
+        const partes = [base]
+
         const gradeUrl = extractGradeLink(d?.metadata)
-        const status = gradeUrl
+        const gradeStatus = gradeUrl
           ? `STATUS DA GRADE: DISPONIVEL — link oficial: ${gradeUrl}`
           : 'STATUS DA GRADE: NAO DISPONIVEL — não existe link/PDF da grade deste curso na nossa base.'
-        return `${base}\n\n[${status}]`
+        partes.push(`[${gradeStatus}]`)
+
+        // Marcador de estágio: só pra graduação (buscar_informacoes).
+        // Pós-graduação raramente tem estágio supervisionado — não inflar o
+        // prompt nem confundir a IA com info que não tem campo preenchido.
+        if (toolName === 'buscar_informacoes') {
+          const estagioInfo = extractEstagioInfo(d?.metadata)
+          const estagioMarker = formatEstagioMarker(estagioInfo)
+          if (estagioMarker) partes.push(`[${estagioMarker}]`)
+        }
+
+        return partes.join('\n\n')
       }
       if (isPriceTool) {
         const meta = extractPriceMeta(d?.metadata)

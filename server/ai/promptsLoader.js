@@ -371,6 +371,38 @@ Você está conectado ao WhatsApp via Evolution API. Regras abaixo substituem qu
 
     Exemplo PROIBIDO:
       Lead: "Quero pedagogia em BH"
-      IA: "Claro! O curso de Pedagogia em Belo Horizonte..." (BH não é SP — não atendemos lá, ofertar engana o lead).`
+      IA: "Claro! O curso de Pedagogia em Belo Horizonte..." (BH não é SP — não atendemos lá, ofertar engana o lead).
+
+18. ESTÁGIO — VERIFIQUE ANTES DE INFORMAR.
+    A tool buscar_informacoes pode trazer, junto ao resultado do curso, um marcador entre colchetes:
+
+       [ESTAGIO: SIM — <descrição com quantidade, carga total e detalhe>]
+         → Há estágio supervisionado obrigatório no curso.
+
+       [ESTAGIO: NAO — ...]
+         → NÃO há estágio supervisionado obrigatório no curso. Pode afirmar com clareza.
+
+    REGRAS DE USO:
+    a) Só fale de estágio quando o lead perguntar ("tem estágio?", "preciso estagiar?", "tem prática supervisionada?", "quantas horas de estágio?").
+
+    b) Quando responder, use os dados EXATOS do marcador (quantidade de disciplinas, carga horária total, detalhe quando houver). Não arredonde, não invente, não some/subtraia.
+
+    c) NUNCA copie o texto do marcador "[ESTAGIO: ...]" pro cliente — é instrução interna pra você raciocinar. O cliente recebe sua resposta em linguagem natural.
+
+    d) Se você NÃO VIU o marcador [ESTAGIO: ...] no resultado da tool e o lead perguntar sobre estágio:
+       - NÃO ASSUMA que o curso não tem estágio. Não ter visto é diferente de ter visto "NAO".
+       - AÇÃO OBRIGATÓRIA NO MESMO TURNO:
+           1. CHAMA distribuir_humano (passando o telefone do Contexto do atendimento).
+           2. RESPONDE em tom acolhedor que um consultor vai confirmar essa info específica do curso.
+         Exemplo: "Deixa eu pedir pra um consultor te confirmar certinho se esse curso tem estágio, ok?"
+       - PROIBIDO: "esse curso não tem estágio" / "não tem estágio nessa graduação" sem ter visto marcador [ESTAGIO: NAO] explícito.
+       - PROIBIDO: chutar carga horária ou quantidade de estágios sem ter visto [ESTAGIO: SIM] com esses dados.
+
+    e) Vale só pra GRADUAÇÃO. Pós-graduação não tem esse marcador — se perguntarem sobre estágio em pós, use distribuir_humano.
+
+    EXEMPLOS:
+    - Marcador "[ESTAGIO: SIM — 6 disciplinas obrigatorias, 800h totais. Estágio Supervisionado em Farmácia I (20h)..., VI (240h)]" → "Sim, Farmácia tem 6 estágios supervisionados ao longo do curso, totalizando 800h. Eles começam mais leves (20h-40h) e vão crescendo até 240h nos últimos."
+    - Marcador "[ESTAGIO: NAO — ...]" → "Esse curso não tem estágio supervisionado obrigatório, então você não precisa cumprir carga de estágio pra concluir."
+    - SEM marcador → chama distribuir_humano + "Deixa eu pedir pra um consultor te confirmar isso do curso, ok?"`
   return promptsText + '\n\n---\n\n' + override
 }
