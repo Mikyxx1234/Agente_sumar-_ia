@@ -197,11 +197,33 @@ export async function getFeedbackJobPreview(env) {
     console.error('[FeedbackJob] Falha ao buscar runs:', e.message)
   }
 
+  let sourceStatus = null
+  try {
+    const rows = await sb.select(
+      'mensagens_atendimento_comercial',
+      'select=created_at&order=created_at.desc.nullslast&limit=1',
+    )
+    const lastIso = rows?.[0]?.created_at || null
+    const gapMs = lastIso ? Date.now() - new Date(lastIso).getTime() : null
+    const gapMinutes = gapMs != null ? Math.round(gapMs / 60000) : null
+    const thresholdMin = Number(env.FEEDBACK_JOB_SOURCE_STALE_AFTER_MINUTES || 180)
+    sourceStatus = {
+      last_message_created_at: lastIso,
+      gap_minutes: gapMinutes,
+      stale_threshold_minutes: thresholdMin,
+      is_stale: gapMinutes != null && gapMinutes > thresholdMin,
+      has_data: lastIso != null,
+    }
+  } catch (e) {
+    sourceStatus = { error: e.message }
+  }
+
   return {
     window: windowInfo,
     pendingCount,
     currentRun,
     lastRun,
+    sourceStatus,
   }
 }
 

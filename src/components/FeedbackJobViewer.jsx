@@ -76,6 +76,18 @@ function formatTime(iso) {
   })
 }
 
+function formatGap(min) {
+  if (min == null) return '?'
+  if (min < 1) return '< 1min'
+  if (min < 60) return `${min}min`
+  const h = Math.floor(min / 60)
+  const m = min % 60
+  if (h < 24) return m ? `${h}h ${m}min` : `${h}h`
+  const d = Math.floor(h / 24)
+  const rh = h % 24
+  return rh ? `${d}d ${rh}h` : `${d}d`
+}
+
 function FlowStep({ icon: Icon, iconKind, title, duration, children, defaultOpen = false }) {
   const [open, setOpen] = useState(defaultOpen)
   const has = !!children
@@ -320,38 +332,95 @@ function StatusBar({ status, nowMs }) {
     ? `Janela: ${windowMin}min${extra > 0 ? ` (+${extra}min de atraso anterior)` : ''}`
     : null
 
+  const sourceStatus = status?.sourceStatus
+
+  const sourceValue = sourceStatus?.error
+    ? 'Erro ao consultar'
+    : sourceStatus?.has_data === false
+      ? 'Sem dados'
+      : `Há ${formatGap(sourceStatus?.gap_minutes)}`
+
+  const sourceHint = sourceStatus?.error
+    ? sourceStatus.error.slice(0, 120)
+    : sourceStatus?.last_message_created_at
+      ? `Última msg: ${formatTime(sourceStatus.last_message_created_at)}`
+      : 'Tabela mensagens_atendimento_comercial'
+
+  const sourceTone = (sourceStatus?.is_stale || sourceStatus?.has_data === false || sourceStatus?.error)
+    ? 'danger'
+    : 'info'
+
+  const sourceIcon = (sourceStatus?.is_stale || sourceStatus?.has_data === false)
+    ? AlertTriangle
+    : Check
+
   return (
-    <div style={{ display: 'flex', gap: 12, padding: '12px 24px 0', flexWrap: 'wrap' }}>
-      <StatusCard
-        icon={Clock}
-        label="Próxima execução"
-        value={cronOff ? 'Cron desligado' : status.isRunning ? 'logo após o atual' : `em ${nextIn}`}
-        hint={cronOff
-          ? 'FEEDBACK_JOB_ENABLED=false no .env'
-          : status.hasPending
-            ? 'Execução enfileirada: roda logo após o atual'
-            : 'No minuto :01 de toda hora'}
-        tone={cronOff ? 'warning' : status.hasPending ? 'warning' : 'info'}
-      />
-      <StatusCard
-        icon={status.isRunning ? RefreshCw : Check}
-        label="Status"
-        value={status.isRunning ? `Rodando há ${runningFor}` : 'Aguardando'}
-        hint={status.isRunning
-          ? (nowMs - new Date(status.currentRunStartedAt || 0).getTime() > 60 * 60 * 1000
-              ? 'Passou de 1h — a próxima janela vai cobrir o atraso'
-              : 'Execução em andamento')
-          : 'Nenhum job em execução'}
-        tone={status.isRunning ? 'success' : 'muted'}
-      />
-      <StatusCard
-        icon={MessageSquare}
-        label="Mensagens na fila"
-        value={pendingMsgs == null ? '-' : `${pendingMsgs}`}
-        hint={windowHint}
-        tone={pendingMsgs > 0 ? 'info' : 'muted'}
-      />
-    </div>
+    <>
+      {sourceStatus?.is_stale && (
+        <div style={{ padding: '12px 24px 0' }}>
+          <div role="alert" style={{
+            background: 'var(--danger-soft)',
+            border: '1px solid oklch(68% 0.20 25 / 0.45)',
+            borderRadius: 10,
+            padding: '12px 14px',
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 10,
+            color: 'var(--fg-1)',
+            fontSize: 13,
+            lineHeight: 1.45,
+          }}>
+            <AlertCircle size={16} style={{ color: 'var(--danger)', flexShrink: 0, marginTop: 2 }} />
+            <div>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                Fonte sem dados há {formatGap(sourceStatus.gap_minutes)}
+              </div>
+              <div style={{ color: 'var(--fg-2)' }}>
+                A tabela <code>mensagens_atendimento_comercial</code> não recebe inserções desde {formatTime(sourceStatus.last_message_created_at)}. O job está rodando, mas processa 0 mensagens. Verifique o app/script externo que popula essa tabela.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 12, padding: '12px 24px 0', flexWrap: 'wrap' }}>
+        <StatusCard
+          icon={Clock}
+          label="Próxima execução"
+          value={cronOff ? 'Cron desligado' : status.isRunning ? 'logo após o atual' : `em ${nextIn}`}
+          hint={cronOff
+            ? 'FEEDBACK_JOB_ENABLED=false no .env'
+            : status.hasPending
+              ? 'Execução enfileirada: roda logo após o atual'
+              : 'No minuto :01 de toda hora'}
+          tone={cronOff ? 'warning' : status.hasPending ? 'warning' : 'info'}
+        />
+        <StatusCard
+          icon={status.isRunning ? RefreshCw : Check}
+          label="Status"
+          value={status.isRunning ? `Rodando há ${runningFor}` : 'Aguardando'}
+          hint={status.isRunning
+            ? (nowMs - new Date(status.currentRunStartedAt || 0).getTime() > 60 * 60 * 1000
+                ? 'Passou de 1h — a próxima janela vai cobrir o atraso'
+                : 'Execução em andamento')
+            : 'Nenhum job em execução'}
+          tone={status.isRunning ? 'success' : 'muted'}
+        />
+        <StatusCard
+          icon={MessageSquare}
+          label="Mensagens na fila"
+          value={pendingMsgs == null ? '-' : `${pendingMsgs}`}
+          hint={windowHint}
+          tone={pendingMsgs > 0 ? 'info' : 'muted'}
+        />
+        <StatusCard
+          icon={sourceIcon}
+          label="Saúde da fonte"
+          value={sourceValue}
+          hint={sourceHint}
+          tone={sourceTone}
+        />
+      </div>
+    </>
   )
 }
 
