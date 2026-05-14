@@ -229,10 +229,24 @@ export function forwardEvolutionWebhook(env, body) {
 /**
  * Snapshot das estatísticas de fan-out para o endpoint de health.
  *
- * @returns {{ enabled: boolean, configuredCount: number, urls: object[], totalAttempts: number, totalSuccess: number, totalFailure: number }}
+ * `enabled` e `configuredCount` derivam de EVOLUTION_WEBHOOK_FORWARD_URL,
+ * não do mapa de stats — assim o painel sabe que está ligado mesmo antes
+ * do primeiro POST chegar (status da URL aparece como "idle").
+ *
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {{ enabled: boolean, configuredCount: number, urls: object[], totalAttempts: number, totalSuccess: number, totalFailure: number, skippedByEvent: number, skippedByFromMe: number }}
  */
-export function getForwarderSnapshot() {
+export function getForwarderSnapshot(env = process.env) {
   const now = Date.now()
+  const configuredUrls = parseForwardUrls(env)
+
+  // Garante que toda URL configurada tem entrada no map mesmo antes de
+  // receber tráfego — sem isso a tabela do painel ficaria vazia até o
+  // primeiro POST.
+  for (const url of configuredUrls) {
+    getOrCreateStats(url)
+  }
+
   const urlEntries = [...statsMap.values()]
 
   const totalAttempts = urlEntries.reduce((s, u) => s + u.attemptCount, 0)
@@ -264,8 +278,8 @@ export function getForwarderSnapshot() {
   })
 
   return {
-    enabled: statsMap.size > 0,
-    configuredCount: statsMap.size,
+    enabled: configuredUrls.length > 0,
+    configuredCount: configuredUrls.length,
     urls,
     totalAttempts,
     totalSuccess,

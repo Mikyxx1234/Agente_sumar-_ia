@@ -492,7 +492,7 @@ app.get('/api/evolution/health', async (_req, res) => {
       ok: true,
       buffer: ping,
       webhookDiagnostics: getWebhookDiagnosticsSnapshot(),
-      webhookForwarder: getForwarderSnapshot(),
+      webhookForwarder: getForwarderSnapshot(process.env),
       kommoPoll: getKommoPollSnapshot(),
       kommoDispatcher: {
         url: process.env.KOMMO_DISPATCHER_URL || 'http://banco-kommo-dispatcher:8000',
