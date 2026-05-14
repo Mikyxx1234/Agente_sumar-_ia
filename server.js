@@ -19,6 +19,7 @@ import { transcribeAudioBase64, analyzeImageBase64 } from './server/evolution/op
 import { fetchEvolutionMediaBase64 } from './server/evolution/evolutionMedia.js'
 import { downloadUrlAsBase64 } from './server/mediaDownloader.js'
 import { recordWebhookIngress, getWebhookDiagnosticsSnapshot } from './server/evolution/webhookDiagnostics.js'
+import { forwardEvolutionWebhook, getForwarderSnapshot } from './server/evolution/webhookForwarder.js'
 import { getKommoPollSnapshot } from './server/kommoInboundDiagnostics.js'
 import { getModelRegistrySnapshot } from './server/ai/modelRegistry.js'
 import {
@@ -416,6 +417,9 @@ function evolutionWebhookIngress(req, res, next) {
   const n = b && typeof b === 'object' && !Array.isArray(b) ? Object.keys(b).length : 0
   recordWebhookIngress({ bodyKeyCount: n, contentType: req.headers['content-type'] || '' })
   console.log(`[Evolution][ingress] POST bodyKeys=${n} content-type=${req.headers['content-type'] || ''}`)
+  // Repassa o payload para URLs externas (n8n, etc.) antes de processar a IA.
+  // Fire-and-forget: falhas não afetam o fluxo da IA nem a resposta ao lead.
+  forwardEvolutionWebhook(process.env, req.body)
   next()
 }
 
@@ -488,6 +492,7 @@ app.get('/api/evolution/health', async (_req, res) => {
       ok: true,
       buffer: ping,
       webhookDiagnostics: getWebhookDiagnosticsSnapshot(),
+      webhookForwarder: getForwarderSnapshot(),
       kommoPoll: getKommoPollSnapshot(),
       kommoDispatcher: {
         url: process.env.KOMMO_DISPATCHER_URL || 'http://banco-kommo-dispatcher:8000',
