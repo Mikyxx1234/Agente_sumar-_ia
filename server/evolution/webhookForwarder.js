@@ -14,8 +14,20 @@
 
 const LATENCY_WINDOW = 30
 
+// Default: só repassa mensagens recebidas do lead. Eventos contacts.*,
+// connection.update, presence.update, e mensagens fromMe=true (eco do
+// que o bot mandou) são descartados — evita poluir o consumidor a
+// jusante (n8n etc.) com tráfego que ele não usa.
+const DEFAULT_FORWARD_EVENTS = ['messages.upsert']
+
 /** @type {Map<string, import('./webhookForwarderTypes').ForwarderStats>} */
 const statsMap = new Map()
+
+// Contadores globais de payloads não repassados (evento fora da
+// allowlist ou fromMe=true). Servem pra mostrar no painel quantas
+// "ativações" foram silenciosamente puladas.
+let skippedByEvent = 0
+let skippedByFromMe = 0
 
 function getOrCreateStats(url) {
   if (!statsMap.has(url)) {
@@ -49,6 +61,26 @@ export function parseForwardUrls(env) {
     .split(/[,\s;]+/)
     .map((s) => s.trim())
     .filter((s) => s.startsWith('http://') || s.startsWith('https://'))
+}
+
+/**
+ * Lista de eventos do Evolution que devem ser repassados.
+ * Default: apenas messages.upsert. Pode ser sobreescrita com
+ * EVOLUTION_WEBHOOK_FORWARD_EVENTS=event1,event2 (vazio = default).
+ *
+ * @param {NodeJS.ProcessEnv} env
+ * @returns {string[]}
+ */
+function parseForwardEvents(env) {
+  const raw = String(env.EVOLUTION_WEBHOOK_FORWARD_EVENTS || '').trim()
+  if (!raw) return DEFAULT_FORWARD_EVENTS
+  const list = raw.split(/[,\s;]+/).map((s) => s.trim()).filter(Boolean)
+  return list.length > 0 ? list : DEFAULT_FORWARD_EVENTS
+}
+
+function includeFromMe(env) {
+  const raw = String(env.EVOLUTION_WEBHOOK_FORWARD_INCLUDE_FROM_ME || '').toLowerCase()
+  return raw === 'true' || raw === '1' || raw === 'yes'
 }
 
 /**
@@ -107,6 +139,26 @@ function urlStatus(s) {
 export function forwardEvolutionWebhook(env, body) {
   const urls = parseForwardUrls(env)
   if (urls.length === 0) return
+
+  // Filtros aplicados antes do envio. Por padrão só repassa
+  // messages.upsert (mensagens reais do lead), descartando
+  // contacts.*, connection.update, presence.update e ecos
+  // do bot (fromMe=true).
+  const evt = body?.event != null ? String(body.event) : ''
+  const allowedEvents = parseForwardEvents(env)
+  if (evt && !allowedEvents.includes(evt)) {
+    skippedByEvent += 1
+    return
+  }
+
+  if (!includeFromMe(env)) {
+    const data = body?.data || {}
+    const fromMe = data?.key?.fromMe
+    if (fromMe === true) {
+      skippedByFromMe += 1
+      return
+    }
+  }
 
   const timeoutMs = Number(env.EVOLUTION_WEBHOOK_FORWARD_TIMEOUT_MS) || 8000
   const bodyStr = JSON.stringify(body)
@@ -218,5 +270,7 @@ export function getForwarderSnapshot() {
     totalAttempts,
     totalSuccess,
     totalFailure,
+    skippedByEvent,
+    skippedByFromMe,
   }
 }

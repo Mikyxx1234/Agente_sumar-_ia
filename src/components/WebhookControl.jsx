@@ -244,12 +244,20 @@ export default function WebhookControl() {
             ) : (
               <>
                 {/* Totais globais */}
-                <div style={{ display: 'flex', gap: 20, marginBottom: 14, fontSize: 13 }}>
+                <div style={{ display: 'flex', gap: 20, marginBottom: 14, fontSize: 13, flexWrap: 'wrap' }}>
                   <span>Tentativas: <strong className="tnum">{fwd.totalAttempts}</strong></span>
                   <span>Sucesso: <strong className="tnum" style={{ color: 'var(--success, #34d399)' }}>{fwd.totalSuccess}</strong></span>
                   <span>Falhas: <strong className="tnum" style={{ color: fwd.totalFailure > 0 ? 'var(--danger, #f87171)' : undefined }}>{fwd.totalFailure}</strong></span>
                   {fwd.totalAttempts > 0 && (
                     <span>Taxa de sucesso: <strong className="tnum">{((fwd.totalSuccess / fwd.totalAttempts) * 100).toFixed(1)}%</strong></span>
+                  )}
+                  {(fwd.skippedByEvent > 0 || fwd.skippedByFromMe > 0) && (
+                    <span style={{ color: 'var(--fg-3, #888)' }}>
+                      Filtrados: <strong className="tnum">{(fwd.skippedByEvent || 0) + (fwd.skippedByFromMe || 0)}</strong>
+                      <span style={{ marginLeft: 4, fontSize: 11 }}>
+                        (evento: {fwd.skippedByEvent || 0} · fromMe: {fwd.skippedByFromMe || 0})
+                      </span>
+                    </span>
                   )}
                 </div>
 
