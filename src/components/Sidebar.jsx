@@ -1,4 +1,5 @@
-import { Sparkles, LayoutDashboard, FileText, FlaskConical, ListChecks, Settings, Star, BarChart3, Bot, Activity } from 'lucide-react'
+import { Sparkles, LayoutDashboard, FileText, FlaskConical, ListChecks, Settings, Star, BarChart3, Bot, Activity, Database } from 'lucide-react'
+import AIKillSwitch from './AIKillSwitch'
 
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -7,11 +8,12 @@ const NAV_ITEMS = [
   { id: 'executions', label: 'Execuções', icon: ListChecks },
   { id: 'salesbot-executions', label: 'Execuções Salesbot', icon: Bot },
   { id: 'webhook-control', label: 'Controle Webhook', icon: Activity },
+  { id: 'knowledge-update', label: 'Atualização IA', icon: Database },
   { id: 'feedback', label: 'Feedback Comercial', icon: Star },
   { id: 'feedback-dashboard', label: 'Dashboard Feedback', icon: BarChart3 },
 ]
 
-export default function Sidebar({ page, onNavigate }) {
+export default function Sidebar({ page, onNavigate, onAIStateChange }) {
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -22,6 +24,10 @@ export default function Sidebar({ page, onNavigate }) {
           <div className="brand-title">Agente Comercial</div>
           <div className="brand-sub">Painel da IA</div>
         </div>
+      </div>
+
+      <div style={{ padding: '0 0 12px' }}>
+        <AIKillSwitch onStateChange={onAIStateChange} />
       </div>
 
       <div className="nav-section">Geral</div>

@@ -8,13 +8,16 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "start": "node server.js"
+    "start": "node --env-file=.env server.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.103.3",
+    "exceljs": "^4.4.0",
     "express": "^5.2.1",
     "ioredis": "^5.10.1",
     "lucide-react": "^0.510.0",
+    "multer": "^2.1.1",
+    "pdf-parse": "^1.1.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

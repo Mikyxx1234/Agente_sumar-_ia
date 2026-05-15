@@ -35,6 +35,7 @@ import { sendMessageWithNote } from '../whatsappSender.js'
 import { generateExecutionId, saveExecution } from '../ai/executionTelemetry.js'
 import { rememberWamid, getWamids } from './sessionWamid.js'
 import { startTypingHeartbeat } from '../whatsappTypingHeartbeat.js'
+import { getStateSync as getAiControlStateSync } from '../aiControlState.js'
 import { canonicalWhatsAppSessionId, phoneToWhatsAppSessionId } from '../phoneWhatsApp.js'
 import { normalizeKommoInboundPollMode } from '../kommoInboundPoll.js'
 import { enqueueCloudInboundPending, matchContactToPending, markCloudBridgeExpectsContact, shouldBufferOrphanContact, clearCloudBridgeContactWindow, bufferOrphanContact } from './cloudInboundPending.js'
@@ -416,6 +417,20 @@ async function flushSessionInner(env, sessionId, opts = {}) {
     console.log(`[Evolution][flush] ${sessionId} sem mensagens pendentes`)
     return null
   }
+
+  // ── Kill switch: IA desligada? Early return SEM esvaziar o buffer.
+  // Quando religar, próximo tick do scheduler processa o backlog.
+  const aiState = getAiControlStateSync()
+  if (aiState.enabled === false) {
+    // Loga uma vez por sessão por janela curta pra não floodar (o scheduler
+    // tenta de novo a cada 10s).
+    console.log(
+      `[Evolution][flush] ${sessionId} BLOQUEADO — IA desligada${aiState.reason ? ` (${aiState.reason})` : ''}. ` +
+        `${itens.length} msg(s) seguem no buffer; serão processadas quando a IA for religada.`,
+    )
+    return { skipped: 'ai_disabled', reason: aiState.reason || null, pending: itens.length }
+  }
+
   await clearMessages(env, sessionId)
   const mensagemCompleta = itens.join(', ')
   const telefone = normalizeTelefone(sessionId)

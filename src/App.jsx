@@ -8,6 +8,8 @@ import FeedbackJobViewer from './components/FeedbackJobViewer'
 import FeedbackDashboard from './components/FeedbackDashboard'
 import SalesbotExecutions from './components/SalesbotExecutions'
 import WebhookControl from './components/WebhookControl'
+import KnowledgeUpdate from './components/KnowledgeUpdate'
+import { PowerOff } from 'lucide-react'
 import './App.css'
 
 const STORAGE_KEY = 'prompt_edits'
@@ -88,6 +90,7 @@ export default function App() {
   const [page, setPage] = useState('dashboard')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [aiState, setAiState] = useState(null)
 
   useEffect(() => {
     fetch('/APAGAR.txt')
@@ -146,10 +149,22 @@ export default function App() {
     return (versions[id] || []).slice().reverse()
   }, [versions])
 
+  const aiOff = aiState && aiState.enabled === false
+
   return (
     <div style={{ display: 'flex', height: '100vh', width: '100%' }}>
-      <Sidebar page={page} onNavigate={setPage} />
+      <Sidebar page={page} onNavigate={setPage} onAIStateChange={setAiState} />
       <main className="main">
+        {aiOff && (
+          <div className="ai-off-banner" role="alert">
+            <PowerOff size={14} />
+            <span>
+              <strong>IA DESLIGADA</strong> — mensagens recebidas ficam no buffer e não serão respondidas até religar.
+              {aiState.reason ? ` Motivo: ${aiState.reason}.` : ''}
+              {aiState.updated_by ? ` Desligada por ${aiState.updated_by}.` : ''}
+            </span>
+          </div>
+        )}
         <div className="main-scroll">
           {loading && (
             <div className="state-msg">
@@ -170,6 +185,7 @@ export default function App() {
           {!loading && !error && page === 'executions' && <ExecutionViewer />}
           {!loading && !error && page === 'salesbot-executions' && <SalesbotExecutions />}
           {!loading && !error && page === 'webhook-control' && <WebhookControl />}
+          {!loading && !error && page === 'knowledge-update' && <KnowledgeUpdate />}
           {!loading && !error && page === 'feedback' && <FeedbackJobViewer />}
           {!loading && !error && page === 'feedback-dashboard' && <FeedbackDashboard />}
         </div>

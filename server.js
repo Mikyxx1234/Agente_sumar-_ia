@@ -45,6 +45,14 @@ import { runSalesbotCsv, extractLeadIdFromWebhookBody, probePos } from './server
 import { saveSalesbotExecution } from './server/salesbot/telemetry.js'
 import { reindexPos } from './server/salesbot/reindexPos.js'
 import { reindexPerguntas } from './server/ai/reindexPerguntas.js'
+import {
+  uploadKnowledge,
+  clearKnowledgeTable,
+  knowledgeStats,
+  ALLOWED_TABLES as KNOWLEDGE_TABLES,
+} from './server/ai/knowledgeUpload.js'
+import { getState as getAiControlState, setState as setAiControlState, initAiControlState } from './server/aiControlState.js'
+import multer from 'multer'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -887,6 +895,119 @@ app.post('/api/ai/reindex-perguntas', async (req, res) => {
     const force = req.body?.force === true || req.body?.clear === true
     const result = await reindexPerguntas(process.env, { force })
     res.status(result.ok ? 200 : 500).json(result)
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// ── Atualização IA: knowledge base RAG (grad_info, grad_preco, pos_info, pos_preco) ──
+//
+//   GET  /api/ai/knowledge/stats              → contagem por tabela
+//   POST /api/ai/knowledge/upload (multipart) → file + table; extrai, chunk, embed, insert
+//   POST /api/ai/knowledge/clear              → { table }: apaga todas as linhas
+//
+// Suporta PDF, XLSX, CSV, TXT, MD. CSV/XLSX = 1 linha por chunk; PDF/TXT = ~1000 chars.
+
+const knowledgeUploadMw = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB
+}).single('file')
+
+app.get('/api/ai/knowledge/stats', async (_req, res) => {
+  try {
+    const out = await knowledgeStats(process.env)
+    res.json(out)
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.post('/api/ai/knowledge/upload', (req, res) => {
+  knowledgeUploadMw(req, res, async (err) => {
+    if (err) {
+      const code = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400
+      return res.status(code).json({ ok: false, error: err.message, code: err.code })
+    }
+    const file = req.file
+    const table = (req.body?.table || req.query?.table || '').toString()
+    if (!file) return res.status(400).json({ ok: false, error: 'campo "file" ausente (multipart)' })
+    if (!KNOWLEDGE_TABLES.has(table)) {
+      return res.status(400).json({
+        ok: false,
+        error: `campo "table" inválido. Use uma de: ${[...KNOWLEDGE_TABLES].join(', ')}`,
+      })
+    }
+    try {
+      const result = await uploadKnowledge(process.env, {
+        table,
+        buffer: file.buffer,
+        filename: file.originalname,
+        mimeType: file.mimetype,
+      })
+      res.json(result)
+    } catch (e) {
+      console.error('[knowledge/upload] erro:', e.message)
+      res.status(500).json({ ok: false, error: e.message })
+    }
+  })
+})
+
+app.post('/api/ai/knowledge/clear', async (req, res) => {
+  try {
+    const table = (req.body?.table || '').toString()
+    if (!KNOWLEDGE_TABLES.has(table)) {
+      return res.status(400).json({
+        ok: false,
+        error: `campo "table" inválido. Use uma de: ${[...KNOWLEDGE_TABLES].join(', ')}`,
+      })
+    }
+    const result = await clearKnowledgeTable(process.env, table)
+    res.json(result)
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// ── Kill switch da IA ──
+//
+//   GET  /api/ai/control/state            → { ok, enabled, updated_at, updated_by, reason, source }
+//   POST /api/ai/control/state {enabled,reason,by}  → seta explícito
+//   POST /api/ai/control/toggle {reason,by}         → inverte
+//
+// O trinco fica em `flushSessionInner` (server/evolution/webhookEvolution.js):
+// quando enabled=false, mensagens ficam no buffer e a IA não responde.
+// Quando religar, o próximo tick do scheduler processa o backlog.
+app.get('/api/ai/control/state', async (_req, res) => {
+  try {
+    const s = await getAiControlState(process.env, { force: true })
+    res.json({ ok: true, ...s })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.post('/api/ai/control/state', async (req, res) => {
+  try {
+    const enabled = req.body?.enabled !== false
+    const reason = (req.body?.reason || '').toString().trim().slice(0, 300) || null
+    const by = (req.body?.by || '').toString().trim().slice(0, 80) || 'dashboard'
+    const s = await setAiControlState(process.env, { enabled, reason, by })
+    console.log(`[aiControl] estado alterado → enabled=${s.enabled} by=${by}${reason ? ` reason="${reason}"` : ''}`)
+    res.json({ ok: true, ...s })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.post('/api/ai/control/toggle', async (req, res) => {
+  try {
+    const current = await getAiControlState(process.env, { force: true })
+    const next = !current.enabled
+    const reason = (req.body?.reason || '').toString().trim().slice(0, 300) || null
+    const by = (req.body?.by || '').toString().trim().slice(0, 80) || 'dashboard'
+    const s = await setAiControlState(process.env, { enabled: next, reason, by })
+    console.log(`[aiControl] toggle → enabled=${s.enabled} by=${by}${reason ? ` reason="${reason}"` : ''}`)
+    res.json({ ok: true, ...s })
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })
   }
@@ -1782,6 +1903,11 @@ app.get('*path', (_req, res) => {
 app.listen(PORT, async () => {
   const maps = process.env.GOOGLE_MAPS_API_KEY || process.env.VITE_GOOGLE_MAPS_API_KEY
   console.log(`[Server] Listening on port ${PORT}`)
+  // Carrega o kill-switch da IA no cache em memória antes de qualquer
+  // mensagem ser processada (flushSession lê o cache síncrono).
+  initAiControlState(process.env).catch((e) =>
+    console.warn(`[Server] aiControlState init falhou: ${e.message}`),
+  )
   console.log(`[Server] Supabase proxy (IA): ${SUPABASE_URL ? 'active' : 'DISABLED'}`)
   console.log(`[Server] Supabase proxy (Feedback): ${SUPABASE_URL_FEEDBACK ? 'active' : 'DISABLED'}`)
   console.log(`[Server] Location tool (Google Maps): ${maps ? 'active' : 'DISABLED'}`)
