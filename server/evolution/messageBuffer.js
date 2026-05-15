@@ -140,6 +140,32 @@ function makeRedisBackend(env) {
     async ping() {
       return client.ping()
     },
+    /**
+     * Sessões com pelo menos 1 mensagem na fila (SCAN — uso moderado).
+     * @param {number} limit
+     * @returns {Promise<string[]>}
+     */
+    async listPendingSessionIds(limit) {
+      const cap = Math.max(1, Math.min(200, Number(limit) || 50))
+      const pattern = `${prefix}*`
+      const seen = new Set()
+      let cursor = '0'
+      do {
+        const [next, keys] = await client.scan(cursor, 'MATCH', pattern, 'COUNT', 80)
+        cursor = String(next)
+        for (const key of keys || []) {
+          if (typeof key !== 'string' || !key.startsWith(prefix)) continue
+          const sid = key.slice(prefix.length)
+          if (!sid || seen.has(sid)) continue
+          const n = await client.llen(key)
+          if (n > 0) {
+            seen.add(sid)
+            if (seen.size >= cap) return [...seen]
+          }
+        }
+      } while (cursor !== '0')
+      return [...seen]
+    },
   }
 }
 
@@ -179,7 +205,9 @@ function makeSupabaseBackend(env) {
   return {
     label: 'supabase',
     async init() {
-      await request('GET', `?select=id&limit=1`)
+      // Valida tabela + colunas usadas em push/get/list (evita backend "supabase"
+      // com init falso quando a tabela não existe no PostgREST).
+      await request('GET', `?select=id,session_id,content&limit=1`)
     },
     async push(sid, text) {
       await request('POST', '', {
@@ -209,6 +237,34 @@ function makeSupabaseBackend(env) {
     async ping() {
       await request('GET', `?select=id&limit=1`)
       return 'PONG'
+    },
+    /**
+     * Distinct session_id entre linhas recentes (heurística p/ scheduler órfão).
+     * @param {number} limit
+     * @returns {Promise<string[]>}
+     */
+    async listPendingSessionIds(limit) {
+      const cap = Math.max(1, Math.min(100, Number(limit) || 30))
+      const scan = Math.min(3000, cap * 80)
+      const q = `?select=session_id&order=id.desc&limit=${scan}`
+      const rows = await request('GET', q)
+      if (!Array.isArray(rows)) return []
+      const uniq = []
+      const seen = new Set()
+      for (const r of rows) {
+        const sid = r?.session_id
+        if (typeof sid !== 'string' || !sid || seen.has(sid)) continue
+        seen.add(sid)
+        uniq.push(sid)
+        if (uniq.length >= cap) break
+      }
+      const withMsgs = []
+      for (const sid of uniq) {
+        const items = await this.get(sid)
+        if (items && items.length) withMsgs.push(sid)
+        if (withMsgs.length >= cap) break
+      }
+      return withMsgs
     },
   }
 }
@@ -254,6 +310,18 @@ function makeMemoryBackend(env) {
     async ping() {
       return 'PONG'
     },
+    /** @param {number} limit */
+    async listPendingSessionIds(limit) {
+      const cap = Math.max(1, Math.min(200, Number(limit) || 50))
+      const out = []
+      for (const [sid, list] of store.entries()) {
+        if (list && list.length > 0) {
+          out.push(sid)
+          if (out.length >= cap) break
+        }
+      }
+      return out
+    },
   }
 }
 
@@ -273,17 +341,27 @@ async function pickBackend(env) {
   }
 
   if (forced === 'redis') {
-    return tryInit(makeRedisBackend(env)).then((b) => {
+    const redisBackend = makeRedisBackend(env)
+    try {
+      const b = await tryInit(redisBackend)
       console.log('[MessageBuffer] backend=redis (forçado)')
       return b
-    })
+    } catch (err) {
+      await redisBackend.dispose?.().catch(() => {})
+      console.warn(`[MessageBuffer] Redis forçado falhou (${err.message}) → memória`)
+      return makeMemoryBackend(env)
+    }
   }
 
   if (forced === 'supabase') {
-    return tryInit(makeSupabaseBackend(env)).then((b) => {
+    try {
+      const b = await tryInit(makeSupabaseBackend(env))
       console.log('[MessageBuffer] backend=supabase (forçado)')
       return b
-    })
+    } catch (err) {
+      console.warn(`[MessageBuffer] Supabase forçado falhou (${err.message}) → memória`)
+      return makeMemoryBackend(env)
+    }
   }
 
   if (hasRedisConfig(env)) {
@@ -374,4 +452,18 @@ export async function getLastTouchedAt(env, sessionId) {
 export async function pingBackend(env) {
   const backend = await getBackend(env)
   return { backend: backend.label, pong: await backend.ping() }
+}
+
+/**
+ * Lista session_ids que têm mensagens pendentes no buffer (p/ scheduler
+ * quando o funil Kommo está vazio mas o webhook Evolution encheu fila).
+ *
+ * @param {Record<string,string>} env
+ * @param {number} [limit=30]
+ * @returns {Promise<string[]>}
+ */
+export async function listSessionsWithPendingMessages(env, limit = 30) {
+  const backend = await getBackend(env)
+  if (typeof backend.listPendingSessionIds !== 'function') return []
+  return backend.listPendingSessionIds(limit)
 }

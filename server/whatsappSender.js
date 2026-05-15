@@ -9,8 +9,11 @@
  *       • wait 1 segundo
  *
  * Env:
- *   WHATSAPP_PHONE_NUMBER_ID   ex: 440327379171310
- *   WHATSAPP_ACCESS_TOKEN      token do Meta Business (WACA)
+ *   WHATSAPP_OUTBOUND_MODE     opcional: `cloud` (default) | `evolution`
+ *                              `evolution` = POST /message/sendText na Evolution
+ *                              (mesma instância que recebe); exige EVOLUTION_*.
+ *   WHATSAPP_PHONE_NUMBER_ID   ex: 794200977108142 (só modo cloud + typing/read)
+ *   WHATSAPP_ACCESS_TOKEN      token do Meta Business (WACA) — não é o apikey da Evolution
  *   WHATSAPP_API_VERSION       opcional, default v19.0
  *   WHATSAPP_MAX_CHARS         opcional, default 1000 (mesmo do n8n)
  *   WHATSAPP_CHUNK_DELAY_MS    opcional, default 1000
@@ -18,6 +21,7 @@
 
 import { createLeadNote } from './kommoClient.js'
 import { generateExecutionId } from './ai/executionTelemetry.js'
+import { sendTextViaEvolution } from './evolution/evolutionSendText.js'
 
 /**
  * Marca a mensagem do cliente como "lida" e mostra o "digitando..." pro
@@ -141,6 +145,11 @@ export function splitMessage(input, maxLen = 1000) {
  * @returns { ok, status?, messageId?, code?, error? }
  */
 export async function sendText(env, { to, text }) {
+  const outbound = String(env.WHATSAPP_OUTBOUND_MODE || 'cloud').toLowerCase().trim()
+  if (outbound === 'evolution') {
+    return sendTextViaEvolution(env, { to, text })
+  }
+
   const cfg = getConfig(env)
   if (!cfg.phoneNumberId || !cfg.accessToken) {
     return {

@@ -148,22 +148,62 @@ export async function bulkGetContactsByIds(env, ids) {
   return { ok: true, contacts: all }
 }
 
+function pickFirstPhoneValue(values) {
+  if (!Array.isArray(values)) return null
+  for (const v of values) {
+    const raw = v?.value
+    if (raw == null) continue
+    const s = String(raw).trim()
+    if (s && /\d/.test(s)) return s
+  }
+  return null
+}
+
 /**
- * Extrai o telefone de um contato Kommo (procura no custom_fields_values).
- * Retorna o primeiro telefone encontrado (string, com ou sem '+'), ou null.
+ * Indica se o custom field do Kommo/Amo é claramente um telefone.
+ * Inclui `sum_telefone` (Faculdade Sumaré) além do field_code canônico PHONE.
+ */
+function isPhoneCustomField(f) {
+  const codeRaw = String(f?.field_code || '').trim()
+  const code = codeRaw.toUpperCase().replace(/-/g, '_')
+  if (code === 'PHONE') return true
+  // Campo custom Sumaré no Kommo (lead ou contato)
+  if (code === 'SUM_TELEFONE') return true
+  const name = String(f?.field_name || '')
+  return /phone|telefone|celular|whatsapp|mobile|fone/i.test(name)
+}
+
+/**
+ * Extrai o telefone de um contato Kommo (custom_fields_values).
+ * Aceita field_code PHONE, SUM_TELEFONE / sum_telefone (Sumaré), field_name com "telefone"/etc.,
+ * e valor numérico ou string.
  */
 export function extractContactPhone(contact) {
+  if (!contact) return null
+  if (typeof contact.phone === 'string' && contact.phone.trim() && /\d/.test(contact.phone)) {
+    return contact.phone.trim()
+  }
   const fields = contact?.custom_fields_values
   if (!Array.isArray(fields)) return null
   for (const f of fields) {
-    const code = String(f?.field_code || '').toUpperCase()
-    if (code !== 'PHONE') continue
-    const values = f?.values
-    if (!Array.isArray(values) || values.length === 0) continue
-    for (const v of values) {
-      const phone = v?.value
-      if (phone && typeof phone === 'string') return phone
-    }
+    if (!isPhoneCustomField(f)) continue
+    const phone = pickFirstPhoneValue(f?.values)
+    if (phone) return phone
+  }
+  return null
+}
+
+/**
+ * Telefone gravado no **lead** (não no contato). Alguns funis preenchem só aqui.
+ */
+export function extractLeadPhone(lead) {
+  if (!lead) return null
+  const fields = lead?.custom_fields_values
+  if (!Array.isArray(fields)) return null
+  for (const f of fields) {
+    if (!isPhoneCustomField(f)) continue
+    const phone = pickFirstPhoneValue(f?.values)
+    if (phone) return phone
   }
   return null
 }

@@ -19,6 +19,25 @@ export default defineConfig(({ mode }) => {
       distribuirHumanoApiPlugin(env),
     ],
     build: { outDir: 'dist' },
+    // Dev: UI (5173) → API Express (8000). Sem isto, /api/playground e /api/evolution/health no browser falham.
+    server: {
+      proxy: {
+        '/api/evolution': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+        '/api/playground': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+        '/api/agent': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+        '/api/whatsapp': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+        '/api/scheduler': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+        '/api/kommo': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+        '/api/kommo-dispatcher': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+        '/api/history': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+        '/api/clientes': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+        '/api/memory': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+        '/api/salesbot': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+        '/api/ai': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+        '/api/media': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+        '/api/debug': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+      },
+    },
   }
 })
 

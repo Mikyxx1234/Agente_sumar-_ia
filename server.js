@@ -509,6 +509,9 @@ app.get('/api/evolution/health', async (_req, res) => {
         debounceSec: Number(process.env.KOMMO_SCHEDULER_DEBOUNCE_SEC) || 15,
         pipelineId: process.env.KOMMO_AGENT_PIPELINE_ID || null,
         statusId: process.env.KOMMO_AGENT_STATUS_ID || null,
+        webhookOrphanFlush: ['true', '1', 'yes'].includes(
+          String(process.env.KOMMO_SCHEDULER_WEBHOOK_ORPHAN_FLUSH || '').trim().toLowerCase(),
+        ),
       },
     })
   } catch (e) {
@@ -1819,6 +1822,22 @@ app.listen(PORT, async () => {
   const sched = startAgentScheduler(process.env)
   if (!sched.started) {
     console.log(`[Server] Agent scheduler: ${sched.reason}`)
+  }
+
+  const publicBase = String(process.env.PUBLIC_WEBHOOK_BASE_URL || '').trim().replace(/\/$/, '')
+  const whPath = '/api/evolution/webhook'
+  if (publicBase) {
+    console.log(`[Server] Evolution — URL a colar na instância (Webhook): ${publicBase}${whPath}`)
+  } else {
+    console.log(
+      `[Server] Evolution — Webhook local: POST http://127.0.0.1:${PORT}${whPath} (a Evolution na internet NÃO alcança localhost). ` +
+        'Em produção defina PUBLIC_WEBHOOK_BASE_URL=https://seu-dominio.tld para este log mostrar a URL pública.',
+    )
+  }
+  if (String(process.env.EVOLUTION_WEBHOOK_TOKEN || '').trim()) {
+    console.log('[Server] Evolution — EVOLUTION_WEBHOOK_TOKEN ativo: enviar X-Webhook-Token ou Authorization: Bearer com o mesmo valor.')
+  } else {
+    console.log('[Server] Evolution — sem EVOLUTION_WEBHOOK_TOKEN (POST aceite sem header de token).')
   }
 
   // Probe do dispatcher no boot — falha silenciosa é a pior coisa em

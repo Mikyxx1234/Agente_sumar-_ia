@@ -25,6 +25,13 @@
  *   KOMMO_AGENT_STATUS_ID              (obrig.) ex: 89820300
  *   KOMMO_SCHEDULER_INTERVAL_SEC=30    intervalo entre ticks
  *   KOMMO_SCHEDULER_DEBOUNCE_SEC=15    silêncio mínimo após última mensagem
+ *   KOMMO_SCHEDULER_WEBHOOK_ORPHAN_FLUSH=true   quando NÃO há leads no
+ *                                       pipeline/status, ainda assim tenta
+ *                                       flush das sessões que têm fila no
+ *                                       buffer (Evolution webhook). Útil se
+ *                                       o WhatsApp conversa mas o lead ainda
+ *                                       não foi parado na etapa do Kommo.
+ *   KOMMO_SCHEDULER_ORPHAN_SESSION_CAP=25      máx. sessões por tick no modo órfão
  *   KOMMO_SCHEDULER_ENABLED=true       chave geral pra ligar/desligar
  *   KOMMO_INBOUND_POLL_ENABLED=true     opcional: preenche buffer a partir do Kommo
  *                                       (eventos v4 de chat antes das notas quando
@@ -42,9 +49,14 @@
  *                                      (senão só 1 linha resumida por lead).
  */
 
-import { listLeadsByStatus, bulkGetContactsByIds, extractContactPhone } from './kommoClient.js'
+import {
+  listLeadsByStatus,
+  bulkGetContactsByIds,
+  extractContactPhone,
+  extractLeadPhone,
+} from './kommoClient.js'
 import { phoneToWhatsAppSessionId } from './phoneWhatsApp.js'
-import { getMessages, getLastTouchedAt } from './evolution/messageBuffer.js'
+import { getMessages, getLastTouchedAt, listSessionsWithPendingMessages } from './evolution/messageBuffer.js'
 import { flushSession } from './evolution/webhookEvolution.js'
 import {
   syncKommoInboundToBuffer,
@@ -75,6 +87,58 @@ let lastEmptyFunnelWarnMs = 0
 
 function isSchedulerVerbose(env) {
   return ['true', '1', 'yes'].includes(String(env.KOMMO_SCHEDULER_VERBOSE || '').trim().toLowerCase())
+}
+
+/** Quando o funil Kommo está vazio, ainda processar buffer preenchido só pelo webhook Evolution. */
+function isWebhookOrphanFlushEnabled(env) {
+  return ['true', '1', 'yes'].includes(String(env.KOMMO_SCHEDULER_WEBHOOK_ORPHAN_FLUSH || '').trim().toLowerCase())
+}
+
+function getOrphanSessionCap(env) {
+  const v = Number(env.KOMMO_SCHEDULER_ORPHAN_SESSION_CAP)
+  return Number.isFinite(v) && v > 0 ? Math.min(80, Math.floor(v)) : 25
+}
+
+/**
+ * @param {Record<string,string>} env
+ * @param {{ debounceMs: number, stats: object }} ctx
+ */
+async function tryFlushWebhookOrphanSessions(env, { debounceMs, stats }) {
+  if (!isWebhookOrphanFlushEnabled(env)) return
+  const cap = getOrphanSessionCap(env)
+  let sessionIds = []
+  try {
+    sessionIds = await listSessionsWithPendingMessages(env, cap)
+  } catch (err) {
+    console.error('[scheduler] orphan listSessionsWithPendingMessages:', err.message)
+    return
+  }
+  if (!sessionIds.length) return
+
+  console.log(
+    `[scheduler] funil vazio — WEBHOOK_ORPHAN_FLUSH: ${sessionIds.length} sessão(ões) com buffer (cap=${cap})`,
+  )
+
+  for (const sessionId of sessionIds) {
+    try {
+      const [messages, last] = await Promise.all([
+        getMessages(env, sessionId),
+        getLastTouchedAt(env, sessionId),
+      ])
+      if (!messages || messages.length === 0) continue
+      const ageMs = last ? Date.now() - last.getTime() : Infinity
+      if (ageMs < debounceMs) {
+        stats.skippedDebounce += 1
+        continue
+      }
+      console.log(`[scheduler] flush órfão ${sessionId} (${messages.length} msgs, idade=${Math.round(ageMs / 1000)}s)`)
+      await flushSession(env, sessionId, { leadIdHint: null })
+      stats.processed += 1
+    } catch (err) {
+      stats.errors += 1
+      console.error('[scheduler] erro flush órfão', sessionId, err.message)
+    }
+  }
 }
 
 function getIntervalMs(env) {
@@ -156,6 +220,7 @@ export async function runSchedulerTick(env) {
           'Ajuste KOMMO_AGENT_PIPELINE_ID / KOMMO_AGENT_STATUS_ID ou realoque o lead.',
       )
     }
+    await tryFlushWebhookOrphanSessions(env, { debounceMs, stats })
     return stats
   }
 
@@ -195,7 +260,16 @@ export async function runSchedulerTick(env) {
           break
         }
       }
-      if (!phone) return
+      if (!phone) {
+        phone = extractLeadPhone(lead)
+      }
+      if (!phone) {
+        console.warn(
+          `[scheduler] lead=${lead.id} ignorado: nenhum telefone extraível do contato (field PHONE) nem do lead. ` +
+            'Sem telefone não há sessionId WhatsApp → buffer vazio e a IA nunca responde. Preencha telefone no Kommo (contato ou lead).',
+        )
+        return
+      }
       const sessionId = buildSessionId(phone)
       if (!sessionId) return
 
