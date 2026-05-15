@@ -8,6 +8,7 @@ import { getExecutionsByRange } from '../lib/executionStore'
 import { calcCostBRL } from '../lib/openaiPricing'
 
 const TOPIC_LABELS = {
+  buscar_conhecimento: 'Busca base Sumaré (RAG)',
   buscar_precos: 'Pediu preço',
   buscar_informacoes: 'Pediu informações do curso',
   buscar_pos: 'Pediu pós-graduação',
@@ -18,6 +19,7 @@ const TOPIC_LABELS = {
 }
 
 const TOPIC_COLORS = {
+  'Busca base Sumaré (RAG)': '#2dd4bf',
   'Pediu preço': '#f472b6',
   'Pediu informações do curso': '#34d399',
   'Pediu pós-graduação': '#c084fc',
@@ -436,6 +438,7 @@ export default function Dashboard() {
       })
     })
     const toolLabels = {
+      buscar_conhecimento: 'Buscar conhecimento (Sumaré)',
       buscar_precos: 'Buscar Preços',
       buscar_informacoes: 'Buscar Informações',
       buscar_pos: 'Buscar Pós-Graduação',

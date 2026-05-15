@@ -7,9 +7,27 @@ export const TOOL_DEFINITIONS = [
   {
     type: 'function',
     function: {
+      name: 'buscar_conhecimento',
+      description:
+        'Busca unificada na base vetorial da Faculdade Sumaré (graduação e pós-graduação: informações gerais e preços). ' +
+        'Use como PRIMEIRA opção para dúvidas sobre curso, mensalidade, modalidade, grade, MBA, especialização, etc. ' +
+        'O sistema escolhe automaticamente as tabelas corretas (pos_info, pos_preco, grad_info, grad_preco).',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Pergunta ou termos de busca (ex.: nome do curso + o que o lead quer saber).' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'buscar_precos',
       description:
-        'Busca preços e valores de cursos na base vetorial do Supabase. Use quando precisar de mensalidades, valores e preços.',
+        'Busca preços e valores na base vetorial da Faculdade Sumaré (tabelas pos_preco / grad_preco via RPC). ' +
+        'Alternativa a buscar_conhecimento quando o foco for só mensalidade/valor.',
       parameters: {
         type: 'object',
         properties: {
@@ -24,7 +42,7 @@ export const TOOL_DEFINITIONS = [
     function: {
       name: 'buscar_informacoes',
       description:
-        'Busca informações de cursos de GRADUAÇÃO (grade, duração, modalidades, áreas). NÃO use para pós-graduação.',
+        'Busca informações de GRADUAÇÃO na base vetorial da Faculdade Sumaré (grad_info). Prefira buscar_conhecimento se não tiver certeza do nível.',
       parameters: {
         type: 'object',
         properties: {
@@ -39,7 +57,7 @@ export const TOOL_DEFINITIONS = [
     function: {
       name: 'buscar_pos',
       description:
-        'Busca informações de PÓS-GRADUAÇÃO, MBA e especializações. SOMENTE quando o usuário mencionar pós/MBA/especialização.',
+        'Busca informações de PÓS-GRADUAÇÃO na base da Faculdade Sumaré (pos_info). Prefira buscar_conhecimento se o nível não estiver claro.',
       parameters: {
         type: 'object',
         properties: {

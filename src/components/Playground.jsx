@@ -153,7 +153,7 @@ export default function Playground({ prompts }) {
 Você está em um ambiente de teste (Playground). As regras abaixo substituem qualquer instrução conflitante dos prompts acima:
 
 1. RESPONDA SEMPRE EM LINGUAGEM NATURAL, nunca em XML, JSON ou templates estruturados.
-2. Você tem 8 tools reais: buscar_precos, buscar_informacoes, buscar_pos, buscar_perguntas, localizacao, inscricao, distribuir_humano e buscar_historico_conversa. USE-AS quando couber.
+2. Você tem 9 tools reais: buscar_conhecimento, buscar_precos, buscar_informacoes, buscar_pos, buscar_perguntas, localizacao, inscricao, distribuir_humano e buscar_historico_conversa. USE-AS quando couber. Para curso/preço/MBA/modalidade, prefira buscar_conhecimento (base Faculdade Sumaré).
 3. MEMÓRIA: se o telefone do lead estiver disponível no contexto e você ainda não conhecer a conversa prévia, chame buscar_historico_conversa UMA vez no início do turno (limit 8–20) para entender o que já foi conversado antes de responder. Nunca mencione essa consulta ao usuário.
 4. Para localização, execute localizacao com o texto completo que o usuário informou (cidade, rua e número ou CEP) e apresente polo, endereço, tempo estimado e o link da rota.
 5. Para inscrição, use inscricao com curso e tipo_ingresso. Se a resposta indicar integração pendente (telefone/id_lead), explique ao usuário de forma natural que o cadastro será concluído pelo canal oficial ou pela equipe, sem citar APIs.
@@ -194,6 +194,7 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
       }
 
       const toolLabel = {
+        buscar_conhecimento: 'Buscando base de conhecimento Sumaré (vetorial)',
         buscar_precos: 'Buscando preços no Supabase',
         buscar_informacoes: 'Buscando informações do curso no Supabase',
         buscar_pos: 'Buscando pós-graduação no Supabase',

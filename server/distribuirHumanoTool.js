@@ -27,7 +27,7 @@ const KOMMO_FIELD_CURSO = 31782
 const KOMMO_FIELD_NIVEL = 31786
 
 const DISTRIB_PROMPT_PREFIX = `Prompt para Agente de Resumo de Conversas
-Você é um assistente especializado em resumir conversas do WhatsApp entre o assistente virtual comercial da Cruzeiro do Sul e candidatos.
+Você é um assistente especializado em resumir conversas do WhatsApp entre o assistente virtual comercial da Faculdade Sumaré e candidatos.
 
 Sua Tarefa
 Analise a conversa completa abaixo e crie um resumo estruturado:

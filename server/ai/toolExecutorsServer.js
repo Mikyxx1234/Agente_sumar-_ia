@@ -15,6 +15,8 @@ import { runBuscarHistorico } from '../memoryTool.js'
 import { resolveModel } from './modelRegistry.js'
 import { rewriteSearchQuery } from './queryRewrite.js'
 import { createNoopExecutionContext } from './executionContext.js'
+import { enrichRowContentForRag } from '../../libShared/knowledgeRowFormat.js'
+import { searchKnowledgeBase } from './knowledgeSearch.js'
 
 async function getEmbedding(env, text, ctx, toolName) {
   const apiKey = env.OPENAI_API_KEY || env.VITE_OPENAI_API_KEY
@@ -38,183 +40,7 @@ async function getEmbedding(env, text, ctx, toolName) {
   return data.data[0].embedding
 }
 
-/**
- * Extrai o link da grade curricular do metadata, se preenchido.
- * Usado por `buscar_informacoes` e `buscar_pos` — a base `documents`
- * tem `metadata.grade_do_curso` com URL (Drive) em alguns cursos.
- *
- * Sem isso o LLM não sabe se o link existe e tende a oferecer "te
- * mando o link" mesmo quando não tem. Ao injetar o link no texto
- * (quando existe) e marcar explicitamente quando NÃO existe, o LLM
- * pode decidir certo (ver promptsLoader regra 13).
- */
-function extractGradeLink(metadata) {
-  if (!metadata || typeof metadata !== 'object') return null
-  const raw =
-    metadata.grade_do_curso ||
-    metadata.grade_curso ||
-    metadata.link_grade ||
-    metadata.gradeCurricular ||
-    null
-  if (!raw) return null
-  const s = String(raw).trim()
-  if (!s) return null
-  // Aceita só se realmente parece URL — evita "N/A", "—", "ver site" virarem link.
-  if (!/^https?:\/\//i.test(s)) return null
-  return s
-}
-
-/**
- * Extrai a info estruturada de estágio do metadata, se preenchida.
- * Espera-se metadata.estagio = { tem: boolean, quantidade?, carga_total_horas?, detalhe? }.
- *
- * Retorna null se ausente ou inválido. Sem esse marcador a IA segue a
- * Rule 18 do prompt e chama distribuir_humano quando perguntada sobre
- * estágio — não inventa.
- */
-function extractEstagioInfo(metadata) {
-  if (!metadata || typeof metadata !== 'object') return null
-  const raw = metadata.estagio
-  if (!raw || typeof raw !== 'object') return null
-  if (typeof raw.tem !== 'boolean') return null
-  const out = { tem: raw.tem }
-  if (raw.tem === true) {
-    if (Number.isFinite(Number(raw.quantidade))) out.quantidade = Number(raw.quantidade)
-    if (Number.isFinite(Number(raw.carga_total_horas))) out.carga_total_horas = Number(raw.carga_total_horas)
-    if (typeof raw.detalhe === 'string' && raw.detalhe.trim()) out.detalhe = raw.detalhe.trim()
-    if (typeof raw.observacao === 'string' && raw.observacao.trim()) out.observacao = raw.observacao.trim()
-  }
-  return out
-}
-
-/**
- * Monta o texto do marcador [ESTAGIO: ...] a partir do extract.
- * Retorna a parte INTERNA — o caller envolve em colchetes (igual ao
- * padrão de STATUS DA GRADE).
- */
-function formatEstagioMarker(info) {
-  if (!info) return null
-  if (info.tem === false) {
-    return 'ESTAGIO: NAO — nao ha disciplina de estagio supervisionado obrigatorio neste curso'
-  }
-  // tem === true a partir daqui
-  const partes = []
-  if (info.quantidade != null) partes.push(`${info.quantidade} disciplina${info.quantidade === 1 ? '' : 's'} obrigatoria${info.quantidade === 1 ? '' : 's'}`)
-  if (info.carga_total_horas != null) partes.push(`${info.carga_total_horas}h totais`)
-  const head = partes.length > 0 ? partes.join(', ') : 'estagio supervisionado obrigatorio'
-  let texto = `ESTAGIO: SIM — ${head}`
-  if (info.detalhe) texto += `. ${info.detalhe}`
-  if (info.observacao) texto += ` (${info.observacao})`
-  return texto
-}
-
-/**
- * Procura, recursivamente em qualquer profundidade do metadata, valores
- * pra um conjunto de chaves alvo — case-insensitive. Aceita strings JSON
- * aninhadas (como `metadata.Metadata` que é uma string `{"curso":...}`)
- * e desserializa automaticamente. Para na primeira ocorrência de cada chave.
- *
- * Sem essa varredura recursiva a função antiga falhava em qualquer
- * variação de formato (PascalCase, snake_case, JSON dentro de string,
- * objetos aninhados via loaders do n8n/LangChain), e a IA recebia só
- * "Gestão R$ 200" sem saber se era graduação ou pós.
- */
-function deepFindKeys(obj, targets, found = {}, depth = 0) {
-  if (!obj || depth > 6) return found
-  if (typeof obj === 'string') {
-    const trimmed = obj.trim()
-    if ((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
-        (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
-      try {
-        return deepFindKeys(JSON.parse(trimmed), targets, found, depth + 1)
-      } catch { /* ignore */ }
-    }
-    return found
-  }
-  if (Array.isArray(obj)) {
-    for (const item of obj) deepFindKeys(item, targets, found, depth + 1)
-    return found
-  }
-  if (typeof obj !== 'object') return found
-  for (const [k, v] of Object.entries(obj)) {
-    const lower = k.toLowerCase()
-    for (const [outKey, aliases] of Object.entries(targets)) {
-      if (found[outKey] != null) continue
-      if (aliases.includes(lower)) {
-        if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
-          const s = String(v).trim()
-          if (s) found[outKey] = s
-        }
-      }
-    }
-    if (typeof v === 'object' || (typeof v === 'string' && v.trim().startsWith('{'))) {
-      deepFindKeys(v, targets, found, depth + 1)
-    }
-  }
-  return found
-}
-
-/**
- * Extrai info de preço do metadata de documents_precos. Tenta vários
- * formatos (PascalCase, snake_case, JSON dentro de string, objeto
- * aninhado).
- *
- * Sem isso a IA só recebia "Gestão Ambiental R$ 184,00" sem nivel/
- * modalidade e juntava preços de graduação com pós (caso real do print).
- */
-function extractPriceMeta(metadata) {
-  if (!metadata || typeof metadata !== 'object') return null
-  const found = deepFindKeys(metadata, {
-    curso: ['curso', 'nome', 'nome_curso', 'course', 'name'],
-    tipo: ['tipo', 'nivel', 'grau', 'grau_curso', 'level', 'category'],
-    modalidade: ['modalidade', 'modalidades', 'modality'],
-    tempo: ['tempo', 'duracao', 'duracao_curso', 'duration'],
-    valor: ['valor', 'preco', 'preco_mensal', 'mensalidade', 'price'],
-  })
-  if (!found.curso && !found.tipo && !found.modalidade && !found.tempo && !found.valor) return null
-  return found
-}
-
-function isPosTipo(tipo) {
-  if (!tipo) return false
-  const t = String(tipo).toLowerCase()
-  return /(p[óo]s|mba|especializa)/i.test(t)
-}
-
-/**
- * Fallback: serializa o metadata em string compacta (até ~250 chars) pra
- * a IA ter pelo menos UMA visão dos campos brutos quando o extrator
- * canônico falha. Remove campos de loader (loc, source, blobType, etc)
- * que só poluem o prompt.
- */
-const NOISE_KEYS = new Set([
-  'loc', 'source', 'blobtype', 'pdf', 'pageNumber', 'totalPages',
-  'lines', 'embedding', 'id',
-])
-function summarizeMetadataForLLM(metadata) {
-  if (!metadata || typeof metadata !== 'object') return null
-  const cleaned = {}
-  for (const [k, v] of Object.entries(metadata)) {
-    if (NOISE_KEYS.has(k.toLowerCase())) continue
-    if (v == null) continue
-    if (typeof v === 'string') {
-      // Se for JSON-string, tenta parsear pra exibir mais legível.
-      const t = v.trim()
-      if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
-        try { cleaned[k] = JSON.parse(t); continue } catch { /* ignore */ }
-      }
-      cleaned[k] = v
-    } else {
-      cleaned[k] = v
-    }
-  }
-  if (Object.keys(cleaned).length === 0) return null
-  let s
-  try { s = JSON.stringify(cleaned) } catch { return null }
-  if (s.length > 280) s = s.slice(0, 277) + '...'
-  return s
-}
-
+/** Legado: FAQ `match_documents_perguntas` (fora das 4 tabelas Sumaré). */
 async function vectorSearch(env, ctx, toolName, rpcName, query, matchCount = 10) {
   const url = env.SUPABASE_URL || env.VITE_SUPABASE_URL
   const key = env.SUPABASE_KEY || env.VITE_SUPABASE_KEY
@@ -264,73 +90,27 @@ async function vectorSearch(env, ctx, toolName, rpcName, query, matchCount = 10)
   const data = await res.json()
   if (!Array.isArray(data) || data.length === 0) return 'Nenhum resultado encontrado na base.'
 
-  // Anexa metadata legível ao texto pra o LLM — sem isso ele perdia
-  // contexto crítico (link da grade, nível/modalidade do preço) e
-  // alucinava (oferecia link inexistente, juntava preço de graduação
-  // com preço de pós, etc).
-  const isCourseTool = toolName === 'buscar_informacoes' || toolName === 'buscar_pos'
-  const isPriceTool = toolName === 'buscar_precos'
+  const ragSource =
+    toolName === 'buscar_informacoes'
+      ? 'grad_info'
+      : toolName === 'buscar_pos'
+        ? 'pos_info'
+        : toolName === 'buscar_precos'
+          ? 'grad_preco'
+          : null
+
   return data
     .map((d) => {
       const base = d?.content || ''
-      if (isCourseTool) {
-        const partes = [base]
-
-        const gradeUrl = extractGradeLink(d?.metadata)
-        const gradeStatus = gradeUrl
-          ? `STATUS DA GRADE: DISPONIVEL — link oficial: ${gradeUrl}`
-          : 'STATUS DA GRADE: NAO DISPONIVEL — não existe link/PDF da grade deste curso na nossa base.'
-        partes.push(`[${gradeStatus}]`)
-
-        // Marcador de estágio: só pra graduação (buscar_informacoes).
-        // Pós-graduação raramente tem estágio supervisionado — não inflar o
-        // prompt nem confundir a IA com info que não tem campo preenchido.
-        if (toolName === 'buscar_informacoes') {
-          const estagioInfo = extractEstagioInfo(d?.metadata)
-          const estagioMarker = formatEstagioMarker(estagioInfo)
-          if (estagioMarker) partes.push(`[${estagioMarker}]`)
+      if (ragSource) {
+        const enriched = enrichRowContentForRag(ragSource, d)
+        if (toolName === 'buscar_precos') {
+          try {
+            const sample = JSON.stringify(d?.metadata ?? null).slice(0, 800)
+            console.log(`[tool/buscar_precos] sample content="${(d?.content || '').slice(0, 80)}" metadata=${sample}`)
+          } catch { /* ignore */ }
         }
-
-        return partes.join('\n\n')
-      }
-      if (isPriceTool) {
-        const meta = extractPriceMeta(d?.metadata)
-        const lines = [base]
-        if (meta) {
-          const fields = []
-          if (meta.curso) fields.push(`curso: ${meta.curso}`)
-          if (meta.tipo) {
-            const nivel = isPosTipo(meta.tipo) ? 'PÓS-GRADUAÇÃO' : 'GRADUAÇÃO'
-            fields.push(`nivel: ${nivel} (tipo bruto: ${meta.tipo})`)
-          }
-          if (meta.modalidade) fields.push(`modalidade: ${meta.modalidade}`)
-          if (meta.tempo) fields.push(`duracao: ${meta.tempo}`)
-          if (meta.valor) fields.push(`valor: ${meta.valor}`)
-          lines.push(`[FICHA DO PRECO — ${fields.join(' | ')}]`)
-        }
-        // SEMPRE anexa o metadata bruto resumido — mesmo quando a FICHA
-        // já foi extraída — pra a IA ter visibilidade completa e poder
-        // decidir caso a FICHA tenha pulado algum campo. Sem filtro de
-        // noise: prefiro a IA descartar campo irrelevante a perder info
-        // crítica (já vimos casos onde tipo/nivel só aparece em key
-        // exótica que o filtro removia).
-        let rawDump = null
-        try {
-          const compact = JSON.stringify(d?.metadata ?? null)
-          if (compact && compact !== 'null' && compact !== '{}') {
-            rawDump = compact.length > 500 ? compact.slice(0, 497) + '...' : compact
-          }
-        } catch { /* ignore */ }
-        // Log do metadata real — aparece no console do servidor ao
-        // executar buscar_precos. Indispensável pra ajustar o extrator
-        // se o formato real for diferente do canônico.
-        try {
-          const sample = JSON.stringify(d?.metadata ?? null).slice(0, 800)
-          console.log(`[tool/buscar_precos] sample content="${(d?.content || '').slice(0, 80)}" metadata=${sample}`)
-        } catch { /* ignore */ }
-        if (rawDump) lines.push(`[METADATA BRUTO — ${rawDump}]`)
-        if (lines.length === 1) return base // nada extra extraído
-        return lines.join('\n\n')
+        return enriched
       }
       return base
     })
@@ -459,12 +239,14 @@ function absorbToolMeta(ctx, raw) {
 export function buildToolExecutors(env, ctx) {
   const safeCtx = ctx || createNoopExecutionContext()
   return {
+    buscar_conhecimento: async ({ query }) =>
+      searchKnowledgeBase(env, safeCtx, query, { toolName: 'buscar_conhecimento' }),
     buscar_precos: async ({ query }) =>
-      vectorSearch(env, safeCtx, 'buscar_precos', 'match_documents_precos', query, 8),
+      searchKnowledgeBase(env, safeCtx, query, { toolName: 'buscar_precos', intentHint: 'preco' }),
     buscar_informacoes: async ({ query }) =>
-      vectorSearch(env, safeCtx, 'buscar_informacoes', 'match_documents', query, 15),
+      searchKnowledgeBase(env, safeCtx, query, { toolName: 'buscar_informacoes', levelHint: 'grad', intentHint: 'info' }),
     buscar_pos: async ({ query }) =>
-      vectorSearch(env, safeCtx, 'buscar_pos', 'match_documents_pos', query, 8),
+      searchKnowledgeBase(env, safeCtx, query, { toolName: 'buscar_pos', levelHint: 'pos', intentHint: 'info' }),
     buscar_perguntas: async ({ query }) => {
       const out = await vectorSearch(env, safeCtx, 'buscar_perguntas', 'match_documents_perguntas', query, 6)
       // Quando o RAG não acha nada, dá pra IA uma instrução explícita

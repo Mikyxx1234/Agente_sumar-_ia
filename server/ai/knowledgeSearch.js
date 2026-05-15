@@ -1,0 +1,231 @@
+/**
+ * RAG unificado — base vetorial Faculdade Sumaré (pgvector via RPC).
+ *
+ * RPCs: match_pos_info, match_pos_preco, match_grad_info, match_grad_preco
+ */
+
+import { resolveModel } from './modelRegistry.js'
+import { rewriteSearchQuery } from './queryRewrite.js'
+import { classifyKnowledgeQuery, planKnowledgeRpcs } from '../../queryClassifier.mjs'
+import { enrichRowContentForRag } from '../../libShared/knowledgeRowFormat.js'
+
+const INSTITUTION = 'Faculdade Sumaré'
+
+const LEGACY_BRAND_PATTERNS = [
+  /\bcruzeiro\b/i,
+  /\banhanguera\b/i,
+  /\bcruzeiro\s+do\s+sul\b/i,
+  /\bsoead\b/i,
+  /\bcruzeiro\s+virtual\b/i,
+]
+
+export function legacyBrandHitInText(text) {
+  const t = String(text || '')
+  return LEGACY_BRAND_PATTERNS.some((re) => re.test(t))
+}
+
+async function fetchEmbedding(env, text, ctx, toolName) {
+  const apiKey = env.OPENAI_API_KEY || env.VITE_OPENAI_API_KEY
+  if (!apiKey) throw new Error('OPENAI_API_KEY não configurada')
+  const model = resolveModel(env, 'embeddings')
+  const res = await fetch('https://api.openai.com/v1/embeddings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ model, input: text }),
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`Embedding ${res.status}: ${body.slice(0, 200)}`)
+  }
+  const data = await res.json()
+  if (ctx && data.usage) {
+    ctx.recordEmbeddingsUsage({ model, tool: toolName, usage: data.usage })
+  }
+  const emb = data.data[0].embedding
+  if (emb.length !== 1536) {
+    console.warn(
+      `[knowledgeSearch] embedding tem ${emb.length} dims (esperado 1536 p/ funções match_* no Supabase). Verifique OPENAI_MODEL_EMBEDDINGS.`,
+    )
+  }
+  return emb
+}
+
+async function callMatchRpc(env, rpcName, embedding) {
+  const url = (env.SUPABASE_URL || env.VITE_SUPABASE_URL || '').replace(/\/$/, '')
+  const key = env.SUPABASE_KEY || env.VITE_SUPABASE_KEY
+  if (!url || !key) throw new Error('Supabase não configurado')
+
+  const res = await fetch(`${url}/rest/v1/rpc/${rpcName}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: key,
+      Authorization: `Bearer ${key}`,
+    },
+    body: JSON.stringify({
+      query_embedding: embedding,
+      match_count: 5,
+      filter: {},
+    }),
+  })
+  const bodyText = await res.text().catch(() => '')
+  if (!res.ok) {
+    throw new Error(`Supabase RPC ${rpcName} ${res.status}: ${bodyText.slice(0, 240)}`)
+  }
+  let data
+  try {
+    data = JSON.parse(bodyText)
+  } catch {
+    throw new Error(`Supabase RPC ${rpcName}: resposta não-JSON`)
+  }
+  if (!Array.isArray(data)) return []
+  return data
+}
+
+function normalizeRow(source, raw) {
+  const id = Number(raw?.id)
+  const similarity = typeof raw?.similarity === 'number' ? raw.similarity : Number(raw?.similarity) || 0
+  return {
+    source,
+    id: Number.isFinite(id) ? id : 0,
+    content: String(raw?.content ?? ''),
+    metadata: raw?.metadata && typeof raw.metadata === 'object' ? raw.metadata : {},
+    similarity,
+  }
+}
+
+function buildContextBlock(rows) {
+  const lines = ['CONTEXT:']
+  for (const r of rows) {
+    const sim = typeof r.similarity === 'number' ? r.similarity.toFixed(4) : String(r.similarity)
+    const body = enrichRowContentForRag(r.source, { content: r.content, metadata: r.metadata })
+    lines.push('')
+    lines.push(`[fonte: ${r.source} | similarity: ${sim}]`)
+    lines.push(body)
+  }
+  return lines.join('\n')
+}
+
+const SUMARÉ_REPLY_RULES = [
+  '',
+  'INSTRUÇÃO OBRIGATÓRIA:',
+  `Você é um agente comercial da ${INSTITUTION}. Responda usando somente o CONTEXT acima.`,
+  'Não use informações de outras instituições (ex.: Cruzeiro, Anhanguera, SOEAD), mesmo que existam em materiais antigos do projeto.',
+  'Se o CONTEXT não tiver informação suficiente, diga claramente que não encontrou essa informação na base e ofereça ajuda (ex.: consultor via distribuir_humano) quando fizer sentido.',
+  'Se a pergunta puder ser graduação ou pós-graduação e o CONTEXT não deixar claro, peça uma confirmação curta: "Você quer informações sobre graduação ou pós-graduação?"',
+  'Não mencione Supabase, RAG, embedding ou tabelas para o lead.',
+].join('\n')
+
+/**
+ * @param {Record<string,string>} env
+ * @param {import('./executionContext.js').ExecutionContext|null} ctx
+ * @param {string} question
+ * @param {{ toolName?: string, levelHint?: 'pos'|'grad'|null, intentHint?: 'preco'|'info'|'mista'|null }} [opts]
+ * @returns {Promise<string>}
+ */
+export async function searchKnowledgeBase(env, ctx, question, opts = {}) {
+  const toolName = opts.toolName || 'buscar_conhecimento'
+  const q0 = String(question || '').trim()
+  const legacyInQuestion = legacyBrandHitInText(q0)
+
+  const classified = classifyKnowledgeQuery(q0)
+  const plan = planKnowledgeRpcs(classified, {
+    levelHint: opts.levelHint ?? null,
+    intentHint: opts.intentHint ?? null,
+  })
+
+  console.log(`[knowledgeSearch] pergunta="${q0.slice(0, 200)}${q0.length > 200 ? '…' : ''}"`)
+  console.log(`[knowledgeSearch] instituição_ativa=${INSTITUTION}`)
+  console.log(`[knowledgeSearch] tipo_detectado=${classified.level} intenção=${classified.intent}`)
+  if (opts.levelHint || opts.intentHint) {
+    console.log(`[knowledgeSearch] hints level=${opts.levelHint ?? '—'} intent=${opts.intentHint ?? '—'}`)
+  }
+  console.log(`[knowledgeSearch] RPCs planejadas: ${plan.map((p) => p.rpc).join(', ')}`)
+  if (legacyInQuestion) {
+    console.warn('[knowledgeSearch] aviso: a pergunta do usuário contém possível referência a marca/instituição antiga (Cruzeiro/Anhanguera/SOEAD).')
+  }
+
+  const url = env.SUPABASE_URL || env.VITE_SUPABASE_URL
+  const key = env.SUPABASE_KEY || env.VITE_SUPABASE_KEY
+  if (!url || !key) {
+    return 'Supabase não configurado no servidor — não é possível consultar a base da Faculdade Sumaré.'
+  }
+
+  const rw = await rewriteSearchQuery(env, { rawQuery: q0, toolName })
+  if (ctx && rw.usage) {
+    ctx.recordQueryRewriteUsage({ model: rw.model, tool: toolName, usage: rw.usage })
+  }
+  const finalQuery = rw.applied ? rw.query : q0
+  if (ctx) {
+    ctx.recordToolTrace(toolName, {
+      applied: rw.applied,
+      query: finalQuery,
+      originalQuery: rw.originalQuery || q0,
+      model: rw.model,
+      reason: rw.reason || null,
+      usage: rw.usage || null,
+      elapsedMs: rw.elapsedMs || 0,
+    })
+  }
+  if (rw.applied) {
+    console.log(`[knowledgeSearch] queryRewrite: "${q0}" → "${finalQuery}"`)
+  } else if (rw.reason) {
+    console.log(`[knowledgeSearch] queryRewrite skip: ${rw.reason}`)
+  }
+
+  const embedding = await fetchEmbedding(env, finalQuery, ctx, toolName)
+
+  /** @type {Array<{ source: string, id: number, content: string, metadata: object, similarity: number }>} */
+  const merged = []
+
+  for (const { rpc, source } of plan) {
+    try {
+      const chunk = await callMatchRpc(env, rpc, embedding)
+      console.log(`[knowledgeSearch] RPC ${rpc} → ${chunk.length} linhas`)
+      for (const raw of chunk) {
+        merged.push(normalizeRow(source, raw))
+      }
+    } catch (e) {
+      console.error(`[knowledgeSearch] RPC ${rpc} falhou:`, e.message)
+      throw e
+    }
+  }
+
+  merged.sort((a, b) => b.similarity - a.similarity)
+  const bestSim = merged.length ? merged[0].similarity : null
+  const top = merged.slice(0, 18)
+
+  console.log(
+    `[knowledgeSearch] consolidado: ${merged.length} linhas; melhor_similarity=${bestSim != null ? bestSim.toFixed(4) : 'n/a'}`,
+  )
+
+  if (top.length === 0) {
+    const amb = classified.level === 'ambiguous'
+    const tail = amb
+      ? '\n\nO sistema não encontrou trechos na base. Se a dúvida puder ser sobre graduação ou pós-graduação, pergunte qual dos dois o lead prefere antes de insistir em outra busca.'
+      : ''
+    return [
+      `Nenhum trecho relevante foi encontrado na base de conhecimento da ${INSTITUTION} para esta consulta.`,
+      SUMARÉ_REPLY_RULES,
+      tail,
+    ].join('\n')
+  }
+
+  const block = buildContextBlock(top)
+  return [block, SUMARÉ_REPLY_RULES].join('\n')
+}
+
+/**
+ * Loga se o texto agregado de prompts (ex.: APAGAR.txt) ainda cita marcas antigas.
+ * @param {string} combinedPromptText
+ */
+export function logLegacyBrandScanInPrompts(combinedPromptText) {
+  const t = String(combinedPromptText || '')
+  if (!t.trim()) return
+  if (legacyBrandHitInText(t)) {
+    console.warn(
+      '[prompts/legacy-brand] O texto agregado de APAGAR.txt (prompts n8n) ainda contém menções a Cruzeiro/Anhanguera/SOEAD. ' +
+        'O override do agente prioriza Faculdade Sumaré e CONTEXT do RAG — revise o arquivo quando possível.',
+    )
+  }
+}

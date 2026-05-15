@@ -1,4 +1,5 @@
 import { rewriteSearchQuery } from './queryRewrite'
+import { runKnowledgeSearchPlayground } from './knowledgeSearchClient.js'
 
 const BASE_URL = '/api/supabase'
 const EMBEDDING_MODEL = 'text-embedding-3-small'
@@ -98,16 +99,28 @@ async function vectorSearch(rpcName, query, apiKey, matchCount = 10, opts = {}) 
   return data.map((d) => d.content).join('\n\n---\n\n')
 }
 
+export async function buscarConhecimento(query, apiKey, traceCollector) {
+  return runKnowledgeSearchPlayground(query, apiKey, traceCollector, { toolName: 'buscar_conhecimento' })
+}
+
 export async function buscarPrecos(query, apiKey, traceCollector) {
-  return vectorSearch('match_documents_precos', query, apiKey, 8, { traceCollector, toolName: 'buscar_precos' })
+  return runKnowledgeSearchPlayground(query, apiKey, traceCollector, { toolName: 'buscar_precos', intentHint: 'preco' })
 }
 
 export async function buscarInformacoes(query, apiKey, traceCollector) {
-  return vectorSearch('match_documents', query, apiKey, 15, { traceCollector, toolName: 'buscar_informacoes' })
+  return runKnowledgeSearchPlayground(query, apiKey, traceCollector, {
+    toolName: 'buscar_informacoes',
+    levelHint: 'grad',
+    intentHint: 'info',
+  })
 }
 
 export async function buscarPos(query, apiKey, traceCollector) {
-  return vectorSearch('match_documents_pos', query, apiKey, 8, { traceCollector, toolName: 'buscar_pos' })
+  return runKnowledgeSearchPlayground(query, apiKey, traceCollector, {
+    toolName: 'buscar_pos',
+    levelHint: 'pos',
+    intentHint: 'info',
+  })
 }
 
 export async function buscarPerguntas(query, apiKey, traceCollector) {
@@ -275,8 +288,24 @@ export const TOOL_DEFINITIONS = [
   {
     type: 'function',
     function: {
+      name: 'buscar_conhecimento',
+      description:
+        'Busca unificada na base vetorial da Faculdade Sumaré (graduação e pós: informações e preços). Use como primeira opção para dúvidas sobre curso, mensalidade, MBA, modalidade, etc.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Pergunta ou termos de busca.' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'buscar_precos',
-      description: 'Busca preços e valores de cursos na base vetorial do Supabase. Use quando precisar de informações sobre mensalidades, valores e preços de cursos.',
+      description:
+        'Busca preços na base vetorial da Faculdade Sumaré (grad_preco / pos_preco). Use quando o foco for mensalidade/valor.',
       parameters: {
         type: 'object',
         properties: {
@@ -293,7 +322,8 @@ export const TOOL_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'buscar_informacoes',
-      description: 'Busca informações de cursos de GRADUAÇÃO na base vetorial (grade curricular, duração, modalidades, áreas de atuação). NÃO use para pós-graduação.',
+      description:
+        'Busca informações de GRADUAÇÃO na base vetorial da Faculdade Sumaré (grad_info). Prefira buscar_conhecimento se o nível não estiver claro.',
       parameters: {
         type: 'object',
         properties: {
@@ -310,7 +340,8 @@ export const TOOL_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'buscar_pos',
-      description: 'Busca informações de cursos de PÓS-GRADUAÇÃO, MBA e especializações na base vetorial. Use SOMENTE quando o usuário mencionar pós, MBA ou especialização.',
+      description:
+        'Busca informações de PÓS-GRADUAÇÃO na base vetorial da Faculdade Sumaré (pos_info). Prefira buscar_conhecimento se o nível não estiver claro.',
       parameters: {
         type: 'object',
         properties: {
@@ -345,7 +376,7 @@ export const TOOL_DEFINITIONS = [
     function: {
       name: 'localizacao',
       description:
-        'Encontra o polo da Cruzeiro do Sul mais próximo do endereço informado pelo lead. ' +
+        'Encontra o polo da Faculdade Sumaré mais próximo do endereço informado pelo lead. ' +
         'Use quando houver CEP, cidade, bairro, rua com número ou descrição de local. ' +
         'Chame com o texto completo de localização que o usuário passou (ex.: "São Paulo, Av. Paulista, 1000" ou "01310-100").',
       parameters: {
@@ -451,6 +482,7 @@ export const TOOL_DEFINITIONS = [
 ]
 
 export const TOOL_EXECUTORS = {
+  buscar_conhecimento: (args, apiKey, traceCollector) => buscarConhecimento(args.query, apiKey, traceCollector),
   buscar_precos: (args, apiKey, traceCollector) => buscarPrecos(args.query, apiKey, traceCollector),
   buscar_informacoes: (args, apiKey, traceCollector) => buscarInformacoes(args.query, apiKey, traceCollector),
   buscar_pos: (args, apiKey, traceCollector) => buscarPos(args.query, apiKey, traceCollector),
