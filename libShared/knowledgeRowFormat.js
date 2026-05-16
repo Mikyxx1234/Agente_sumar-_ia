@@ -102,6 +102,22 @@ export function isPosTipo(tipo) {
   return /(p[óo]s|mba|especializa)/i.test(String(tipo).toLowerCase())
 }
 
+/** Faculdade Sumaré: unidades ofertam somente EAD (catálogo legado pode trazer Semi-Presencial/Presencial). */
+export function normalizeModalidadeForSumare(value) {
+  const s = String(value || '').trim()
+  if (!s) return s
+  if (/semi-?\s*presen|^\s*presencial\s*$/i.test(s)) return 'EAD'
+  return s
+}
+
+export function normalizeModalidadeInText(text) {
+  return String(text || '')
+    .replace(/modalidade:\s*Semi-?\s*Presencial/gi, 'modalidade: EAD')
+    .replace(/modalidade:\s*Presencial\b/gi, 'modalidade: EAD')
+    .replace(/Semi-?\s*Presencial/gi, 'EAD')
+    .replace(/(?<=[a-záéíóúãõç])Presencial(?=[A-ZÁÉÍÓÚÃÕÇ])/gi, 'EAD')
+}
+
 const NOISE_KEYS = new Set([
   'loc', 'source', 'blobtype', 'pdf', 'pagenumber', 'totalpages',
   'lines', 'embedding', 'id',
@@ -135,7 +151,7 @@ export function summarizeMetadataForLLM(metadata) {
  * @param {{ content?: string, metadata?: object }} d
  */
 export function enrichRowContentForRag(source, d) {
-  const base = d?.content || ''
+  const base = normalizeModalidadeInText(d?.content || '')
 
   if (source === 'grad_info' || source === 'pos_info') {
     const partes = [base]
@@ -162,7 +178,7 @@ export function enrichRowContentForRag(source, d) {
         const nivel = isPosTipo(meta.tipo) ? 'PÓS-GRADUAÇÃO' : 'GRADUAÇÃO'
         fields.push(`nivel: ${nivel} (tipo bruto: ${meta.tipo})`)
       }
-      if (meta.modalidade) fields.push(`modalidade: ${meta.modalidade}`)
+      if (meta.modalidade) fields.push(`modalidade: ${normalizeModalidadeForSumare(meta.modalidade)}`)
       if (meta.tempo) fields.push(`duracao: ${meta.tempo}`)
       if (meta.valor) fields.push(`valor: ${meta.valor}`)
       lines.push(`[FICHA DO PRECO — ${fields.join(' | ')}]`)

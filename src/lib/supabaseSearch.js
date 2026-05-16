@@ -127,56 +127,6 @@ export async function buscarPerguntas(query, apiKey, traceCollector) {
   return vectorSearch('match_documents_perguntas', query, apiKey, 6, { traceCollector, toolName: 'buscar_perguntas' })
 }
 
-/** Tool localização — chama API do servidor (Google Geocoding + Supabase polo_loc + Distance Matrix). */
-export async function executarLocalizacao(args) {
-  const res = await fetch('/api/location/nearest-polo', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      localizacao: args.localizacao,
-      telefone: args.telefone,
-    }),
-  })
-  let data
-  try {
-    data = await res.json()
-  } catch {
-    throw new Error('Resposta inválida da API de localização')
-  }
-  if (!data.ok) {
-    return `Não foi possível encontrar o polo mais próximo: ${data.error || `HTTP ${res.status}`}`
-  }
-  // Localização vaga: não mostrar tempo nem distância — apenas o
-  // polo provável + instrução pra o LLM pedir endereço/CEP.
-  if (data.imprecise) {
-    const polo = data.polo_provavel || 'Polo'
-    const endereco = data.rua_do_polo ? `\nEndereço do polo: ${data.rua_do_polo}` : ''
-    return [
-      'ATENÇÃO — LOCALIZAÇÃO IMPRECISA:',
-      `A localização informada${data.origem_imprecisa ? ` ("${data.origem_imprecisa}")` : ''} é uma área genérica, não um endereço exato. NÃO É POSSÍVEL calcular tempo nem distância confiáveis.`,
-      '',
-      `Polo provável dessa região: ${polo}${endereco}`,
-      '',
-      'INSTRUÇÃO PARA O ATENDIMENTO:',
-      '1. PEÇA ao cliente o endereço completo (rua e número) ou o CEP antes de informar tempo/rota.',
-      '2. Caso o cliente prefira NÃO informar, pode mencionar APENAS o nome do polo provável acima — NUNCA cite tempo ou distância para uma localização imprecisa.',
-      '3. Não invente tempo, distância ou link de rota.',
-    ].join('\n')
-  }
-  const lines = [
-    `Polo mais próximo: ${data.polo_mais_proximo}`,
-    `Endereço do polo: ${data.rua_do_polo}`,
-    `Tempo estimado (${data.modo_transporte}): ${data.tempo_estimado}`,
-    data.distancia ? `Distância aproximada: ${data.distancia}` : null,
-    `Link da rota no Google Maps: ${data.link_rota_google}`,
-    data.origem_endereco ? `Endereço reconhecido do lead: ${data.origem_endereco}` : null,
-    '',
-    'INSTRUÇÃO PARA A RESPOSTA AO CLIENTE:',
-    `Inclua SEMPRE o link da rota acima (${data.link_rota_google}) na sua resposta — é assim que o cliente abre o trajeto no app de mapas. Nunca omita o link quando ele estiver disponível.`,
-  ].filter(Boolean)
-  return lines.join('\n')
-}
-
 /** Tool inscrição — Kommo + Supabase + resumo (servidor). telefone/id_lead opcionais até integração CRM. */
 export async function executarInscricao(args) {
   const body = {
@@ -364,7 +314,7 @@ export const TOOL_DEFINITIONS = [
         properties: {
           query: {
             type: 'string',
-            description: 'A pergunta do usuário (ex: "como funciona o semipresencial", "documentos para matrícula")',
+            description: 'A pergunta do usuário (ex: "como funciona o EAD", "documentos para matrícula")',
           },
         },
         required: ['query'],
@@ -374,33 +324,9 @@ export const TOOL_DEFINITIONS = [
   {
     type: 'function',
     function: {
-      name: 'localizacao',
-      description:
-        'Encontra o polo da Faculdade Sumaré mais próximo do endereço informado pelo lead. ' +
-        'Use quando houver CEP, cidade, bairro, rua com número ou descrição de local. ' +
-        'Chame com o texto completo de localização que o usuário passou (ex.: "São Paulo, Av. Paulista, 1000" ou "01310-100").',
-      parameters: {
-        type: 'object',
-        properties: {
-          localizacao: {
-            type: 'string',
-            description: 'Cidade, rua e número ou CEP (texto livre para geocodificação)',
-          },
-          telefone: {
-            type: 'string',
-            description: 'Telefone do lead (opcional; reservado para rastreio)',
-          },
-        },
-        required: ['localizacao'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
       name: 'inscricao',
       description:
-        'Dispara o fluxo de inscrição: move o lead para "Aguardando Inscrição" no Kommo e preenche curso, tipo de ingresso, nível, nome e polo. ' +
+        'Dispara o fluxo de inscrição: move o lead para "Aguardando Inscrição" no Kommo e preenche curso, tipo de ingresso, nível e nome (modalidade EAD). ' +
         'Use quando o lead confirmar que quer se inscrever em um curso específico (depois de já ter o nome completo do curso — NUNCA chame com curso vago como "as", "ola" ou abreviações). ' +
         'O telefone do lead está no Contexto do atendimento — sempre passe ele. ' +
         'O id_lead é OPCIONAL: se não souber, OMITA o campo (a tool resolve pelo telefone). Nunca envie 0.',
@@ -487,7 +413,6 @@ export const TOOL_EXECUTORS = {
   buscar_informacoes: (args, apiKey, traceCollector) => buscarInformacoes(args.query, apiKey, traceCollector),
   buscar_pos: (args, apiKey, traceCollector) => buscarPos(args.query, apiKey, traceCollector),
   buscar_perguntas: (args, apiKey, traceCollector) => buscarPerguntas(args.query, apiKey, traceCollector),
-  localizacao: (args) => executarLocalizacao(args),
   inscricao: (args) => executarInscricao(args),
   distribuir_humano: (args) => executarDistribuirHumano(args),
   buscar_historico_conversa: (args) => executarBuscarHistorico(args),

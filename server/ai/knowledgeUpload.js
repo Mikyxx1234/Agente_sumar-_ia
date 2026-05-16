@@ -17,6 +17,7 @@
  */
 
 import { resolveModel } from './modelRegistry.js'
+import { normalizeModalidadeForSumare, normalizeModalidadeInText } from '../../libShared/knowledgeRowFormat.js'
 
 export const ALLOWED_TABLES = new Set(['grad_info', 'grad_preco', 'pos_info', 'pos_preco'])
 
@@ -109,10 +110,11 @@ function joinRowAsContent(headers, row) {
   const pairs = []
   for (let i = 0; i < row.length; i++) {
     const k = (headers[i] || `col${i + 1}`).trim()
-    const v = (row[i] || '').toString().trim()
+    let v = normalizeModalidadeInText((row[i] || '').toString().trim())
+    if (/modalidade/i.test(k)) v = normalizeModalidadeForSumare(v)
     if (k && v) pairs.push(`${k}: ${v}`)
   }
-  return pairs.join(' | ')
+  return normalizeModalidadeInText(pairs.join(' | '))
 }
 
 // Divide texto longo em chunks com overlap. Quebra preferencialmente em

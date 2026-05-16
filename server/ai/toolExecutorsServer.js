@@ -8,7 +8,6 @@
  * — assim o dashboard mostra o custo total honesto da execução.
  */
 
-import { runNearestPolo } from '../locationTool.js'
 import { runInscricao } from '../inscricaoTool.js'
 import { runDistribuirHumano } from '../distribuirHumanoTool.js'
 import { runBuscarHistorico } from '../memoryTool.js'
@@ -177,41 +176,6 @@ function formatDistribuirResult(data) {
   return lines.join('\n')
 }
 
-function formatLocationResult(data) {
-  if (!data.ok) return `Não foi possível encontrar o polo: ${data.error || 'erro'}`
-  // Localização vaga (ex.: "Zona Leste", "centro", só cidade): não devolve
-  // tempo/distância — eles seriam calculados de um ponto arbitrário e
-  // podem enganar o cliente. Em vez disso, mandamos uma INSTRUÇÃO
-  // explícita pra o orquestrador pedir endereço/CEP antes de prometer
-  // qualquer coisa.
-  if (data.imprecise) {
-    const polo = data.polo_provavel || 'Polo'
-    const endereco = data.rua_do_polo ? `\nEndereço do polo: ${data.rua_do_polo}` : ''
-    return [
-      'ATENÇÃO — LOCALIZAÇÃO IMPRECISA:',
-      `A localização informada${data.origem_imprecisa ? ` ("${data.origem_imprecisa}")` : ''} é uma área genérica, não um endereço exato. NÃO É POSSÍVEL calcular tempo nem distância confiáveis.`,
-      '',
-      `Polo provável dessa região: ${polo}${endereco}`,
-      '',
-      'INSTRUÇÃO PARA O ATENDIMENTO:',
-      '1. PEÇA ao cliente o endereço completo (rua e número) ou o CEP antes de informar tempo/rota.',
-      '2. Caso o cliente prefira NÃO informar, pode mencionar APENAS o nome do polo provável acima — NUNCA cite tempo ou distância para uma localização imprecisa.',
-      '3. Não invente tempo, distância ou link de rota.',
-    ].join('\n')
-  }
-  return [
-    `Polo mais próximo: ${data.polo_mais_proximo}`,
-    `Endereço do polo: ${data.rua_do_polo}`,
-    `Tempo estimado (${data.modo_transporte}): ${data.tempo_estimado}`,
-    data.distancia ? `Distância: ${data.distancia}` : null,
-    `Link da rota no Google Maps: ${data.link_rota_google}`,
-    data.origem_endereco ? `Endereço reconhecido: ${data.origem_endereco}` : null,
-    '',
-    'INSTRUÇÃO PARA A RESPOSTA AO CLIENTE:',
-    `Inclua SEMPRE o link da rota acima (${data.link_rota_google}) na sua resposta — é assim que o cliente abre o trajeto no app de mapas. Nunca omita o link quando ele estiver disponível.`,
-  ].filter(Boolean).join('\n')
-}
-
 /**
  * Empurra os usages do `_meta` retornado por uma tool dentro do `ctx`.
  * Hoje só `inscricao` e `distribuir_humano` retornam `_meta`.
@@ -262,7 +226,6 @@ export function buildToolExecutors(env, ctx) {
       }
       return out
     },
-    localizacao: async (args) => formatLocationResult(await runNearestPolo(env, args)),
     inscricao: async (args) => {
       const r = await runInscricao(env, args)
       absorbToolMeta(safeCtx, r)

@@ -85,25 +85,9 @@ export const TOOL_DEFINITIONS = [
   {
     type: 'function',
     function: {
-      name: 'localizacao',
-      description:
-        'Encontra o polo mais próximo do endereço do lead. Use quando houver CEP, cidade, bairro, rua/número.',
-      parameters: {
-        type: 'object',
-        properties: {
-          localizacao: { type: 'string', description: 'Cidade, rua e número ou CEP.' },
-          telefone: { type: 'string', description: 'Telefone do lead (opcional).' },
-        },
-        required: ['localizacao'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
       name: 'inscricao',
       description:
-        'Dispara o fluxo de inscrição: move o lead para "Aguardando Inscrição" no Kommo e preenche os campos de curso, tipo de ingresso, nível, nome e polo. Use quando o lead confirmar que quer se inscrever em um curso específico, depois de já ter o nome completo do curso (NUNCA chame com curso vago como "as", "ola" ou abreviações). O `telefone` do lead já está no Contexto do atendimento — sempre passe ele. O `id_lead` é OPCIONAL: se não souber, OMITA o campo (a tool resolve pelo telefone). Não envie 0.',
+        'Dispara o fluxo de inscrição: move o lead para "Aguardando Inscrição" no Kommo e preenche os campos de curso, tipo de ingresso, nível e nome (modalidade EAD). Use quando o lead confirmar que quer se inscrever em um curso específico, depois de já ter o nome completo do curso (NUNCA chame com curso vago como "as", "ola" ou abreviações). O `telefone` do lead já está no Contexto do atendimento — sempre passe ele. O `id_lead` é OPCIONAL: se não souber, OMITA o campo (a tool resolve pelo telefone). Não envie 0.',
       parameters: {
         type: 'object',
         properties: {

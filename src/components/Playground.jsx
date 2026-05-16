@@ -153,9 +153,9 @@ export default function Playground({ prompts }) {
 Você está em um ambiente de teste (Playground). As regras abaixo substituem qualquer instrução conflitante dos prompts acima:
 
 1. RESPONDA SEMPRE EM LINGUAGEM NATURAL, nunca em XML, JSON ou templates estruturados.
-2. Você tem 9 tools reais: buscar_conhecimento, buscar_precos, buscar_informacoes, buscar_pos, buscar_perguntas, localizacao, inscricao, distribuir_humano e buscar_historico_conversa. USE-AS quando couber. Para curso/preço/MBA/modalidade, prefira buscar_conhecimento (base Faculdade Sumaré).
-3. MEMÓRIA: se o telefone do lead estiver disponível no contexto e você ainda não conhecer a conversa prévia, chame buscar_historico_conversa UMA vez no início do turno (limit 8–20) para entender o que já foi conversado antes de responder. Nunca mencione essa consulta ao usuário.
-4. Para localização, execute localizacao com o texto completo que o usuário informou (cidade, rua e número ou CEP) e apresente polo, endereço, tempo estimado e o link da rota.
+2. Você tem 8 tools reais: buscar_conhecimento, buscar_precos, buscar_informacoes, buscar_pos, buscar_perguntas, inscricao, distribuir_humano e buscar_historico_conversa. USE-AS quando couber. Para curso/preço/MBA/modalidade, prefira buscar_conhecimento (base Faculdade Sumaré).
+3. MODALIDADE: a Faculdade Sumaré oferta somente EAD (a distância). Não há polo presencial nem semi-presencial — não prometa visita a unidade nem calcule distância até polo.
+4. MEMÓRIA: se o telefone do lead estiver disponível no contexto e você ainda não conhecer a conversa prévia, chame buscar_historico_conversa UMA vez no início do turno (limit 8–20) para entender o que já foi conversado antes de responder. Nunca mencione essa consulta ao usuário.
 5. Para inscrição, use inscricao com curso e tipo_ingresso. Se a resposta indicar integração pendente (telefone/id_lead), explique ao usuário de forma natural que o cadastro será concluído pelo canal oficial ou pela equipe, sem citar APIs.
 6. Quando buscar preços ou informações, apresente os resultados encontrados ao usuário de forma clara e objetiva.
 7. Se a busca retornar cursos com nomes parecidos (ex: usuário pediu "Economia" e a base tem "Ciências Econômicas"), apresente os cursos encontrados e pergunte se é o que o usuário procura, em vez de dizer que não encontrou.
@@ -199,7 +199,6 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
         buscar_informacoes: 'Buscando informações do curso no Supabase',
         buscar_pos: 'Buscando pós-graduação no Supabase',
         buscar_perguntas: 'Buscando na base de perguntas',
-        localizacao: 'Buscando polo mais próximo (Google Maps + base de polos)',
         inscricao: 'Executando fluxo de inscrição (Kommo + Supabase)',
         distribuir_humano: 'Distribuindo para consultor humano (Kommo + fila)',
         buscar_historico_conversa: 'Recuperando histórico da conversa (n8n_chat_histories)',
