@@ -159,7 +159,7 @@ export default function App() {
           <div className="ai-off-banner" role="alert">
             <PowerOff size={14} />
             <span>
-              <strong>IA DESLIGADA</strong> — mensagens recebidas ficam no buffer e não serão respondidas até religar.
+              <strong>IA DESLIGADA</strong> — mensagens recebidas estão sendo DESCARTADAS. Ao religar, a IA responde apenas mensagens novas.
               {aiState.reason ? ` Motivo: ${aiState.reason}.` : ''}
               {aiState.updated_by ? ` Desligada por ${aiState.updated_by}.` : ''}
             </span>

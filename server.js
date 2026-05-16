@@ -52,6 +52,7 @@ import {
   ALLOWED_TABLES as KNOWLEDGE_TABLES,
 } from './server/ai/knowledgeUpload.js'
 import { getState as getAiControlState, setState as setAiControlState, initAiControlState } from './server/aiControlState.js'
+import { listSessionsWithPendingMessages, clearMessages as clearBufferSession } from './server/evolution/messageBuffer.js'
 import multer from 'multer'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -986,13 +987,47 @@ app.get('/api/ai/control/state', async (_req, res) => {
   }
 })
 
+/**
+ * Limpa o buffer de TODAS as sessões com mensagens pendentes.
+ * Chamado em duas situações:
+ *   - Ao DESLIGAR a IA: descarta o que estava no buffer no momento do
+ *     desligamento (mensagens em-trânsito que ainda não foram processadas).
+ *   - Ao RELIGAR a IA: defensivo contra race — se algo entrou bem na
+ *     borda da troca de estado, garante que IA responde só novas msgs.
+ */
+async function flushAllBuffersOnAiSwitch(env, label) {
+  try {
+    const sessions = await listSessionsWithPendingMessages(env, 500)
+    let total = 0
+    for (const sid of sessions) {
+      try {
+        const n = await clearBufferSession(env, sid)
+        total += Number(n) || 0
+      } catch (e) {
+        console.warn(`[aiControl] clear session=${sid} falhou: ${e.message}`)
+      }
+    }
+    if (sessions.length > 0) {
+      console.log(`[aiControl] ${label}: buffer limpo em ${sessions.length} sessão(ões) (${total} mensagem(ns) descartada(s))`)
+    }
+  } catch (e) {
+    console.warn(`[aiControl] flushAllBuffersOnAiSwitch falhou: ${e.message}`)
+  }
+}
+
 app.post('/api/ai/control/state', async (req, res) => {
   try {
     const enabled = req.body?.enabled !== false
     const reason = (req.body?.reason || '').toString().trim().slice(0, 300) || null
     const by = (req.body?.by || '').toString().trim().slice(0, 80) || 'dashboard'
+    const previous = await getAiControlState(process.env, { force: true })
     const s = await setAiControlState(process.env, { enabled, reason, by })
     console.log(`[aiControl] estado alterado → enabled=${s.enabled} by=${by}${reason ? ` reason="${reason}"` : ''}`)
+    // Em QUALQUER troca de estado limpa buffers — política do operador
+    // é não querer reprocessar mensagens antigas, só responder novas.
+    if (previous.enabled !== s.enabled) {
+      flushAllBuffersOnAiSwitch(process.env, s.enabled ? 'religar' : 'desligar').catch(() => {})
+    }
     res.json({ ok: true, ...s })
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })
@@ -1007,6 +1042,7 @@ app.post('/api/ai/control/toggle', async (req, res) => {
     const by = (req.body?.by || '').toString().trim().slice(0, 80) || 'dashboard'
     const s = await setAiControlState(process.env, { enabled: next, reason, by })
     console.log(`[aiControl] toggle → enabled=${s.enabled} by=${by}${reason ? ` reason="${reason}"` : ''}`)
+    flushAllBuffersOnAiSwitch(process.env, s.enabled ? 'religar' : 'desligar').catch(() => {})
     res.json({ ok: true, ...s })
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })

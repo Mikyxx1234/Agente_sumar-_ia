@@ -50,7 +50,12 @@ export default function AIKillSwitch({ onStateChange }) {
       )
       if (r === null) return // cancelou
       reason = r.trim() || null
-      if (!window.confirm('Tem certeza que quer DESLIGAR a IA?\n\nMensagens novas vão continuar entrando no buffer mas a IA NÃO responderá até você religar.')) {
+      if (!window.confirm(
+        'Tem certeza que quer DESLIGAR a IA?\n\n' +
+        '• Mensagens que chegarem enquanto desligada serão DESCARTADAS (não entram no buffer).\n' +
+        '• Ao religar, a IA responde APENAS as mensagens novas a partir daquele momento.\n' +
+        '• Mensagens já em buffer no momento do desligamento também são descartadas.',
+      )) {
         return
       }
     }

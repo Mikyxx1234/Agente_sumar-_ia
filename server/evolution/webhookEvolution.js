@@ -418,17 +418,18 @@ async function flushSessionInner(env, sessionId, opts = {}) {
     return null
   }
 
-  // ── Kill switch: IA desligada? Early return SEM esvaziar o buffer.
-  // Quando religar, próximo tick do scheduler processa o backlog.
+  // ── Kill switch: IA desligada? DESCARTA o que estiver no buffer e
+  // sai. Política: ao religar, IA responde só mensagens novas (sem
+  // backlog). Race-condition rara: se algo passou pelo pushMessage antes
+  // do estado mudar, esse clear aqui limpa.
   const aiState = getAiControlStateSync()
   if (aiState.enabled === false) {
-    // Loga uma vez por sessão por janela curta pra não floodar (o scheduler
-    // tenta de novo a cada 10s).
+    await clearMessages(env, sessionId)
     console.log(
       `[Evolution][flush] ${sessionId} BLOQUEADO — IA desligada${aiState.reason ? ` (${aiState.reason})` : ''}. ` +
-        `${itens.length} msg(s) seguem no buffer; serão processadas quando a IA for religada.`,
+        `${itens.length} msg(s) descartada(s) do buffer.`,
     )
-    return { skipped: 'ai_disabled', reason: aiState.reason || null, pending: itens.length }
+    return { skipped: 'ai_disabled', reason: aiState.reason || null, discarded: itens.length }
   }
 
   await clearMessages(env, sessionId)

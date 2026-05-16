@@ -33,6 +33,7 @@ import {
   shouldSkipDuplicateIngest,
   recordIngestDedupe,
 } from '../ingestDedupe.js'
+import { getStateSync as getAiControlStateSync } from '../aiControlState.js'
 
 const DEFAULT_KEY_PREFIX = 'wa:msg:'
 const DEFAULT_LAST_TS_PREFIX = 'wa:msgts:'
@@ -410,6 +411,16 @@ async function getBackend(env) {
  */
 export async function pushMessage(env, sessionId, text, opts = {}) {
   if (!sessionId || !text) return
+  // Kill switch: IA desligada → DESCARTA na entrada. Mensagem nem
+  // chega no buffer, então ao religar não há backlog pra processar
+  // (comportamento "responde só novas após religar"). O playground/teste
+  // pode usar opts.bypassAiSwitch=true pra ignorar essa trava.
+  if (!opts.bypassAiSwitch) {
+    const aiState = getAiControlStateSync()
+    if (aiState.enabled === false) {
+      return { skipped: 'ai_disabled' }
+    }
+  }
   const skipDedupe = opts.skipDedupe === true
   if (!skipDedupe && ingestDedupeEnabled(env)) {
     const ttlMs = ingestDedupeTtlMs(env)
