@@ -5,6 +5,7 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY index.html vite.config.js ./
 COPY queryClassifier.mjs ./
+COPY libShared/ ./libShared/
 COPY src/ ./src/
 COPY public/ ./public/
 COPY server/ ./server/
@@ -25,6 +26,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY server.js ./
 COPY queryClassifier.mjs ./
+COPY libShared/ ./libShared/
 COPY server/ ./server/
 COPY --from=build /app/dist ./dist
 COPY APAGAR.txt ./dist/APAGAR.txt

@@ -1,0 +1,35 @@
+# Não copiar pro contexto do Docker — reduz upload e evita vazamento de
+# secrets pro build context (envs SENSIVEIS ficam só como --build-arg ou
+# variáveis de runtime, NUNCA no contexto).
+
+# Git / IDE
+.git
+.gitignore
+.gitattributes
+.vscode
+.cursor
+*.md
+
+# Dependências (vão ser instaladas dentro do container via npm ci)
+node_modules
+
+# Build artifacts (recriados no stage de build)
+dist
+build
+
+# Logs
+*.log
+npm-debug.log*
+
+# Envs locais
+.env
+.env.*
+!.env.example
+
+# Diagnósticos / utilitários só pra dev
+scripts
+terminals
+
+# OS
+Thumbs.db
+.DS_Store
