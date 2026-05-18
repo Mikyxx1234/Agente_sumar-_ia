@@ -6,7 +6,8 @@
  */
 
 import { loadPrompts, buildSystemMessage } from './promptsLoader.js'
-import { TOOL_DEFINITIONS } from './toolDefinitions.js'
+import { classifyMessageScope } from './scopeClassifier.js'
+import { getToolDefinitions } from './toolDefinitions.js'
 import { buildToolExecutors } from './toolExecutorsServer.js'
 import { runBuscarHistorico } from '../memoryTool.js'
 import { readChatMessages } from '../historyStore.js'
@@ -85,7 +86,7 @@ function isAmbiguousShortReply(text) {
   return AMBIGUOUS_SHORT_REPLIES.has(t)
 }
 
-async function callOpenAI(env, apiMessages, model) {
+async function callOpenAI(env, apiMessages, model, tools) {
   const apiKey = env.OPENAI_API_KEY || env.VITE_OPENAI_API_KEY
   if (!apiKey) throw new Error('OPENAI_API_KEY não configurada')
   const res = await fetch(CHAT_URL, {
@@ -94,7 +95,7 @@ async function callOpenAI(env, apiMessages, model) {
     body: JSON.stringify({
       model,
       messages: apiMessages,
-      tools: TOOL_DEFINITIONS,
+      tools,
       temperature: 0.7,
       max_tokens: 2048,
     }),
@@ -191,7 +192,62 @@ export async function runAgent(env, input) {
     preview: historyPreview,
   })
 
-  const systemMessage = buildSystemMessage(prompts)
+  const skipScopeCheck = historyMessages.length === 0 && isAmbiguousShortReply(userMessage)
+  if (!skipScopeCheck) {
+    const scope = await classifyMessageScope(env, { userMessage, historyMessages })
+    ctx.recordScopeClassification?.({
+      blocked: scope.blocked,
+      source: scope.source,
+      reason: scope.reason,
+      classification: scope.classification,
+      model: scope.model,
+      usage: scope.usage,
+    })
+    console.log(
+      `[${executionId}] SCOPE_CLASSIFIER blocked=${scope.blocked} source=${scope.source} reason=${scope.reason}` +
+        (scope.classification?.categoria ? ` categoria=${scope.classification.categoria}` : ''),
+    )
+    if (scope.blocked && scope.reply) {
+      const scopeUsage = scope.usage
+        ? {
+            prompt_tokens: scope.usage.prompt_tokens || 0,
+            completion_tokens: scope.usage.completion_tokens || 0,
+            total_tokens: scope.usage.total_tokens || 0,
+          }
+        : { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+      return {
+        ok: true,
+        reply: scope.reply,
+        scopeBlocked: true,
+        toolCalls: [],
+        orchestratorSteps: [
+          {
+            type: 'scope_classifier',
+            blocked: true,
+            source: scope.source,
+            reason: scope.reason,
+            classification: scope.classification,
+            model: scope.model,
+            durationMs: scope.elapsedMs,
+            usage: scope.usage,
+          },
+        ],
+        ctxSnapshot: {
+          scopeClassifier: true,
+          classification: scope.classification,
+        },
+        usage: scopeUsage,
+        durationMs: Date.now() - t0,
+        historyLoaded: historyMessages.length,
+        executionId,
+        model,
+        aiMeta: ctx.toAiMeta(),
+      }
+    }
+  }
+
+  const toolDefinitions = getToolDefinitions(env)
+  const systemMessage = buildSystemMessage(prompts, env)
   // Contexto do atendimento — telefone + id_lead vão p/ o LLM sempre
   // que disponíveis. Sem id_lead aqui, o LLM tendia a chamar tools
   // (inscricao / distribuir_humano) com `id_lead: 0` (default da
@@ -244,7 +300,7 @@ export async function runAgent(env, input) {
     historyCount: historyMessages.length,
     historySource,
     noContextWarning: ambiguousNoContext,
-    toolsAvailable: TOOL_DEFINITIONS.map((t) => t.function?.name).filter(Boolean),
+    toolsAvailable: toolDefinitions.map((t) => t.function?.name).filter(Boolean),
     userMessage,
   }
 
@@ -282,7 +338,7 @@ export async function runAgent(env, input) {
     let round = 0
     while (round < MAX_TOOL_ROUNDS) {
       const roundT0 = Date.now()
-      const data = await callOpenAI(env, apiMessages, model)
+      const data = await callOpenAI(env, apiMessages, model, toolDefinitions)
       const roundDurationMs = Date.now() - roundT0
       const choice = data.choices?.[0]
       const msg = choice?.message

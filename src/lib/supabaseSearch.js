@@ -161,6 +161,7 @@ export async function executarInscricao(args) {
     if (data.warnings?.length) lines.push(`Avisos: ${data.warnings.join(' | ')}`)
     return lines.join('\n')
   }
+  if (data.code === 'MATRICULA_VIA_CONSULTOR' && data.message) return data.message
   if (data.code === 'MISSING_CRM_FIELDS' && data.message) return data.message
   if (data.code === 'MISSING_PARAMS') return data.error || 'Informe curso e tipo de ingresso (ENEM ou Vestibular Múltipla Escolha).'
   return `Inscrição não executada: ${data.error || data.message || data.code || `HTTP ${res.status}`}`
@@ -326,10 +327,7 @@ export const TOOL_DEFINITIONS = [
     function: {
       name: 'inscricao',
       description:
-        'Dispara o fluxo de inscrição: move o lead para "Aguardando Inscrição" no Kommo e preenche curso, tipo de ingresso, nível e nome (modalidade EAD). ' +
-        'Use quando o lead confirmar que quer se inscrever em um curso específico (depois de já ter o nome completo do curso — NUNCA chame com curso vago como "as", "ola" ou abreviações). ' +
-        'O telefone do lead está no Contexto do atendimento — sempre passe ele. ' +
-        'O id_lead é OPCIONAL: se não souber, OMITA o campo (a tool resolve pelo telefone). Nunca envie 0.',
+        'Inscrição automática no Kommo (só com INSCRICAO_AUTOMATICA_ENABLED=true no servidor). Fase atual: NÃO USE — colete curso + tipo de ingresso e chame distribuir_humano para o consultor finalizar a matrícula.',
       parameters: {
         type: 'object',
         properties: {
@@ -385,10 +383,8 @@ export const TOOL_DEFINITIONS = [
     function: {
       name: 'distribuir_humano',
       description:
-        'Encaminha o lead para um consultor humano. Use quando o cliente PEDIR para falar com atendente/consultor/humano, ' +
-        'ou quando a conversa indicar que ele precisa de ajuda especializada (negociação, casos complexos, fora do escopo da IA). ' +
-        '⚠️ Não use se o cliente apenas perguntou preço/curso e há dados pra responder — primeiro venda, depois encaminhe se ele insistir. ' +
-        'O sistema localiza o lead pelo telefone automaticamente — você NÃO precisa passar id_lead se não souber.',
+        'Encaminha o lead para um consultor humano. Use quando: pedir humano/atendente; após coletar curso + tipo de ingresso (ENEM ou Vestibular Múltipla Escolha) para matrícula/inscrição; negociação, caso complexo ou FAQ sem resposta. ' +
+        'O sistema localiza o lead pelo telefone — id_lead é opcional.',
       parameters: {
         type: 'object',
         properties: {

@@ -5,6 +5,7 @@ import { startScheduler, getStatus } from './server/feedbackJobRunner.js'
 import { reapStaleFeedbackRuns } from './server/feedbackJob.js'
 import { runNearestPolo } from './server/locationTool.js'
 import { runInscricao } from './server/inscricaoTool.js'
+import { isInscricaoAutomaticaEnabled, matriculaViaConsultorInstruction } from './server/inscricaoConfig.js'
 import { runDistribuirHumano } from './server/distribuirHumanoTool.js'
 import { runBuscarHistorico } from './server/memoryTool.js'
 import { marcarClienteIA, updateDadosCliente, getLeadIdByTelefone } from './server/dadosClienteStore.js'
@@ -39,6 +40,7 @@ import {
 import { pingBackend, pushMessage, getMessages, clearMessages } from './server/evolution/messageBuffer.js'
 import { getDebounceMs } from './server/evolution/debouncer.js'
 import { runAgent } from './server/ai/agentRunner.js'
+import { classifyMessageScope } from './server/ai/scopeClassifier.js'
 import { startAgentScheduler, runSchedulerTick, isSchedulerRunning } from './server/agentScheduler.js'
 import { maybeFallbackPollModeWhenDispatcherDown, normalizeKommoInboundPollMode } from './server/kommoInboundPoll.js'
 import { runSalesbotCsv, extractLeadIdFromWebhookBody, probePos } from './server/salesbot/csvSearch.js'
@@ -52,6 +54,13 @@ import {
   ALLOWED_TABLES as KNOWLEDGE_TABLES,
 } from './server/ai/knowledgeUpload.js'
 import { getState as getAiControlState, setState as setAiControlState, initAiControlState } from './server/aiControlState.js'
+import {
+  listTrainingFeedbackMap,
+  getTrainingFeedback,
+  upsertTrainingFeedback,
+  deleteTrainingFeedback,
+  listTrainingFeedback,
+} from './server/trainingFeedbackStore.js'
 import { listSessionsWithPendingMessages, clearMessages as clearBufferSession } from './server/evolution/messageBuffer.js'
 import multer from 'multer'
 
@@ -205,6 +214,14 @@ app.post('/api/location/nearest-polo', async (req, res) => {
 
 app.post('/api/inscricao/run', async (req, res) => {
   try {
+    if (!isInscricaoAutomaticaEnabled(process.env)) {
+      res.json({
+        ok: false,
+        code: 'MATRICULA_VIA_CONSULTOR',
+        message: matriculaViaConsultorInstruction(req.body || {}),
+      })
+      return
+    }
     const out = await runInscricao(process.env, req.body || {})
     if (!out.ok && (out.code === 'MISSING_CRM_FIELDS' || out.code === 'MISSING_PARAMS')) {
       res.status(400).json(out)
@@ -218,6 +235,10 @@ app.post('/api/inscricao/run', async (req, res) => {
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })
   }
+})
+
+app.get('/api/agent/matricula-config', (_req, res) => {
+  res.json({ inscricaoAutomaticaEnabled: isInscricaoAutomaticaEnabled(process.env) })
 })
 
 // ── Tool distribuir_humano (Kommo + 2× Supabase + OpenAI) ──
@@ -1799,6 +1820,22 @@ app.post('/api/agent/run', async (req, res) => {
   }
 })
 
+// Classificador de escopo (prompt "classificador" no painel Prompts).
+app.post('/api/agent/classify-scope', async (req, res) => {
+  try {
+    const { userMessage, historyMessages, history } = req.body || {}
+    const hist = Array.isArray(historyMessages)
+      ? historyMessages
+      : Array.isArray(history)
+        ? history
+        : []
+    const out = await classifyMessageScope(process.env, { userMessage, historyMessages: hist })
+    res.json({ ok: true, ...out })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
 // ── Playground: simular o fluxo da Evolution (buffer + debounce) ──
 //    push  → empurra a mensagem no buffer (mesma tabela do webhook real)
 //    flush → lê tudo, limpa o buffer e dispara o agente; retorna a reply
@@ -1925,6 +1962,88 @@ app.post('/api/playground/analyze-image', async (req, res) => {
     res.json({ ok: true, text: text || '' })
   } catch (e) {
     console.error('[playground][analyze-image]', e.message)
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// ── Treinamento: feedback das execuções (positivo / negativo + sugestão) ──
+
+app.get('/api/training/feedback', async (req, res) => {
+  try {
+    const rating = req.query.rating
+    const limit = Number(req.query.limit) || 500
+    const asMap = String(req.query.map || '1') !== '0'
+    const out = asMap
+      ? await listTrainingFeedbackMap(process.env, { limit, rating })
+      : await listTrainingFeedback(process.env, { limit, rating })
+    if (!out.ok) {
+      const http = out.code === 'SUPABASE_NOT_CONFIGURED' || out.code === 'TABLE_MISSING' ? 503 : 500
+      res.status(http).json(out)
+      return
+    }
+    if (asMap) {
+      res.json({ ok: true, map: out.map, count: Object.keys(out.map).length })
+      return
+    }
+    res.json({ ok: true, rows: out.rows, count: out.rows.length })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.get('/api/training/feedback/:executionId', async (req, res) => {
+  try {
+    const out = await getTrainingFeedback(process.env, req.params.executionId)
+    if (!out.ok) {
+      const http = out.code === 'SUPABASE_NOT_CONFIGURED' || out.code === 'TABLE_MISSING' ? 503 : 500
+      res.status(http).json(out)
+      return
+    }
+    res.json({ ok: true, row: out.row })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.post('/api/training/feedback', async (req, res) => {
+  try {
+    const body = req.body || {}
+    const out = await upsertTrainingFeedback(process.env, {
+      executionId: body.executionId ?? body.execution_id,
+      rating: body.rating,
+      suggestion: body.suggestion,
+      userMessage: body.userMessage ?? body.user_message,
+      response: body.response ?? body.agent_response,
+      model: body.model,
+      telefone: body.telefone,
+      leadId: body.leadId ?? body.lead_id,
+      origem: body.origem,
+      createdBy: body.createdBy ?? body.created_by ?? 'dashboard',
+    })
+    if (!out.ok) {
+      const http =
+        out.code === 'MISSING_EXECUTION_ID' || out.code === 'INVALID_RATING' ? 400
+          : out.code === 'SUPABASE_NOT_CONFIGURED' || out.code === 'TABLE_MISSING' ? 503
+            : 500
+      res.status(http).json(out)
+      return
+    }
+    res.json({ ok: true, row: out.row })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.delete('/api/training/feedback/:executionId', async (req, res) => {
+  try {
+    const out = await deleteTrainingFeedback(process.env, req.params.executionId)
+    if (!out.ok) {
+      const http = out.code === 'SUPABASE_NOT_CONFIGURED' ? 503 : 500
+      res.status(http).json(out)
+      return
+    }
+    res.json({ ok: true })
+  } catch (e) {
     res.status(500).json({ ok: false, error: e.message })
   }
 })

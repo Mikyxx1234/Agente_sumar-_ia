@@ -3,6 +3,11 @@
  * Aplicado em runtime no promptsLoader — não exige reexportar o JSON do n8n.
  */
 
+/** Prompt auxiliar (escopo JSON) — visível no dashboard, não entra no system do orquestrador. */
+export function isClassifierPromptNode(nodeName) {
+  return String(nodeName || '').toLowerCase().trim() === 'classificador'
+}
+
 export function isLocationAgentNode(nodeName, body) {
   const n = String(nodeName || '').toLowerCase()
   const b = String(body || '').slice(0, 400).toLowerCase()

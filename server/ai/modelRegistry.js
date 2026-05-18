@@ -37,6 +37,7 @@
 const DEFAULTS = {
   orchestrator: 'gpt-4.1-mini',          // function calling forte, bom em PT-BR
   query_rewrite: 'gpt-4.1-nano',         // ultra rápido + barato
+  scope_classifier: 'gpt-4.1-nano',      // filtro de escopo antes do orquestrador
   inscricao_summary: 'gpt-4.1-mini',
   distribuir_humano_summary: 'gpt-4.1-mini',
   salesbot_curso: 'gpt-4.1',             // melhor accuracy pra normalizar nome de curso (rara execução)
@@ -53,6 +54,7 @@ const DEFAULTS = {
 const ROLE_ENVS = {
   orchestrator: 'OPENAI_MODEL_ORCHESTRATOR',
   query_rewrite: 'OPENAI_MODEL_QUERY_REWRITE',
+  scope_classifier: 'OPENAI_MODEL_SCOPE_CLASSIFIER',
   inscricao_summary: 'OPENAI_MODEL_INSCRICAO',
   distribuir_humano_summary: 'OPENAI_MODEL_DISTRIBUIR_HUMANO',
   salesbot_curso: 'OPENAI_MODEL_SALESBOT_CURSO',

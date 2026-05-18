@@ -5,8 +5,11 @@ import {
   User, Cpu, Zap, Copy, RefreshCw,
   Check, ListChecks, Wand2, BookOpen,
   Send, MessageSquare, Tag, BookMarked,
+  ThumbsUp, ThumbsDown, ShieldAlert,
 } from 'lucide-react'
 import { getAllExecutions, clearExecutions, reindexPerguntasEmbeddings } from '../lib/executionStore'
+import { getAllExecutionFeedback, migrateLocalFeedbackToServer } from '../lib/executionFeedbackStore'
+import ResponseFeedback from './ResponseFeedback'
 
 function formatDuration(ms) {
   if (ms < 1000) return `${ms}ms`
@@ -142,7 +145,7 @@ function FlowStep({ icon: Icon, iconKind, title, duration, headerBadge, children
   )
 }
 
-function ExecutionDetail({ execution, onCopy }) {
+function ExecutionDetail({ execution, onCopy, onFeedbackChange }) {
   const hasTools = execution.toolCalls?.length > 0
   return (
     <div className="exec-detail">
@@ -166,6 +169,30 @@ function ExecutionDetail({ execution, onCopy }) {
         <FlowStep icon={User} iconKind="" title="Mensagem do usuário" defaultOpen>
           <div className="flow-content-text">{execution.userMessage}</div>
         </FlowStep>
+        {(() => {
+          const scopeStep = (execution.steps || []).find((s) => s?.type === 'scope_classifier')
+          const sc = execution.aiMeta?.scopeClassification
+          const blocked = sc?.blocked || scopeStep?.blocked
+          if (!blocked) return null
+          const classification = sc?.classification || scopeStep?.classification
+          return (
+            <FlowStep
+              icon={ShieldAlert}
+              iconKind="warning"
+              title="Fora do escopo — orquestrador não executado"
+              duration={scopeStep?.durationMs}
+              defaultOpen
+            >
+              <div className="flow-content-text">
+                {classification?.motivo && <p><strong>Motivo:</strong> {classification.motivo}</p>}
+                {classification?.categoria && <p><strong>Categoria:</strong> {classification.categoria}</p>}
+                <p style={{ marginTop: 8, color: 'var(--fg-2)' }}>
+                  O lead recebeu apenas a mensagem de recusa educada, sem consultar tools nem a base de cursos.
+                </p>
+              </div>
+            </FlowStep>
+          )
+        })()}
         {execution.aiMeta?.history && (
           <FlowStep
             icon={BookOpen}
@@ -332,6 +359,7 @@ Tokens LLM  : prompt=${tc.queryRewrite.usage.prompt_tokens || 0}, completion=${t
         {execution.response && (
           <FlowStep icon={Bot} iconKind="success" title="Resposta final" defaultOpen>
             <div className="flow-content-text">{execution.response}</div>
+            <ResponseFeedback execution={execution} onChange={onFeedbackChange} />
           </FlowStep>
         )}
         {(() => {
@@ -437,12 +465,27 @@ export default function ExecutionViewer() {
   const [copyToast, setCopyToast] = useState(false)
   const [reindexing, setReindexing] = useState(false)
   const [reindexResult, setReindexResult] = useState(null)
+  const [feedbackMap, setFeedbackMap] = useState({})
 
   const fetchExecutions = useCallback(async () => {
     setLoading(true)
-    const data = await getAllExecutions()
+    await migrateLocalFeedbackToServer().catch(() => {})
+    const [data, feedback] = await Promise.all([
+      getAllExecutions(),
+      getAllExecutionFeedback(),
+    ])
     setExecutions(data)
+    setFeedbackMap(feedback)
     setLoading(false)
+  }, [])
+
+  const handleFeedbackChange = useCallback((executionId, row) => {
+    setFeedbackMap((prev) => {
+      const next = { ...prev }
+      if (!row) delete next[executionId]
+      else next[executionId] = row
+      return next
+    })
   }, [])
 
   useEffect(() => { fetchExecutions() }, [fetchExecutions])
@@ -584,7 +627,19 @@ export default function ExecutionViewer() {
                     {exec.id}
                     <Copy size={10} />
                   </button>
-                  <span className={`status-dot ${exec.error ? 'error' : 'success'}`} />
+                  <span className="exec-item-badges">
+                    {feedbackMap[exec.id]?.rating === 'positive' && (
+                      <span className="exec-feedback-pill positive" title="Boa resposta">
+                        <ThumbsUp size={11} />
+                      </span>
+                    )}
+                    {feedbackMap[exec.id]?.rating === 'negative' && (
+                      <span className="exec-feedback-pill negative" title="Resposta ruim">
+                        <ThumbsDown size={11} />
+                      </span>
+                    )}
+                    <span className={`status-dot ${exec.error ? 'error' : 'success'}`} />
+                  </span>
                 </div>
                 <div className="exec-item-msg">{truncate(exec.userMessage, 80)}</div>
                 <div className="exec-item-footer tnum">
@@ -601,7 +656,11 @@ export default function ExecutionViewer() {
 
         <div className="exec-detail-panel">
           {selected ? (
-            <ExecutionDetail execution={selected} onCopy={showCopyToast} />
+            <ExecutionDetail
+              execution={selected}
+              onCopy={showCopyToast}
+              onFeedbackChange={(row) => handleFeedbackChange(selected.id, row)}
+            />
           ) : (
             <div className="exec-detail-empty">
               <div>

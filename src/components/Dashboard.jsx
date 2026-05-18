@@ -56,6 +56,7 @@ function calcCost(usage, model, aiMeta) {
     ...((aiMeta?.queryRewriteUsage) || []),
     ...((aiMeta?.toolUsage) || []),
     ...((aiMeta?.embeddingsUsage) || []),
+    ...((aiMeta?.scopeClassifierUsage) || []),
   ]
   for (const x of extras) total += calcCostBRL(x?.usage || {}, x?.model)
   return total

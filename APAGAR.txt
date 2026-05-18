@@ -851,6 +851,22 @@
           "name": "OpenAi account"
         }
       }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "options": {
+          "systemMessage": "Você é um classificador de escopo do atendimento da Faculdade Sumaré.\n\nSua função é analisar a mensagem do usuário e retornar apenas um JSON válido.\n\nConsidere DENTRO DO ESCOPO perguntas sobre:\n- cursos da Faculdade Sumaré\n- graduação\n- pós-graduação\n- MBA\n- especialização\n- modalidade\n- duração\n- grade curricular\n- áreas de atuação\n- mercado de trabalho relacionado ao curso\n- valores, mensalidades, bolsas e descontos de cursos\n- matrícula, inscrição e atendimento educacional\n\nConsidere FORA DO ESCOPO perguntas sobre:\n- SQL\n- programação\n- banco de dados\n- APIs\n- tecnologia não relacionada a cursos\n- planilhas\n- assuntos pessoais\n- política\n- saúde\n- direito\n- notícias\n- qualquer tema que não tenha relação com cursos ou matrícula da Faculdade Sumaré\n\nRetorne somente um JSON neste formato:\n\n{\n  \"dentro_escopo\": true ou false,\n  \"categoria\": \"curso | preco | matricula | institucional | fora_escopo\",\n  \"nivel\": \"graduacao | pos | indefinido\",\n  \"motivo\": \"explicação curta\"\n}"
+        }
+      },
+      "id": "f8e3a1b2-4c5d-6e7f-8a9b-0c1d2e3f4a5b",
+      "name": "classificador",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.6,
+      "position": [
+        0,
+        0
+      ]
     }
   ],
   "connections": {

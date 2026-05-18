@@ -111,7 +111,9 @@ const SUMARÉ_REPLY_RULES = [
   'INSTRUÇÃO OBRIGATÓRIA:',
   `Você é um agente comercial da ${INSTITUTION}. Responda usando somente o CONTEXT acima.`,
   'Não use informações de outras instituições (ex.: Cruzeiro, Anhanguera, SOEAD), mesmo que existam em materiais antigos do projeto.',
-  'Se o CONTEXT não tiver informação suficiente, diga claramente que não encontrou essa informação na base e ofereça ajuda (ex.: consultor via distribuir_humano) quando fizer sentido.',
+  'CURSO PEDIDO AUSENTE DO CONTEXT: se o lead perguntou por um curso específico e o nome dele NÃO aparece no CONTEXT, NÃO diga que não encontrou ou que não existe. Faça nova busca por área e sugira APENAS cursos cujos nomes estejam no CONTEXT (2–3 opções), sem preço/detalhes de curso que não esteja no CONTEXT.',
+  'NUNCA cite nome de curso que não esteja escrito no CONTEXT (não invente programas "parecidos").',
+  'Se o CONTEXT não tiver informação suficiente (e não for só curso inexistente), ofereça consultor (distribuir_humano) quando fizer sentido.',
   'Se a pergunta puder ser graduação ou pós-graduação e o CONTEXT não deixar claro, peça uma confirmação curta: "Você quer informações sobre graduação ou pós-graduação?"',
   'Não mencione Supabase, RAG, embedding ou tabelas para o lead.',
 ].join('\n')
@@ -206,6 +208,7 @@ export async function searchKnowledgeBase(env, ctx, question, opts = {}) {
       : ''
     return [
       `Nenhum trecho relevante foi encontrado na base de conhecimento da ${INSTITUTION} para esta consulta.`,
+      'Se o lead pediu um curso específico: faça nova busca com termos da área e sugira somente cursos que aparecerem no CONTEXT — sem dizer que o curso pedido não existe.',
       SUMARÉ_REPLY_RULES,
       tail,
     ].join('\n')

@@ -38,6 +38,8 @@ export function createExecutionContext() {
   // prompt do orquestrador. Usado pelo ExecutionViewer pra mostrar
   // "memória usada" e diagnosticar quando a IA "esquece" turnos.
   let historySnapshot = null
+  let scopeClassification = null
+  const scopeClassifierUsage = []
 
   function pushUsage(arr, info) {
     if (!info || !info.model) return
@@ -102,12 +104,31 @@ export function createExecutionContext() {
       }
     },
 
+    recordScopeClassification(info) {
+      if (!info || typeof info !== 'object') return
+      scopeClassification = {
+        blocked: Boolean(info.blocked),
+        source: info.source || null,
+        reason: info.reason || null,
+        classification: info.classification || null,
+      }
+      if (info.model && info.usage) {
+        pushUsage(scopeClassifierUsage, {
+          model: info.model,
+          tool: 'scope_classifier',
+          usage: info.usage,
+        })
+      }
+    },
+
     /** Snapshot serializável para `mensagens_ia.ai_meta`. */
     toAiMeta() {
       return {
         queryRewriteUsage: queryRewriteUsage.slice(),
         toolUsage: toolUsage.slice(),
         embeddingsUsage: embeddingsUsage.slice(),
+        scopeClassifierUsage: scopeClassifierUsage.slice(),
+        scopeClassification,
         history: historySnapshot,
       }
     },
@@ -123,8 +144,16 @@ export function createNoopExecutionContext() {
     recordToolTrace() {},
     consumeToolTrace() { return null },
     recordHistorySnapshot() {},
+    recordScopeClassification() {},
     toAiMeta() {
-      return { queryRewriteUsage: [], toolUsage: [], embeddingsUsage: [], history: null }
+      return {
+        queryRewriteUsage: [],
+        toolUsage: [],
+        embeddingsUsage: [],
+        scopeClassifierUsage: [],
+        scopeClassification: null,
+        history: null,
+      }
     },
   }
 }

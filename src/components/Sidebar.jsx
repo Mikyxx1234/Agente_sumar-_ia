@@ -52,7 +52,21 @@ export default function Sidebar({ page, onNavigate, onAIStateChange }) {
             <div className="workspace-status">online</div>
           </div>
         </div>
-        <button className="btn-icon" style={{ width: 28, height: 28 }}>
+        <button
+          type="button"
+          className="btn-icon"
+          style={{ width: 28, height: 28 }}
+          title="Abrir configurações do Teste IA"
+          aria-label="Configurações do Teste IA"
+          onClick={() => {
+            sessionStorage.setItem('pg_open_config', '1')
+            if (page === 'playground') {
+              window.dispatchEvent(new CustomEvent('playground-open-config'))
+            } else {
+              onNavigate('playground')
+            }
+          }}
+        >
           <Settings size={14} />
         </button>
       </div>

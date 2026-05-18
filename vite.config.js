@@ -36,6 +36,7 @@ export default defineConfig(({ mode }) => {
         '/api/ai': { target: 'http://127.0.0.1:8000', changeOrigin: true },
         '/api/media': { target: 'http://127.0.0.1:8000', changeOrigin: true },
         '/api/debug': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+        '/api/training': { target: 'http://127.0.0.1:8000', changeOrigin: true },
       },
     },
   }

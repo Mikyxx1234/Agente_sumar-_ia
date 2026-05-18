@@ -1,7 +1,8 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import { Send, Settings, Trash2, Bot, User, AlertCircle, Key, Sparkles, Check, DollarSign, FileText, MessageSquare, Phone, Clock, Image as ImageIcon, Mic, Square, Loader2, Paperclip } from 'lucide-react'
 import { TOOL_DEFINITIONS, TOOL_EXECUTORS } from '../lib/supabaseSearch'
 import { generateExecutionId, saveExecution } from '../lib/executionStore'
+import { DEFAULT_SCOPE_REFUSAL, matchScopeHeuristic } from '../lib/scopeHeuristics'
 import { OPENAI_CHAT_MODELS } from '../lib/openaiPricing'
 
 const MODELS = OPENAI_CHAT_MODELS
@@ -89,12 +90,38 @@ export default function Playground({ prompts }) {
   const [mediaProcessing, setMediaProcessing] = useState(false)
   const [recording, setRecording] = useState(false)
   const [recordSeconds, setRecordSeconds] = useState(0)
+  const [inscricaoAutomatica, setInscricaoAutomatica] = useState(false)
+
+  const activeToolDefinitions = useMemo(
+    () =>
+      inscricaoAutomatica
+        ? TOOL_DEFINITIONS
+        : TOOL_DEFINITIONS.filter((t) => t.function?.name !== 'inscricao'),
+    [inscricaoAutomatica],
+  )
+
+  useEffect(() => {
+    fetch('/api/agent/matricula-config')
+      .then((r) => r.json())
+      .then((d) => setInscricaoAutomatica(!!d.inscricaoAutomaticaEnabled))
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     fetch('/api/evolution/health')
       .then((r) => r.json())
       .then((d) => { if (d?.debounceMs) setDebounceMs(d.debounceMs) })
       .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    if (sessionStorage.getItem('pg_open_config') === '1') {
+      sessionStorage.removeItem('pg_open_config')
+      setShowConfig(true)
+    }
+    const openConfig = () => setShowConfig(true)
+    window.addEventListener('playground-open-config', openConfig)
+    return () => window.removeEventListener('playground-open-config', openConfig)
   }, [])
 
   useEffect(() => {
@@ -144,6 +171,7 @@ export default function Playground({ prompts }) {
 
   const buildSystemMessage = () => {
     const promptsText = prompts
+      .filter((p) => String(p.name || '').toLowerCase() !== 'classificador')
       .map((p) => `### ${p.name} (${p.type})\n\n${p.body}`)
       .join('\n\n---\n\n')
 
@@ -153,15 +181,16 @@ export default function Playground({ prompts }) {
 Você está em um ambiente de teste (Playground). As regras abaixo substituem qualquer instrução conflitante dos prompts acima:
 
 1. RESPONDA SEMPRE EM LINGUAGEM NATURAL, nunca em XML, JSON ou templates estruturados.
-2. Você tem 8 tools reais: buscar_conhecimento, buscar_precos, buscar_informacoes, buscar_pos, buscar_perguntas, inscricao, distribuir_humano e buscar_historico_conversa. USE-AS quando couber. Para curso/preço/MBA/modalidade, prefira buscar_conhecimento (base Faculdade Sumaré).
+2. Tools: buscar_conhecimento, buscar_precos, buscar_informacoes, buscar_pos, buscar_perguntas, distribuir_humano, buscar_historico_conversa (inscricao automática DESLIGADA — matrícula via consultor). USE-AS quando couber. Para curso/preço/MBA/modalidade, prefira buscar_conhecimento (base Faculdade Sumaré).
 3. MODALIDADE: a Faculdade Sumaré oferta somente EAD (a distância). Não há polo presencial nem semi-presencial — não prometa visita a unidade nem calcule distância até polo.
 4. MEMÓRIA: se o telefone do lead estiver disponível no contexto e você ainda não conhecer a conversa prévia, chame buscar_historico_conversa UMA vez no início do turno (limit 8–20) para entender o que já foi conversado antes de responder. Nunca mencione essa consulta ao usuário.
-5. Para inscrição, use inscricao com curso e tipo_ingresso. Se a resposta indicar integração pendente (telefone/id_lead), explique ao usuário de forma natural que o cadastro será concluído pelo canal oficial ou pela equipe, sem citar APIs.
+5. MATRÍCULA / INSCRIÇÃO: NÃO chame inscricao. Colete curso (do histórico) + tipo de ingresso (ENEM ou Vestibular Múltipla Escolha). Depois chame distribuir_humano com o telefone do contexto e diga que um consultor entrará em breve para finalizar a matrícula. Proibido pedir outro telefone, citar erro de cadastro ou mandar usar canal externo.
 6. Quando buscar preços ou informações, apresente os resultados encontrados ao usuário de forma clara e objetiva.
-7. Se a busca retornar cursos com nomes parecidos (ex: usuário pediu "Economia" e a base tem "Ciências Econômicas"), apresente os cursos encontrados e pergunte se é o que o usuário procura, em vez de dizer que não encontrou.
-8. NÃO mencione ferramentas internas, tools, agentes ou contexto técnico ao usuário.
-9. distribuir_humano exige id_lead e telefone; sem integração CRM o modelo pode explicar ao usuário que um humano dará continuidade.
-10. Seja direto, profissional e acolhedor.`
+7. CURSO INDISPONÍVEL: se o curso pedido não aparecer no CONTEXT da tool, NÃO diga que não encontrou ou que não existe. Busque de novo por área e sugira SOMENTE cursos cujos nomes estejam no CONTEXT (2–3), com preço/detalhes só do que estiver no CONTEXT. Nunca invente nomes de curso.
+8. Se a busca retornar programa parecido (ex.: lead pediu "Economia" e o CONTEXT traz "Ciências Econômicas"), apresente o que veio no CONTEXT e pergunte se é isso — sem dizer que o curso pedido não existe.
+9. NÃO mencione ferramentas internas, tools, agentes ou contexto técnico ao usuário.
+10. distribuir_humano: passe telefone do contexto; id_lead é opcional. Obrigatório após coletar dados para matrícula.
+11. Seja direto, profissional e acolhedor.`
 
     return promptsText + '\n\n---\n\n' + playgroundOverride
   }
@@ -170,7 +199,7 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
     const res = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({ model, messages: apiMessages, tools: TOOL_DEFINITIONS, temperature: 0.7, max_tokens: 2048 }),
+      body: JSON.stringify({ model, messages: apiMessages, tools: activeToolDefinitions, temperature: 0.7, max_tokens: 2048 }),
     })
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
@@ -290,11 +319,42 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
     }
   }
 
+  const blockScopeInPlayground = async (text, { pushAssistant = true } = {}) => {
+    const local = matchScopeHeuristic(text)
+    if (local) {
+      if (pushAssistant) {
+        setMessages((prev) => [...prev, { role: 'assistant', content: DEFAULT_SCOPE_REFUSAL }])
+      }
+      return true
+    }
+    try {
+      const res = await fetch('/api/agent/classify-scope', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userMessage: text }),
+      })
+      const scope = await res.json().catch(() => ({}))
+      if (scope?.blocked) {
+        if (pushAssistant) {
+          setMessages((prev) => [...prev, { role: 'assistant', content: scope.reply || DEFAULT_SCOPE_REFUSAL }])
+        }
+        return true
+      }
+    } catch {
+      if (matchScopeHeuristic(text) && pushAssistant) {
+        setMessages((prev) => [...prev, { role: 'assistant', content: DEFAULT_SCOPE_REFUSAL }])
+        return true
+      }
+    }
+    return false
+  }
+
   const handleSendWhatsapp = async (text) => {
     const sessionId = effectiveSessionId()
     const userMsg = { role: 'user', content: text, waBuffered: true }
     setMessages((prev) => [...prev, userMsg])
     setInput('')
+    if (await blockScopeInPlayground(text)) return
     try {
       const res = await fetch('/api/playground/push', {
         method: 'POST',
@@ -495,7 +555,61 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
       apiUserMsg,
     ]
 
+    const finishScopeBlocked = (scope) => {
+      const reply = scope?.reply || DEFAULT_SCOPE_REFUSAL
+      execution.steps.push({
+        type: 'scope_classifier',
+        blocked: true,
+        source: scope?.source || 'heuristic',
+        classification: scope?.classification,
+      })
+      if (scope?.usage) {
+        execution.usage.prompt_tokens += scope.usage.prompt_tokens || 0
+        execution.usage.completion_tokens += scope.usage.completion_tokens || 0
+        execution.usage.total_tokens += scope.usage.total_tokens || 0
+      }
+      execution.response = reply
+      execution.totalDurationMs = Date.now() - t0
+      execution.usage._meta = aiMeta
+      saveExecution(execution)
+      setMessages((prev) => [...prev, { role: 'assistant', content: reply, execId }])
+      setLoading(false)
+      setToolStatus('')
+    }
+
     try {
+      const localHeuristic = matchScopeHeuristic(effectiveText)
+      if (localHeuristic) {
+        finishScopeBlocked({
+          blocked: true,
+          reply: DEFAULT_SCOPE_REFUSAL,
+          source: 'heuristic',
+          classification: localHeuristic,
+        })
+        return
+      }
+
+      const scopeRes = await fetch('/api/agent/classify-scope', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userMessage: effectiveText,
+          historyMessages: apiHistory.filter((m) => m.role === 'user' || m.role === 'assistant'),
+        }),
+      })
+      const scope = await scopeRes.json().catch(() => ({}))
+      if (!scopeRes.ok) {
+        const retry = matchScopeHeuristic(effectiveText)
+        if (retry) {
+          finishScopeBlocked({ blocked: true, reply: DEFAULT_SCOPE_REFUSAL, source: 'heuristic', classification: retry })
+          return
+        }
+      }
+      if (scope?.blocked && scope?.reply) {
+        finishScopeBlocked(scope)
+        return
+      }
+
       let round = 0
       while (round < MAX_TOOL_ROUNDS) {
         execution.steps.push({ type: 'llm_call', round, messagesCount: apiMessages.length })
@@ -598,8 +712,19 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
             <Trash2 size={14} />
             <span>Limpar</span>
           </button>
-          <button className={`btn-icon${showConfig ? ' active' : ''}`} onClick={() => setShowConfig(!showConfig)}>
+          <button
+            type="button"
+            className={`btn btn-icon${showConfig ? ' active' : ''}`}
+            onClick={(e) => {
+              e.stopPropagation()
+              setShowConfig((v) => !v)
+            }}
+            aria-expanded={showConfig}
+            aria-label={showConfig ? 'Fechar configurações' : 'Abrir configurações'}
+            title="Configurações (API Key, modelo, simular WhatsApp)"
+          >
             <Settings size={15} />
+            <span className="pg-config-btn-label">Config</span>
           </button>
         </div>
       </div>

@@ -9,6 +9,7 @@
  */
 
 import { runInscricao } from '../inscricaoTool.js'
+import { isInscricaoAutomaticaEnabled, matriculaViaConsultorInstruction } from '../inscricaoConfig.js'
 import { runDistribuirHumano } from '../distribuirHumanoTool.js'
 import { runBuscarHistorico } from '../memoryTool.js'
 import { resolveModel } from './modelRegistry.js'
@@ -87,7 +88,12 @@ async function vectorSearch(env, ctx, toolName, rpcName, query, matchCount = 10)
     throw new Error(`Supabase RPC ${rpcName} ${res.status}: ${body.slice(0, 200)}`)
   }
   const data = await res.json()
-  if (!Array.isArray(data) || data.length === 0) return 'Nenhum resultado encontrado na base.'
+  if (!Array.isArray(data) || data.length === 0) {
+    return [
+      'Nenhum resultado encontrado na base.',
+      'INSTRUÇÃO: se o lead pediu um curso específico, faça nova busca com termos da área (buscar_conhecimento). Não diga que o curso não existe. Só cite cursos cujos nomes aparecerem em um CONTEXT com resultados.',
+    ].join('\n')
+  }
 
   const ragSource =
     toolName === 'buscar_informacoes'
@@ -227,6 +233,9 @@ export function buildToolExecutors(env, ctx) {
       return out
     },
     inscricao: async (args) => {
+      if (!isInscricaoAutomaticaEnabled(env)) {
+        return matriculaViaConsultorInstruction(args)
+      }
       const r = await runInscricao(env, args)
       absorbToolMeta(safeCtx, r)
       return formatInscricaoResult(r)
