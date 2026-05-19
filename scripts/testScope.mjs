@@ -1,4 +1,4 @@
-import { matchScopeHeuristic } from '../src/lib/scopeHeuristics.js'
+import { matchScopeHeuristic } from '../libShared/scopeHeuristics.js'
 
 const cases = [
   'oque essa query faz ?',

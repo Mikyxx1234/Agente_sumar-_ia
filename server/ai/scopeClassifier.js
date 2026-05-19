@@ -10,7 +10,7 @@ import {
   matchScopeHeuristic,
   normalizeMessageForScope,
   messageLooksEducational,
-} from '../../src/lib/scopeHeuristics.js'
+} from '../../libShared/scopeHeuristics.js'
 
 const URL_CHAT = 'https://api.openai.com/v1/chat/completions'
 const TIMEOUT_MS = 5000
