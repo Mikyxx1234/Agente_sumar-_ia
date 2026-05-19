@@ -278,6 +278,135 @@ function parseLeadFromKommoGet(data) {
   return lead
 }
 
+/** `minimal` = salesbot + pause IA (Sumaré). `full` = fluxo n8n legado com funil Cruzeiro. */
+export function resolveDistribHandoffMode(env) {
+  const m = String(env.KOMMO_DISTRIB_HANDOFF_MODE || 'minimal')
+    .trim()
+    .toLowerCase()
+  if (['full', 'legacy', 'n8n', 'completo'].includes(m)) return 'full'
+  return 'minimal'
+}
+
+/**
+ * Encaminhamento Sumaré: dispara salesbot (49777/49813), pausa IA e registra nota.
+ * Não move pipeline nem exige distrib_comercial — evita funil errado e falhas antes do bot.
+ */
+async function runMinimalDistribuirHandoff(env, ctx) {
+  const {
+    telefone,
+    idLead,
+    motivoFluxo,
+    kommoBase,
+    kommoToken,
+    mainUrl,
+    mainKey,
+    cursoHint,
+    tipoIngressoHint,
+  } = ctx
+  const steps = []
+  const warnings = []
+  const kind = normalizeSalesbotMotivo(motivoFluxo)
+
+  const [salesbotRes, dadosClienteRes] = await Promise.all([
+    runKommoSalesbot(env, idLead, motivoFluxo),
+    (async () => {
+      try {
+        const enc = encodeURIComponent(telefone)
+        await supabaseRest(mainUrl, mainKey, 'PATCH', `dados_cliente?telefone=eq.${enc}`, {
+          atendimento_ia: 'pause',
+        })
+        return { ok: true }
+      } catch (e) {
+        return { ok: false, error: e.message }
+      }
+    })(),
+  ])
+
+  steps.push({
+    step: 'kommo_salesbot',
+    ok: salesbotRes.ok,
+    status: salesbotRes.status,
+    bot_id: salesbotRes.botId,
+    motivo: salesbotRes.motivo || motivoFluxo,
+    skipped: salesbotRes.skipped || false,
+  })
+  if (!salesbotRes.ok && !salesbotRes.skipped) {
+    warnings.push(`kommo_salesbot: ${(salesbotRes.text || '').slice(0, 200)}`)
+  }
+
+  steps.push({ step: 'supabase_dados_cliente_pause', ok: dadosClienteRes.ok })
+  if (!dadosClienteRes.ok) warnings.push(`dados_cliente: ${dadosClienteRes.error}`)
+
+  let noteText =
+    kind === 'matricula'
+      ? 'Encaminhamento automático: lead pediu matrícula/inscrição via WhatsApp (agente IA).'
+      : 'Encaminhamento automático: lead pediu atendimento humano via WhatsApp (agente IA).'
+  if (cursoHint) noteText += `\nCurso mencionado: ${String(cursoHint).trim()}`
+  if (tipoIngressoHint) noteText += `\nIngresso: ${String(tipoIngressoHint).trim()}`
+
+  const openaiKey = env.OPENAI_API_KEY
+  const phoneQueries = [...new Set([telefone, formatTelefoneDigits(telefone), `+55${formatTelefoneDigits(telefone)}`])].filter(
+    Boolean,
+  )
+  if (openaiKey) {
+    try {
+      const tasks = phoneQueries.map(async (q) => {
+        try {
+          const enc = encodeURIComponent(q)
+          const rowsMsg = await supabaseRest(
+            mainUrl,
+            mainKey,
+            'GET',
+            `chat_messages?phone=eq.${enc}&select=*&order=created_at.asc&limit=500`,
+          )
+          return Array.isArray(rowsMsg) ? rowsMsg : []
+        } catch {
+          return []
+        }
+      })
+      const results = await Promise.all(tasks)
+      const messages = results.find((r) => r.length > 0) || []
+      steps.push({ step: 'supabase_chat_messages', ok: true, count: messages.length })
+      const conversation = buildConversationFromMessages(messages)
+      if (conversation.trim()) {
+        try {
+          const r = await openaiDistribuirResumo(env, openaiKey, conversation)
+          const parsed = parseResumoCamposDistribuicao(r.content)
+          if (parsed.resumo) noteText = parsed.resumo
+          steps.push({ step: 'openai_resumo', ok: true, model: r.model })
+        } catch (e) {
+          warnings.push(`openai: ${e.message}`)
+          steps.push({ step: 'openai_resumo', ok: false })
+        }
+      }
+    } catch (e) {
+      warnings.push(`chat_messages: ${e.message}`)
+    }
+  }
+
+  const noteRes = await kommoFetch(kommoBase, kommoToken, `/api/v4/leads/${idLead}/notes`, {
+    method: 'POST',
+    body: [{ note_type: 'common', params: { text: noteText } }],
+  })
+  steps.push({ step: 'kommo_note', ok: noteRes.ok, status: noteRes.status })
+  if (!noteRes.ok) warnings.push(`kommo_note: ${noteRes.text.slice(0, 200)}`)
+
+  const ok = Boolean(salesbotRes.ok && !salesbotRes.skipped)
+  return {
+    ok,
+    handoff_mode: 'minimal',
+    retorno: ok
+      ? kind === 'matricula'
+        ? 'salesbot matrícula disparado; IA pausada'
+        : 'salesbot consultor disparado; IA pausada'
+      : 'encaminhamento parcial (verifique salesbot no Kommo)',
+    id_lead: idLead,
+    motivo: kind,
+    warnings,
+    steps,
+  }
+}
+
 /**
  * @param {Record<string, string>} env
  * @param {object} body
@@ -336,19 +465,8 @@ export async function runDistribuirHumano(env, body) {
   if (!mainUrl || !mainKey) {
     return { ok: false, code: 'SUPABASE_NOT_CONFIGURED', error: 'Configure SUPABASE_URL e SUPABASE_KEY.' }
   }
-  if (!distUrl || !distKey) {
-    return {
-      ok: false,
-      code: 'DIST_COMERCIAL_NOT_CONFIGURED',
-      error:
-        'Configure tabela distrib_comercial: use SUPABASE_URL_FEEDBACK + SUPABASE_KEY_FEEDBACK (mesmo projeto do feedback) ' +
-        'ou SUPABASE_URL_DIST_COMERCIAL + SUPABASE_KEY_DIST_COMERCIAL.',
-    }
-  }
-  if (!openaiKey) {
-    return { ok: false, code: 'OPENAI_NOT_CONFIGURED', error: 'OPENAI_API_KEY não configurada.' }
-  }
 
+  const handoffMode = resolveDistribHandoffMode(env)
   const steps = []
   const warnings = []
 
@@ -375,6 +493,33 @@ export async function runDistribuirHumano(env, body) {
       steps.push({ step: 'kommo_lookup_by_phone', ok: false, error: e.message })
       return { ok: false, code: 'KOMMO_LOOKUP_ERROR', error: e.message, steps }
     }
+  }
+
+  if (handoffMode === 'minimal') {
+    return runMinimalDistribuirHandoff(env, {
+      telefone,
+      idLead,
+      motivoFluxo,
+      kommoBase,
+      kommoToken,
+      mainUrl,
+      mainKey,
+      cursoHint: body?.curso ?? body?.nome_curso,
+      tipoIngressoHint: body?.tipo_ingresso ?? body?.tipoIngresso ?? body?.ingresso,
+    })
+  }
+
+  if (!distUrl || !distKey) {
+    return {
+      ok: false,
+      code: 'DIST_COMERCIAL_NOT_CONFIGURED',
+      error:
+        'Configure tabela distrib_comercial: use SUPABASE_URL_FEEDBACK + SUPABASE_KEY_FEEDBACK (mesmo projeto do feedback) ' +
+        'ou SUPABASE_URL_DIST_COMERCIAL + SUPABASE_KEY_DIST_COMERCIAL.',
+    }
+  }
+  if (!openaiKey) {
+    return { ok: false, code: 'OPENAI_NOT_CONFIGURED', error: 'OPENAI_API_KEY não configurada.' }
   }
 
   // Buscar dados do lead no Kommo + lista de consultores no Supabase
@@ -690,6 +835,7 @@ export async function runDistribuirHumano(env, body) {
   const retornoMatricula = normalizeSalesbotMotivo(motivoFluxo) === 'matricula'
   return {
     ok: true,
+    handoff_mode: 'full',
     retorno: retornoMatricula
       ? 'lead encaminhado para consultor finalizar matrícula (salesbot matrícula disparado)'
       : 'atendimento distribuido para consultor',

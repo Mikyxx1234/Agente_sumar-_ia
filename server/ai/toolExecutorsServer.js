@@ -186,6 +186,15 @@ function formatDistribuirResult(data) {
  * Empurra os usages do `_meta` retornado por uma tool dentro do `ctx`.
  * Hoje só `inscricao` e `distribuir_humano` retornam `_meta`.
  */
+/** Garante salesbot 49813 quando curso+ingresso vierem sem motivo explícito. */
+function resolveDistribuirMotivo(args = {}) {
+  if (args.motivo ?? args.fluxo) return args.motivo ?? args.fluxo
+  const curso = args.curso ?? args.Curso ?? args.nome_curso
+  const tipo = args.tipo_ingresso ?? args.tipoIngresso ?? args.ingresso
+  if (curso && tipo) return 'matricula'
+  return 'consultor'
+}
+
 function absorbToolMeta(ctx, raw) {
   if (!ctx || !raw || typeof raw !== 'object' || !raw._meta) return
   const meta = raw._meta
@@ -227,13 +236,31 @@ export function buildToolExecutors(env, ctx) {
           'Nenhum resultado encontrado na base de FAQ para esta pergunta.',
           '',
           'INSTRUÇÃO OBRIGATÓRIA: NÃO invente resposta sobre processos da empresa. NÃO mande o cliente "procurar a faculdade", "ligar para a coordenação", "consultar a secretaria", "verificar com o polo". Quem analisa esse tipo de caso somos NÓS.',
-          'Em vez disso, chame a tool distribuir_humano (passando o telefone do Contexto) e responda ao cliente que um consultor entrará em contato em breve para ajudar.',
+          'Em vez disso, chame a tool distribuir_humano (telefone do Contexto, motivo: "consultor" — salesbot 49777) e responda ao cliente que um consultor entrará em contato em breve para ajudar.',
         ].join('\n')
       }
       return out
     },
     inscricao: async (args) => {
       if (!isInscricaoAutomaticaEnabled(env)) {
+        const telefone = args.telefone
+        const curso = args.curso ?? args.Curso
+        const tipo = args.tipo_ingresso ?? args.tipoIngresso
+        if (telefone && curso && tipo) {
+          const r = await runDistribuirHumano(env, {
+            telefone,
+            id_lead: args.id_lead ?? args.idLead,
+            motivo: 'matricula',
+            curso,
+            tipo_ingresso: tipo,
+          })
+          absorbToolMeta(safeCtx, r)
+          const base = formatDistribuirResult(r)
+          return [
+            'Matrícula automática no Kommo está DESLIGADA — encaminhamento via consultor executado.',
+            base,
+          ].join('\n')
+        }
         return matriculaViaConsultorInstruction(args)
       }
       const r = await runInscricao(env, args)
@@ -241,7 +268,8 @@ export function buildToolExecutors(env, ctx) {
       return formatInscricaoResult(r)
     },
     distribuir_humano: async (args) => {
-      const r = await runDistribuirHumano(env, args)
+      const motivo = resolveDistribuirMotivo(args)
+      const r = await runDistribuirHumano(env, { ...args, motivo })
       absorbToolMeta(safeCtx, r)
       return formatDistribuirResult(r)
     },

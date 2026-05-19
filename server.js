@@ -215,10 +215,32 @@ app.post('/api/location/nearest-polo', async (req, res) => {
 app.post('/api/inscricao/run', async (req, res) => {
   try {
     if (!isInscricaoAutomaticaEnabled(process.env)) {
+      const body = req.body || {}
+      const telefone = body.telefone
+      const curso = body.curso ?? body.Curso
+      const tipo = body.tipo_ingresso ?? body.tipoIngresso
+      if (telefone && curso && tipo) {
+        const dist = await runDistribuirHumano(process.env, {
+          telefone,
+          id_lead: body.id_lead ?? body.idLead,
+          motivo: 'matricula',
+          curso,
+          tipo_ingresso: tipo,
+        })
+        res.json({
+          ok: dist.ok,
+          code: dist.ok ? 'MATRICULA_VIA_CONSULTOR_EXECUTED' : dist.code,
+          distribuir: dist,
+          message: dist.ok
+            ? 'Encaminhado para consultor (salesbot matrícula 49813).'
+            : matriculaViaConsultorInstruction(body),
+        })
+        return
+      }
       res.json({
         ok: false,
         code: 'MATRICULA_VIA_CONSULTOR',
-        message: matriculaViaConsultorInstruction(req.body || {}),
+        message: matriculaViaConsultorInstruction(body),
       })
       return
     }

@@ -20,6 +20,7 @@ import {
   isGreetingOnly,
   buildGreetingReply,
   shouldHandoffToHuman,
+  detectHandoffMotivo,
   buildHumanHandoffReply,
 } from '../../libShared/scopeHeuristics.js'
 import { runDistribuirHumano, formatDistribuirHumanoReply } from '../distribuirHumanoTool.js'
@@ -202,28 +203,30 @@ export async function runAgent(env, input) {
   })
 
   if (telefone && shouldHandoffToHuman(userMessage, historyMessages)) {
+    const handoffMotivo = detectHandoffMotivo(userMessage, historyMessages)
     const dist = await runDistribuirHumano(env, {
       telefone,
       id_lead: leadId,
-      motivo: 'consultor',
+      motivo: handoffMotivo,
     })
     if (dist._meta?.toolUsage) {
       for (const u of dist._meta.toolUsage) ctx.recordToolUsage(u)
     }
     const salesbotStep = dist.steps?.find((s) => s.step === 'kommo_salesbot')
+    const handoffOk = Boolean(dist.ok || salesbotStep?.ok)
     console.log(
-      `[${executionId}] AUTO_DISTRIBUIR_HUMANO ok=${dist.ok} salesbot_ok=${salesbotStep?.ok} bot_id=${salesbotStep?.bot_id ?? 'n/a'}`,
+      `[${executionId}] AUTO_DISTRIBUIR_HUMANO motivo=${handoffMotivo} ok=${dist.ok} salesbot_ok=${salesbotStep?.ok} bot_id=${salesbotStep?.bot_id ?? 'n/a'} mode=${dist.handoff_mode ?? 'n/a'}`,
     )
     return {
       ok: true,
-      reply: buildHumanHandoffReply({ ok: dist.ok, pushName: input?.pushName }),
+      reply: buildHumanHandoffReply({ ok: handoffOk, pushName: input?.pushName, motivo: handoffMotivo }),
       distribuirHumanoHandled: true,
       toolCalls: [
         {
           tool: 'distribuir_humano',
-          args: { telefone, id_lead: leadId, motivo: 'consultor' },
+          args: { telefone, id_lead: leadId, motivo: handoffMotivo },
           result: formatDistribuirHumanoReply(dist),
-          ok: dist.ok,
+          ok: handoffOk,
           steps: dist.steps,
         },
       ],

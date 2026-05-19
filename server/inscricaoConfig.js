@@ -22,7 +22,7 @@ export function matriculaViaConsultorInstruction(args = {}) {
     lines.push('Use o histórico da conversa para curso e tipo de ingresso antes de encaminhar.')
   }
   lines.push(
-    'INSTRUÇÃO OBRIGATÓRIA NESTE TURNO: chame distribuir_humano passando o telefone do Contexto do atendimento.',
+    'INSTRUÇÃO OBRIGATÓRIA NESTE TURNO: chame distribuir_humano passando o telefone do Contexto, motivo: "matricula" (salesbot 49813).',
     'PROIBIDO: pedir outro telefone, dizer que não achou cadastro, mandar usar canal padrão externo, ou afirmar que a matrícula já está concluída.',
     'Responda ao lead de forma acolhedora: um consultor da Faculdade Sumaré entrará em breve para finalizar a matrícula.',
   )

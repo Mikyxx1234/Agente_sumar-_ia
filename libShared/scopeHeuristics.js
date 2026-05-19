@@ -172,6 +172,8 @@ export function messageRequestsHuman(text) {
   if (/\b(quero|preciso)\s+falar\s+com\b/i.test(t)) return true
   if (/\bfalar\s+com\s+(um\s+)?(humano|atendente|consultor|algu[eé]m|pessoa)\b/i.test(t)) return true
   if (/\b(humano|atendente|consultor|pessoa\s+real)\b[\s\S]{0,45}\b(por\s+favor|pfv|agora|já|ja|logo|rápido|rapido)\b/i.test(t)) return true
+  if (/\batendimento\s+humano\b/i.test(t)) return true
+  if (/\b(especialista|operador|representante)\b[\s\S]{0,40}\b(por\s+favor|pfv|agora)\b/i.test(t)) return true
   if (
     /\b(só|somente|apenas)\b[\s\S]{0,40}\b(falar|conversar|quero)\b[\s\S]{0,40}\b(humano|algu[eé]m|consultor|atendente|pessoa)\b/i.test(
       t,
@@ -197,6 +199,7 @@ export function userFrustratedAfterHumanRequest(text) {
 /** Deve executar distribuir_humano + salesbot consultor (não só responder em texto). */
 export function shouldHandoffToHuman(userMessage, historyMessages = []) {
   if (messageRequestsHuman(userMessage)) return true
+  if (detectMatriculaHandoffIntent(userMessage, historyMessages)) return true
   if (userFrustratedAfterHumanRequest(userMessage)) {
     const recentUser = (historyMessages || [])
       .filter((m) => m.role === 'user')
@@ -207,10 +210,44 @@ export function shouldHandoffToHuman(userMessage, historyMessages = []) {
   return false
 }
 
+/** Matrícula com dados mínimos — encaminha salesbot 49813 sem esperar o LLM. */
+export function detectMatriculaHandoffIntent(userMessage, historyMessages = []) {
+  const texts = [
+    userMessage,
+    ...(historyMessages || [])
+      .filter((m) => m.role === 'user')
+      .slice(-5)
+      .map((m) => m.content),
+  ]
+  const combined = texts.map((t) => normalizeMessageForScope(t)).join('\n').toLowerCase()
+  if (!combined || combined.length < 8) return false
+  const wantsMatricula =
+    /\b(matr[ií]cula|inscri[cç][aã]o|me\s+inscrever|quero\s+me\s+matricular|fazer\s+(a\s+)?inscri[cç][aã]o)\b/i.test(
+      combined,
+    )
+  if (!wantsMatricula) return false
+  return (
+    /\b(enem|vestibular|ingresso|transfer[eê]ncia|segunda\s+gradua[cç][aã]o)\b/i.test(combined) ||
+    /\bcurso\b/i.test(combined)
+  )
+}
+
+/** Salesbot consultor (49777) vs matrícula (49813) no encaminhamento automático. */
+export function detectHandoffMotivo(userMessage, historyMessages = []) {
+  if (detectMatriculaHandoffIntent(userMessage, historyMessages)) return 'matricula'
+  return 'consultor'
+}
+
 /** Resposta ao lead após encaminhamento automático para consultor. */
 export function buildHumanHandoffReply(opts = {}) {
   const nameBit = extractFirstName(opts.pushName) ? `, ${extractFirstName(opts.pushName)}` : ''
+  const matricula = opts.motivo === 'matricula'
   if (opts.ok) {
+    if (matricula) {
+      return (
+        `Perfeito${nameBit}! Já encaminhei seus dados para um consultor finalizar sua matrícula — em breve alguém da equipe da Faculdade Sumaré fala com você por aqui, tudo bem?`
+      )
+    }
     return (
       `Entendi${nameBit}! Já encaminhei seu atendimento para um consultor da Faculdade Sumaré — em breve alguém da equipe fala com você por aqui, tudo bem?`
     )
