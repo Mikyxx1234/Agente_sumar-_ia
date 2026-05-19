@@ -139,8 +139,11 @@ export async function tryHandleInscricaoFormStart(env, input) {
     executionId,
   })
 
-  const statusUpdate = await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO)
   const reply = buildInscricaoFormSentReply({ pushName })
+  let statusUpdate = { ok: false, skipped: true }
+  if (templateRes.ok) {
+    statusUpdate = await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO)
+  }
 
   let whatsappReply = reply
   if (asksResend && templateRes.ok) {
@@ -280,11 +283,14 @@ export async function runInscricaoFormStart(env, body) {
   if (!telefone) return { ok: false, code: 'MISSING_TELEFONE' }
   const idLead = await resolveLeadId(env, telefone, body?.id_lead ?? body?.idLead)
   const templateRes = await sendFormSumarTemplate(env, { to: telefone, leadId: idLead })
-  const statusUpdate = await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO)
+  const statusUpdate = templateRes.ok
+    ? await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO)
+    : { ok: false, skipped: true }
   return {
     ok: templateRes.ok,
     template: templateRes,
     statusUpdate,
     message: templateRes.ok ? 'Template Form Sumar enviado.' : templateRes.error,
+    diagnose: templateRes.diagnose,
   }
 }

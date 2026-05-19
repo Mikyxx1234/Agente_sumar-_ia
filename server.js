@@ -8,6 +8,7 @@ import { runInscricao } from './server/inscricaoTool.js'
 import { isInscricaoAutomaticaEnabled, matriculaViaConsultorInstruction } from './server/inscricaoConfig.js'
 import { runDistribuirHumano } from './server/distribuirHumanoTool.js'
 import { runInscricaoFormStart } from './server/inscricaoFormFlow.js'
+import { sendFormSumarTemplate, diagnoseFormSumarTemplate } from './server/whatsappTemplateSender.js'
 import { runBuscarHistorico } from './server/memoryTool.js'
 import { marcarClienteIA, updateDadosCliente, getLeadIdByTelefone } from './server/dadosClienteStore.js'
 import { saveConversation } from './server/historyStore.js'
@@ -212,6 +213,36 @@ app.post('/api/location/nearest-polo', async (req, res) => {
 })
 
 // ── Tool inscrição (Kommo + Supabase + OpenAI) ──
+
+/** Diagnóstico: canais e nomes configurados para o template Form Sumar. */
+app.get('/api/inscricao/form-sumar/diagnose', (req, res) => {
+  res.json(diagnoseFormSumarTemplate(process.env))
+})
+
+/** Teste manual: envia o template Form Sumar para um telefone (body: { telefone, id_lead? }). */
+app.post('/api/inscricao/form-sumar/send', async (req, res) => {
+  try {
+    const telefone = req.body?.telefone
+    if (!telefone) {
+      res.status(400).json({ ok: false, code: 'MISSING_TELEFONE', error: 'Informe telefone no body.' })
+      return
+    }
+    const idLead = req.body?.id_lead ?? req.body?.idLead
+    const templateRes = await sendFormSumarTemplate(process.env, {
+      to: telefone,
+      leadId: idLead,
+      executionId: generateExecutionId(),
+    })
+    const status = templateRes.ok ? 200 : 502
+    res.status(status).json({
+      ok: templateRes.ok,
+      template: templateRes,
+      diagnose: diagnoseFormSumarTemplate(process.env),
+    })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
 
 app.post('/api/inscricao/run', async (req, res) => {
   try {
