@@ -196,8 +196,27 @@ export function userFrustratedAfterHumanRequest(text) {
   return /\b(ser[aá]?\s+que\s+voce\s+entende|voc[eê]\s+entende|não\s+entende|nao\s+entende|não\s+adianta|nao\s+adianta)\b/i.test(t)
 }
 
+/** Mensagem de teste/homologação da equipe — não dispara salesbot ao reentrar no funil. */
+export function messageLooksLikeOperationalChat(text) {
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (!t || t.length < 6) return false
+  if (
+    /\b(testando|teste|testar|homolog|homologa[cç][aã]o)\b[\s\S]{0,55}\b(robo|robô|rob[oô]|bot|agente|ia)\b/i.test(
+      t,
+    )
+  ) {
+    return true
+  }
+  if (/\b(robo|robô|bot)\b[\s\S]{0,45}\b(atendimento|comercial)\b/i.test(t) && /\b(teste|testando|ajudar\s+voc[eê]s)\b/i.test(t)) {
+    return true
+  }
+  if (/\b(sou\s+da\s+equipe|equipe\s+interna|time\s+interno|uso\s+interno)\b/i.test(t)) return true
+  return false
+}
+
 /** Deve executar distribuir_humano + salesbot consultor (não só responder em texto). */
 export function shouldHandoffToHuman(userMessage, historyMessages = []) {
+  if (messageLooksLikeOperationalChat(userMessage) && !messageRequestsHuman(userMessage)) return false
   if (messageRequestsHuman(userMessage)) return true
   if (detectMatriculaHandoffIntent(userMessage, historyMessages)) return true
   if (userFrustratedAfterHumanRequest(userMessage)) {
@@ -210,26 +229,35 @@ export function shouldHandoffToHuman(userMessage, historyMessages = []) {
   return false
 }
 
-/** Matrícula com dados mínimos — encaminha salesbot 49813 sem esperar o LLM. */
+const MATRICULA_INTENT_RE =
+  /\b(matr[ií]cula|inscri[cç][aã]o|me\s+inscrever|quero\s+me\s+matricular|fazer\s+(a\s+)?inscri[cç][aã]o|garantir\s+(a\s+)?vaga|quero\s+me\s+inscrever)\b/i
+const INGRESSO_RE =
+  /\b(enem|vestibular|ingresso|transfer[eê]ncia|segunda\s+gradua[cç][aã]o|m[uú]ltipla\s+escolha)\b/i
+
+function recentUserTexts(historyMessages, max = 4) {
+  return (historyMessages || [])
+    .filter((m) => m.role === 'user')
+    .slice(-max)
+    .map((m) => normalizeMessageForScope(m.content).toLowerCase())
+}
+
+/**
+ * Matrícula automática (salesbot 49813) só quando o lead pede NESTE turno.
+ * Histórico antigo (ex.: lead voltou ao funil da IA) não pode reativar o fluxo.
+ */
 export function detectMatriculaHandoffIntent(userMessage, historyMessages = []) {
-  const texts = [
-    userMessage,
-    ...(historyMessages || [])
-      .filter((m) => m.role === 'user')
-      .slice(-5)
-      .map((m) => m.content),
-  ]
-  const combined = texts.map((t) => normalizeMessageForScope(t)).join('\n').toLowerCase()
-  if (!combined || combined.length < 8) return false
-  const wantsMatricula =
-    /\b(matr[ií]cula|inscri[cç][aã]o|me\s+inscrever|quero\s+me\s+matricular|fazer\s+(a\s+)?inscri[cç][aã]o)\b/i.test(
-      combined,
-    )
-  if (!wantsMatricula) return false
-  return (
-    /\b(enem|vestibular|ingresso|transfer[eê]ncia|segunda\s+gradua[cç][aã]o)\b/i.test(combined) ||
-    /\bcurso\b/i.test(combined)
-  )
+  const current = normalizeMessageForScope(userMessage).toLowerCase()
+  if (!current || current.length < 8) return false
+  if (messageLooksLikeOperationalChat(userMessage)) return false
+  if (!MATRICULA_INTENT_RE.test(current)) return false
+
+  const hasIngresso =
+    INGRESSO_RE.test(current) || recentUserTexts(historyMessages).some((t) => INGRESSO_RE.test(t))
+  const hasCurso =
+    /\bcurso\b/i.test(current) ||
+    recentUserTexts(historyMessages).some((t) => /\bcurso\b/i.test(t))
+
+  return hasIngresso && hasCurso
 }
 
 /** Salesbot consultor (49777) vs matrícula (49813) no encaminhamento automático. */
