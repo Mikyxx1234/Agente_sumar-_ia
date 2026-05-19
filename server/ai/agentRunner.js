@@ -25,6 +25,7 @@ import {
 } from '../../libShared/scopeHeuristics.js'
 import {
   conversationHasActiveTopic,
+  extractDiscussedCourseFromHistory,
   buildContextualGreetingReply,
 } from '../../libShared/conversationContextHeuristics.js'
 import { tryHandleUnsupportedCourseLevelInquiry } from '../courseLevelInquiry.js'
@@ -278,7 +279,9 @@ export async function runAgent(env, input) {
   }
 
   if (isGreetingOnly(userMessage)) {
-    const hasContext = conversationHasActiveTopic(historyMessages)
+    const hasContext =
+      conversationHasActiveTopic(historyMessages) ||
+      Boolean(extractDiscussedCourseFromHistory(historyMessages))
     const greetingReply = hasContext
       ? buildContextualGreetingReply({ userMessage, pushName: input?.pushName, historyMessages })
       : buildGreetingReply({ userMessage, pushName: input?.pushName })

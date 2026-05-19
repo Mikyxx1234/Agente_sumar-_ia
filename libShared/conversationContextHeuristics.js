@@ -25,7 +25,8 @@ export function extractDiscussedCourseFromHistory(historyMessages) {
 /** Já existe atendimento em andamento (não resetar com boas-vindas completas). */
 export function conversationHasActiveTopic(historyMessages) {
   const msgs = recentTranscript(historyMessages, 10)
-  if (msgs.length < 2) return false
+  if (msgs.length < 1) return false
+  if (extractDiscussedCourseFromHistory(historyMessages)) return true
 
   const blob = msgs
     .map((m) => String(m.content || ''))
