@@ -188,7 +188,7 @@ function formatDistribuirResult(data) {
  * Empurra os usages do `_meta` retornado por uma tool dentro do `ctx`.
  * Hoje só `inscricao` e `distribuir_humano` retornam `_meta`.
  */
-/** Matrícula → Form Sumar (template). Pós-formulário → salesbot 49815. */
+/** Matrícula → salesbot Formulario_Sum. Pós-formulário → salesbot 49815. */
 function resolveDistribuirMotivo(args = {}) {
   if (args.form_completed) return 'matricula_pos_form'
   if (args.motivo ?? args.fluxo) return args.motivo ?? args.fluxo
@@ -257,8 +257,8 @@ export function buildToolExecutors(env, ctx) {
             tipo_ingresso: tipo,
           })
           return [
-            'Fluxo de inscrição: template Form Sumar enviado ao lead.',
-            r.ok ? r.message : `Falha ao enviar template: ${r.message || r.template?.error}`,
+            'Fluxo de inscrição: salesbot Formulario_Sum ativado no Kommo.',
+            r.ok ? r.message : `Falha: ${r.message || r.result?.error}`,
           ].join('\n')
         }
         return matriculaViaConsultorInstruction(args)
@@ -270,11 +270,11 @@ export function buildToolExecutors(env, ctx) {
     distribuir_humano: async (args) => {
       const motivo = resolveDistribuirMotivo(args)
       const kind = normalizeSalesbotMotivo(motivo)
-      if (kind === 'inscricao_form') {
+      if (kind === 'formulario_sum') {
         const r = await runInscricaoFormStart(env, args)
         return [
-          'Template Form Sumar enviado. Aguarde o lead preencher o formulário — o salesbot 49815 dispara após o retorno.',
-          r.ok ? r.message : `Atenção: ${r.message || r.template?.error}`,
+          'Salesbot Formulario_Sum ativado. Aguarde o lead preencher o formulário — o salesbot 49815 dispara após o retorno.',
+          r.ok ? r.message : `Atenção: ${r.message || r.result?.error}`,
         ].join('\n')
       }
       const r = await runDistribuirHumano(env, {

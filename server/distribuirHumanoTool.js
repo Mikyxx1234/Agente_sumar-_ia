@@ -288,7 +288,7 @@ export function resolveDistribHandoffMode(env) {
 }
 
 /**
- * Encaminhamento Sumaré: dispara salesbot (49777 consultor / 49815 pós Form Sumar), pausa IA e registra nota.
+ * Encaminhamento Sumaré: dispara salesbot (49777 consultor / Formulario_Sum / 49815 pós-form), pausa IA e registra nota.
  * Não move pipeline nem exige distrib_comercial — evita funil errado e falhas antes do bot.
  */
 async function runMinimalDistribuirHandoff(env, ctx) {
@@ -306,16 +306,6 @@ async function runMinimalDistribuirHandoff(env, ctx) {
   const steps = []
   const warnings = []
   const kind = normalizeSalesbotMotivo(motivoFluxo)
-
-  if (kind === 'inscricao_form') {
-    return {
-      ok: false,
-      code: 'USE_INSCRICAO_FORM_FLOW',
-      message: 'Motivo matrícula/inscrição deve usar o template Form Sumar antes do salesbot 49815.',
-      id_lead: idLead,
-      steps,
-    }
-  }
 
   const [salesbotRes, dadosClienteRes] = await Promise.all([
     runKommoSalesbot(env, idLead, motivoFluxo),
@@ -350,7 +340,9 @@ async function runMinimalDistribuirHandoff(env, ctx) {
   let noteText =
     kind === 'matricula_pos_form'
       ? 'Form Sumar preenchido — salesbot pós-formulário disparado (agente IA).'
-      : 'Encaminhamento automático: lead pediu atendimento humano via WhatsApp (agente IA).'
+      : kind === 'formulario_sum'
+        ? 'Inscrição — salesbot Formulario_Sum ativado (agente IA).'
+        : 'Encaminhamento automático: lead pediu atendimento humano via WhatsApp (agente IA).'
   if (cursoHint) noteText += `\nCurso mencionado: ${String(cursoHint).trim()}`
   if (tipoIngressoHint) noteText += `\nIngresso: ${String(tipoIngressoHint).trim()}`
 
@@ -408,7 +400,9 @@ async function runMinimalDistribuirHandoff(env, ctx) {
     retorno: ok
       ? kind === 'matricula_pos_form'
         ? 'salesbot pós-formulário (49815) disparado; IA pausada'
-        : 'salesbot consultor disparado; IA pausada'
+        : kind === 'formulario_sum'
+          ? 'salesbot Formulario_Sum disparado'
+          : 'salesbot consultor disparado; IA pausada'
       : 'encaminhamento parcial (verifique salesbot no Kommo)',
     id_lead: idLead,
     motivo: kind,

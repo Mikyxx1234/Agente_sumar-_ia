@@ -2,9 +2,12 @@
  * Disparo de Salesbots no Kommo (POST /api/v2/salesbot/run).
  *
  * IDs padrão Sumaré:
- *   consultor / dúvida humana → 49777
- *   pós Form Sumar (inscrição)  → 49815 (49813 descontinuado)
+ *   consultor / dúvida humana     → 49777
+ *   formulário inscrição (início) → KOMMO_SALESBOT_FORMULARIO_SUM_ID (obrigatório no .env)
+ *   pós formulário preenchido     → 49815 (49813 descontinuado)
  */
+
+import { createLeadNote } from './kommoClient.js'
 
 const DEFAULT_BOT_CONSULTOR = 49777
 const DEFAULT_BOT_MATRICULA_POS_FORM = 49815
@@ -15,11 +18,23 @@ export function normalizeSalesbotMotivo(motivo) {
     .toLowerCase()
     .normalize('NFD')
     .replace(/\p{M}/gu, '')
-  if (['matricula_pos_form', 'pos_form', 'apos_formulario', 'form_sumar', 'form_completed'].includes(m)) {
+  if (['matricula_pos_form', 'pos_form', 'apos_formulario', 'form_completed'].includes(m)) {
     return 'matricula_pos_form'
   }
-  if (['matricula', 'inscricao', 'inscricao_ab', 'enrollment', 'inscricao_form'].includes(m)) {
-    return 'inscricao_form'
+  if (
+    [
+      'formulario_sum',
+      'formulario_sumar',
+      'form_sumar',
+      'form_sumar_start',
+      'inscricao_form',
+      'matricula',
+      'inscricao',
+      'inscricao_ab',
+      'enrollment',
+    ].includes(m)
+  ) {
+    return 'formulario_sum'
   }
   return 'consultor'
 }
@@ -36,6 +51,14 @@ export function resolveSalesbotBotId(env, motivo) {
     )
     return Number.isFinite(id) && id > 0 ? id : DEFAULT_BOT_MATRICULA_POS_FORM
   }
+  if (kind === 'formulario_sum') {
+    const id = Number(
+      env.KOMMO_SALESBOT_FORMULARIO_SUM_ID ||
+        env.KOMMO_SALESBOT_FORM_SUMAR_ID ||
+        env.KOMMO_SALESBOT_INSCRICAO_FORM_ID,
+    )
+    return Number.isFinite(id) && id > 0 ? id : null
+  }
   const id = Number(
     env.KOMMO_SALESBOT_DISTRIBUIR_ID ||
       env.KOMMO_SALESBOT_CONSULTOR_ID ||
@@ -48,9 +71,10 @@ export function resolveSalesbotBotId(env, motivo) {
 /**
  * @param {Record<string,string>} env
  * @param {number} idLead
- * @param {'consultor'|'matricula'|string} [motivo]
+ * @param {string} [motivo]
+ * @param {{ executionId?: string, note?: string }} [opts]
  */
-export async function runKommoSalesbot(env, idLead, motivo = 'consultor') {
+export async function runKommoSalesbot(env, idLead, motivo = 'consultor', opts = {}) {
   const leadId = Number(idLead)
   if (!Number.isFinite(leadId) || leadId <= 0) {
     return { ok: false, skipped: true, reason: 'invalid_lead_id' }
@@ -61,7 +85,19 @@ export async function runKommoSalesbot(env, idLead, motivo = 'consultor') {
     return { ok: false, skipped: true, reason: 'kommo_not_configured' }
   }
 
+  const kind = normalizeSalesbotMotivo(motivo)
   const botId = resolveSalesbotBotId(env, motivo)
+  if (botId == null) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: 'formulario_sum_bot_not_configured',
+      code: 'MISSING_FORMULARIO_SUM_BOT_ID',
+      error: 'Configure KOMMO_SALESBOT_FORMULARIO_SUM_ID com o ID numérico do salesbot Formulario_Sum no Kommo.',
+      motivo: kind,
+    }
+  }
+
   const url = `${kommoBase.replace(/\/$/, '')}/api/v2/salesbot/run`
   const res = await fetch(url, {
     method: 'POST',
@@ -73,11 +109,16 @@ export async function runKommoSalesbot(env, idLead, motivo = 'consultor') {
     body: JSON.stringify([{ entity_type: 'leads', entity_id: leadId, bot_id: botId }]),
   })
   const text = await res.text()
+
+  if (res.ok && opts.note) {
+    await createLeadNote(env, leadId, opts.note).catch(() => {})
+  }
+
   return {
     ok: res.ok,
     status: res.status,
     botId,
-    motivo: normalizeSalesbotMotivo(motivo),
+    motivo: kind,
     text: text.slice(0, 500),
   }
 }

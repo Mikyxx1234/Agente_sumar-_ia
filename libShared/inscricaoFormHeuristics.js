@@ -129,9 +129,15 @@ export function messageLooksLikeFormSumarResponse(text) {
 
 export function buildInscricaoFormSentReply(opts = {}) {
   const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
+  if (opts.resend) {
+    return (
+      `Claro${nameBit}! Acabei de reativar o envio do formulário de inscrição aqui no WhatsApp. ` +
+      `Confira a mensagem com o botão "Formulário" e preencha quando puder, tudo bem?`
+    )
+  }
   return (
-    `Perfeito${nameBit}! Para dar continuidade à sua inscrição na Faculdade Sumaré, enviei o formulário ` +
-    `"Form Sumar" aqui no WhatsApp. É rapidinho — preencha com seus dados básicos e, assim que enviar, ` +
+    `Perfeito${nameBit}! Para dar continuidade à sua inscrição na Faculdade Sumaré, acabei de enviar ` +
+    `o formulário de dados básicos aqui no WhatsApp. É rapidinho — preencha e envie; em seguida ` +
     `nossa equipe segue com o próximo passo com você por aqui.`
   )
 }

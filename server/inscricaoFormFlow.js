@@ -1,6 +1,7 @@
 /**
- * Fluxo inscrição Sumaré: template Form Sumar → preenchimento → salesbot 49815.
- * Substitui o disparo direto do salesbot 49813 (descontinuado).
+ * Fluxo inscrição Sumaré:
+ *   início → salesbot Kommo "Formulario_Sum" (envia o formulário no WhatsApp)
+ *   pós preenchimento → salesbot 49815 + pause IA
  */
 
 import {
@@ -20,6 +21,11 @@ import { findLeadByPhone } from './kommoClient.js'
 import { updateDadosCliente, getLeadIdByTelefone, normalizeTelefone } from './dadosClienteStore.js'
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
+
+function useWhatsappTemplateDelivery(env) {
+  const mode = String(env.INSCRICAO_FORM_DELIVERY || 'kommo_salesbot').trim().toLowerCase()
+  return mode === 'whatsapp_template' || mode === 'meta_template' || mode === 'template'
+}
 
 async function getFormStatus(env, telefone) {
   const { url, key, table } = getSupabaseCfg(env)
@@ -103,8 +109,45 @@ function buildAgentReturn({ executionId, model, t0, reply, steps, toolCalls, ctx
   }
 }
 
+/** Dispara salesbot Formulario_Sum ou template Meta (fallback legado). */
+async function deliverInscricaoForm(env, { telefone, leadId, executionId }) {
+  if (useWhatsappTemplateDelivery(env)) {
+    return {
+      delivery: 'whatsapp_template',
+      result: await sendFormSumarTemplate(env, { to: telefone, leadId, executionId }),
+    }
+  }
+
+  if (leadId == null) {
+    return {
+      delivery: 'kommo_salesbot',
+      result: {
+        ok: false,
+        code: 'LEAD_NOT_FOUND',
+        error: 'Lead não localizado no Kommo — necessário para ativar o salesbot Formulario_Sum.',
+      },
+    }
+  }
+
+  const salesbotRes = await runKommoSalesbot(env, leadId, 'formulario_sum', {
+    executionId,
+    note: `Salesbot Formulario_Sum ativado (inscrição via agente IA) — ${executionId || ''}`.trim(),
+  })
+  return {
+    delivery: 'kommo_salesbot',
+    result: {
+      ok: Boolean(salesbotRes.ok && !salesbotRes.skipped),
+      code: salesbotRes.code || (salesbotRes.ok ? 'SALESBOT_STARTED' : 'SALESBOT_FAILED'),
+      botId: salesbotRes.botId,
+      status: salesbotRes.status,
+      error: salesbotRes.error || salesbotRes.reason || salesbotRes.text,
+      skipped: salesbotRes.skipped,
+    },
+  }
+}
+
 /**
- * Lead pediu inscrição → envia template Form Sumar (sem salesbot 49813).
+ * Lead pediu inscrição → ativa salesbot Formulario_Sum (formulário no WhatsApp).
  */
 export async function tryHandleInscricaoFormStart(env, input) {
   const { telefone, userMessage, historyMessages, executionId, model, leadId: leadIdHint, pushName, t0 } = input
@@ -119,7 +162,7 @@ export async function tryHandleInscricaoFormStart(env, input) {
   }
   if (status === INSCRICAO_FORM_STATUS_AGUARDANDO && !asksResend) {
     const reply =
-      'Já enviei o formulário Form Sumar por aqui. Quando terminar de preencher e enviar, nossa equipe segue com você automaticamente. Precisa de ajuda com algum campo?'
+      'Já ativei o envio do formulário de inscrição por aqui. Quando terminar de preencher e enviar, nossa equipe segue com você automaticamente. Precisa de ajuda com algum campo?'
     return {
       handled: true,
       result: buildAgentReturn({
@@ -134,31 +177,36 @@ export async function tryHandleInscricaoFormStart(env, input) {
   }
 
   const idLead = await resolveLeadId(env, telefone, leadIdHint)
-  const templateRes = await sendFormSumarTemplate(env, {
-    to: telefone,
+  const delivery = await deliverInscricaoForm(env, {
+    telefone,
     leadId: idLead,
     executionId,
   })
+  const sendOk = Boolean(delivery.result?.ok)
 
-  const reply = buildInscricaoFormSentReply({ pushName })
   let statusUpdate = { ok: false, skipped: true }
-  if (templateRes.ok) {
+  if (sendOk) {
     statusUpdate = await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO)
   }
 
-  let whatsappReply = reply
-  if (asksResend && templateRes.ok) {
-    whatsappReply =
-      'Acabei de reenviar o formulário Form Sumar aqui no WhatsApp. Confira a mensagem com o botão "Formulário" e preencha quando puder, tudo bem?'
-  }
-  if (!templateRes.ok) {
+  let whatsappReply = buildInscricaoFormSentReply({ pushName, resend: asksResend })
+  if (!sendOk) {
     console.error(
-      `[inscricaoForm] FALHA template telefone=${telefone} templates=${templateRes.template} status=${templateRes.status} err=${templateRes.error}`,
+      `[inscricaoForm] FALHA delivery=${delivery.delivery} telefone=${telefone} lead=${idLead ?? 'n/a'} err=${delivery.result?.error || delivery.result?.code}`,
     )
-    whatsappReply =
-      'Queremos muito te ajudar com a inscrição na Faculdade Sumaré! No momento não consegui abrir o formulário automático no WhatsApp — um consultor entrará em contato em breve por aqui.'
-    // Envio único: flushSession já chama sendMessageWithNote com out.reply — não enviar aqui (evita duplicata).
+    if (delivery.result?.code === 'MISSING_FORMULARIO_SUM_BOT_ID') {
+      whatsappReply =
+        'Queremos muito te ajudar com a inscrição! No momento o formulário automático não está configurado no sistema — um consultor entrará em contato em breve por aqui.'
+    } else if (delivery.result?.code === 'LEAD_NOT_FOUND') {
+      whatsappReply =
+        'Perfeito! Para enviar o formulário de inscrição, preciso localizar seu cadastro — em instantes um consultor da Faculdade Sumaré fala com você por aqui, tudo bem?'
+    } else {
+      whatsappReply =
+        'Queremos muito te ajudar com a inscrição na Faculdade Sumaré! No momento não consegui abrir o formulário automático no WhatsApp — um consultor entrará em contato em breve por aqui.'
+    }
   }
+
+  const toolName = delivery.delivery === 'kommo_salesbot' ? 'formulario_sum_salesbot' : 'form_sumar_template'
 
   return {
     handled: true,
@@ -168,18 +216,29 @@ export async function tryHandleInscricaoFormStart(env, input) {
       t0,
       reply: whatsappReply,
       steps: [
-        { type: 'inscricao_form_template', ok: templateRes.ok, template: templateRes.template, status: templateRes.status },
-        { type: 'inscricao_form_status', ok: statusUpdate.ok, value: INSCRICAO_FORM_STATUS_AGUARDANDO },
+        {
+          type: 'inscricao_form_start',
+          delivery: delivery.delivery,
+          ok: sendOk,
+          bot_id: delivery.result?.botId,
+          template: delivery.result?.template,
+          status: delivery.result?.status,
+        },
+        { type: 'inscricao_form_status', ok: statusUpdate.ok, value: sendOk ? INSCRICAO_FORM_STATUS_AGUARDANDO : null },
       ],
       toolCalls: [
         {
-          tool: 'form_sumar_template',
-          args: { telefone, template: templateRes.template },
-          result: templateRes.ok ? 'Template enviado' : templateRes.error,
-          ok: templateRes.ok,
+          tool: toolName,
+          args: { telefone, id_lead: idLead, delivery: delivery.delivery },
+          result: sendOk ? 'Formulário disparado' : delivery.result?.error || delivery.result?.code,
+          ok: sendOk,
         },
       ],
-      ctxSnapshot: { inscricaoForm: 'template_sent', historyConsidered: historyMessages?.length || 0 },
+      ctxSnapshot: {
+        inscricaoForm: sendOk ? 'form_started' : 'form_start_failed',
+        delivery: delivery.delivery,
+        salesbotId: delivery.result?.botId,
+      },
     }),
   }
 }
@@ -250,19 +309,15 @@ export async function tryHandleInscricaoFormComplete(env, input) {
   }
 }
 
-/**
- * Se o orquestrador prometeu o formulário mas o envio automático não rodou antes, envia agora.
- */
 export async function tryEnsureInscricaoFormSent(env, input) {
   const { telefone, userMessage, historyMessages, llmReply } = input
   if (!telefone) return null
-
   if (messageIsCourseCatalogRequest(userMessage)) return null
 
   const llmPromisedForm =
     llmReply &&
     /\bformul[aá]rio\b/i.test(llmReply) &&
-    /\b(enviad|enviar|mandar|whatsapp|instantes)\b/i.test(llmReply)
+    /\b(enviad|enviar|mandar|whatsapp|instantes|ativar)\b/i.test(llmReply)
   const should =
     messageRequestsInscricaoForm(userMessage, historyMessages) ||
     messageAsksForFormResend(userMessage) ||
@@ -278,20 +333,23 @@ export async function tryEnsureInscricaoFormSent(env, input) {
   return tryHandleInscricaoFormStart(env, input)
 }
 
-/** Tool/API: início do fluxo (template). */
+/** Tool/API: início do fluxo (salesbot Formulario_Sum por padrão). */
 export async function runInscricaoFormStart(env, body) {
   const telefone = body?.telefone
   if (!telefone) return { ok: false, code: 'MISSING_TELEFONE' }
   const idLead = await resolveLeadId(env, telefone, body?.id_lead ?? body?.idLead)
-  const templateRes = await sendFormSumarTemplate(env, { to: telefone, leadId: idLead })
-  const statusUpdate = templateRes.ok
+  const delivery = await deliverInscricaoForm(env, { telefone, leadId: idLead })
+  const sendOk = Boolean(delivery.result?.ok)
+  const statusUpdate = sendOk
     ? await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO)
     : { ok: false, skipped: true }
   return {
-    ok: templateRes.ok,
-    template: templateRes,
+    ok: sendOk,
+    delivery: delivery.delivery,
+    result: delivery.result,
     statusUpdate,
-    message: templateRes.ok ? 'Template Form Sumar enviado.' : templateRes.error,
-    diagnose: templateRes.diagnose,
+    message: sendOk
+      ? 'Salesbot Formulario_Sum ativado (formulário enviado pelo Kommo).'
+      : delivery.result?.error || delivery.result?.code,
   }
 }

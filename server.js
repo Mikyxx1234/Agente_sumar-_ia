@@ -223,7 +223,23 @@ app.get('/api/inscricao/form-sumar/diagnose', async (req, res) => {
   }
 })
 
-/** Teste manual: envia o template Form Sumar para um telefone (body: { telefone, id_lead? }). */
+/** Teste: ativa salesbot Formulario_Sum (body: { telefone, id_lead? }). */
+app.post('/api/inscricao/formulario-sum/trigger', async (req, res) => {
+  try {
+    const telefone = req.body?.telefone
+    const idLead = req.body?.id_lead ?? req.body?.idLead
+    if (!telefone && !idLead) {
+      res.status(400).json({ ok: false, code: 'MISSING_PARAMS', error: 'Informe telefone ou id_lead.' })
+      return
+    }
+    const form = await runInscricaoFormStart(process.env, { telefone, id_lead: idLead })
+    res.status(form.ok ? 200 : 502).json(form)
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+/** Teste manual: mesmo fluxo de inscrição (salesbot Formulario_Sum por padrão). */
 app.post('/api/inscricao/form-sumar/send', async (req, res) => {
   try {
     const telefone = req.body?.telefone
@@ -264,10 +280,10 @@ app.post('/api/inscricao/run', async (req, res) => {
         })
         res.json({
           ok: form.ok,
-          code: form.ok ? 'FORM_SUMAR_SENT' : form.template?.code,
+          code: form.ok ? 'FORMULARIO_SUM_STARTED' : form.result?.code,
           form,
           message: form.ok
-            ? 'Template Form Sumar enviado. Salesbot 49815 após preenchimento do formulário.'
+            ? 'Salesbot Formulario_Sum ativado. Salesbot 49815 após preenchimento do formulário.'
             : matriculaViaConsultorInstruction(body),
         })
         return
