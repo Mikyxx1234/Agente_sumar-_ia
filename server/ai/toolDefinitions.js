@@ -149,8 +149,8 @@ export const TOOL_DEFINITIONS = [
             type: 'string',
             enum: ['consultor', 'matricula'],
             description:
-              'consultor = encaminhar dúvida/caso para humano (dispara salesbot 49777). ' +
-              'matricula = após coletar curso + tipo de ingresso para finalizar matrícula (dispara salesbot 49813). Default: consultor.',
+              'consultor = encaminhar dúvida/caso para humano (salesbot 49777). ' +
+              'matricula = enviar template Form Sumar (NÃO dispara salesbot direto). Default: consultor.',
           },
         },
         required: ['telefone'],

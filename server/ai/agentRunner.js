@@ -24,6 +24,7 @@ import {
   buildHumanHandoffReply,
 } from '../../libShared/scopeHeuristics.js'
 import { runDistribuirHumano, formatDistribuirHumanoReply } from '../distribuirHumanoTool.js'
+import { tryHandleInscricaoFormComplete, tryHandleInscricaoFormStart } from '../inscricaoFormFlow.js'
 
 const MAX_TOOL_ROUNDS = 5
 const CHAT_URL = 'https://api.openai.com/v1/chat/completions'
@@ -202,8 +203,23 @@ export async function runAgent(env, input) {
     preview: historyPreview,
   })
 
+  const formFlowCtx = { telefone, userMessage, historyMessages, executionId, model, leadId, pushName: input?.pushName, t0 }
+
+  if (telefone) {
+    const formDone = await tryHandleInscricaoFormComplete(env, formFlowCtx)
+    if (formDone?.handled) {
+      console.log(`[${executionId}] INSCRICAO_FORM_COMPLETE salesbot=${formDone.result?.ctxSnapshot?.salesbotId ?? 'n/a'}`)
+      return { ...formDone.result, historyLoaded: historyMessages.length, aiMeta: ctx.toAiMeta() }
+    }
+    const formStart = await tryHandleInscricaoFormStart(env, formFlowCtx)
+    if (formStart?.handled) {
+      console.log(`[${executionId}] INSCRICAO_FORM_START template enviado`)
+      return { ...formStart.result, historyLoaded: historyMessages.length, aiMeta: ctx.toAiMeta() }
+    }
+  }
+
   if (telefone && shouldHandoffToHuman(userMessage, historyMessages)) {
-    const handoffMotivo = detectHandoffMotivo(userMessage, historyMessages)
+    const handoffMotivo = detectHandoffMotivo()
     const dist = await runDistribuirHumano(env, {
       telefone,
       id_lead: leadId,

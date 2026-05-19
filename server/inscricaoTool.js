@@ -386,7 +386,11 @@ export async function runInscricao(env, body) {
   const kommoBase = env.KOMMO_BASE_URL || ''
   const kommoToken = env.KOMMO_ACCESS_TOKEN || ''
   const botId = Number(
-    env.KOMMO_SALESBOT_MATRICULA_ID || env.KOMMO_SALESBOT_BOT_ID || env.KOMMO_SALESBOT_BOT_ID_MATRICULA || 49813,
+    env.KOMMO_SALESBOT_MATRICULA_POS_FORM_ID ||
+      env.KOMMO_SALESBOT_MATRICULA_ID ||
+      env.KOMMO_SALESBOT_BOT_ID ||
+      env.KOMMO_SALESBOT_BOT_ID_MATRICULA ||
+      49815,
   )
   const pipelineId = Number(env.KOMMO_PIPELINE_ID || 5481944)
   const statusAguardandoInscricao = Number(
@@ -552,7 +556,7 @@ export async function runInscricao(env, body) {
   // série gastavam ~2-3s extras.
   const encTel = encodeURIComponent(telefone)
   const [salesbotRes, inscricaoAbRes, dadosClienteRes] = await Promise.all([
-    runKommoSalesbot(env, idLead, 'matricula').then((r) => ({
+    runKommoSalesbot(env, idLead, 'matricula_pos_form').then((r) => ({
       ok: r.ok,
       status: r.status,
       text: r.text || '',

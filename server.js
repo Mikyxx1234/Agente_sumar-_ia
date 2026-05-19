@@ -7,6 +7,7 @@ import { runNearestPolo } from './server/locationTool.js'
 import { runInscricao } from './server/inscricaoTool.js'
 import { isInscricaoAutomaticaEnabled, matriculaViaConsultorInstruction } from './server/inscricaoConfig.js'
 import { runDistribuirHumano } from './server/distribuirHumanoTool.js'
+import { runInscricaoFormStart } from './server/inscricaoFormFlow.js'
 import { runBuscarHistorico } from './server/memoryTool.js'
 import { marcarClienteIA, updateDadosCliente, getLeadIdByTelefone } from './server/dadosClienteStore.js'
 import { saveConversation } from './server/historyStore.js'
@@ -220,19 +221,18 @@ app.post('/api/inscricao/run', async (req, res) => {
       const curso = body.curso ?? body.Curso
       const tipo = body.tipo_ingresso ?? body.tipoIngresso
       if (telefone && curso && tipo) {
-        const dist = await runDistribuirHumano(process.env, {
+        const form = await runInscricaoFormStart(process.env, {
           telefone,
           id_lead: body.id_lead ?? body.idLead,
-          motivo: 'matricula',
           curso,
           tipo_ingresso: tipo,
         })
         res.json({
-          ok: dist.ok,
-          code: dist.ok ? 'MATRICULA_VIA_CONSULTOR_EXECUTED' : dist.code,
-          distribuir: dist,
-          message: dist.ok
-            ? 'Encaminhado para consultor (salesbot matrícula 49813).'
+          ok: form.ok,
+          code: form.ok ? 'FORM_SUMAR_SENT' : form.template?.code,
+          form,
+          message: form.ok
+            ? 'Template Form Sumar enviado. Salesbot 49815 após preenchimento do formulário.'
             : matriculaViaConsultorInstruction(body),
         })
         return

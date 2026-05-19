@@ -11,6 +11,8 @@
 import { runInscricao } from '../inscricaoTool.js'
 import { isInscricaoAutomaticaEnabled, matriculaViaConsultorInstruction } from '../inscricaoConfig.js'
 import { runDistribuirHumano } from '../distribuirHumanoTool.js'
+import { runInscricaoFormStart } from '../inscricaoFormFlow.js'
+import { normalizeSalesbotMotivo } from '../kommoSalesbot.js'
 import { runBuscarHistorico } from '../memoryTool.js'
 import { resolveModel } from './modelRegistry.js'
 import { rewriteSearchQuery } from './queryRewrite.js'
@@ -186,8 +188,9 @@ function formatDistribuirResult(data) {
  * Empurra os usages do `_meta` retornado por uma tool dentro do `ctx`.
  * Hoje só `inscricao` e `distribuir_humano` retornam `_meta`.
  */
-/** Garante salesbot 49813 quando curso+ingresso vierem sem motivo explícito. */
+/** Matrícula → Form Sumar (template). Pós-formulário → salesbot 49815. */
 function resolveDistribuirMotivo(args = {}) {
+  if (args.form_completed) return 'matricula_pos_form'
   if (args.motivo ?? args.fluxo) return args.motivo ?? args.fluxo
   const curso = args.curso ?? args.Curso ?? args.nome_curso
   const tipo = args.tipo_ingresso ?? args.tipoIngresso ?? args.ingresso
@@ -247,18 +250,15 @@ export function buildToolExecutors(env, ctx) {
         const curso = args.curso ?? args.Curso
         const tipo = args.tipo_ingresso ?? args.tipoIngresso
         if (telefone && curso && tipo) {
-          const r = await runDistribuirHumano(env, {
+          const r = await runInscricaoFormStart(env, {
             telefone,
             id_lead: args.id_lead ?? args.idLead,
-            motivo: 'matricula',
             curso,
             tipo_ingresso: tipo,
           })
-          absorbToolMeta(safeCtx, r)
-          const base = formatDistribuirResult(r)
           return [
-            'Matrícula automática no Kommo está DESLIGADA — encaminhamento via consultor executado.',
-            base,
+            'Fluxo de inscrição: template Form Sumar enviado ao lead.',
+            r.ok ? r.message : `Falha ao enviar template: ${r.message || r.template?.error}`,
           ].join('\n')
         }
         return matriculaViaConsultorInstruction(args)
@@ -269,7 +269,18 @@ export function buildToolExecutors(env, ctx) {
     },
     distribuir_humano: async (args) => {
       const motivo = resolveDistribuirMotivo(args)
-      const r = await runDistribuirHumano(env, { ...args, motivo })
+      const kind = normalizeSalesbotMotivo(motivo)
+      if (kind === 'inscricao_form') {
+        const r = await runInscricaoFormStart(env, args)
+        return [
+          'Template Form Sumar enviado. Aguarde o lead preencher o formulário — o salesbot 49815 dispara após o retorno.',
+          r.ok ? r.message : `Atenção: ${r.message || r.template?.error}`,
+        ].join('\n')
+      }
+      const r = await runDistribuirHumano(env, {
+        ...args,
+        motivo: kind === 'matricula_pos_form' ? 'matricula_pos_form' : 'consultor',
+      })
       absorbToolMeta(safeCtx, r)
       return formatDistribuirResult(r)
     },

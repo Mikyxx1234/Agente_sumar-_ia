@@ -288,7 +288,7 @@ export function resolveDistribHandoffMode(env) {
 }
 
 /**
- * Encaminhamento Sumaré: dispara salesbot (49777/49813), pausa IA e registra nota.
+ * Encaminhamento Sumaré: dispara salesbot (49777 consultor / 49815 pós Form Sumar), pausa IA e registra nota.
  * Não move pipeline nem exige distrib_comercial — evita funil errado e falhas antes do bot.
  */
 async function runMinimalDistribuirHandoff(env, ctx) {
@@ -306,6 +306,16 @@ async function runMinimalDistribuirHandoff(env, ctx) {
   const steps = []
   const warnings = []
   const kind = normalizeSalesbotMotivo(motivoFluxo)
+
+  if (kind === 'inscricao_form') {
+    return {
+      ok: false,
+      code: 'USE_INSCRICAO_FORM_FLOW',
+      message: 'Motivo matrícula/inscrição deve usar o template Form Sumar antes do salesbot 49815.',
+      id_lead: idLead,
+      steps,
+    }
+  }
 
   const [salesbotRes, dadosClienteRes] = await Promise.all([
     runKommoSalesbot(env, idLead, motivoFluxo),
@@ -338,8 +348,8 @@ async function runMinimalDistribuirHandoff(env, ctx) {
   if (!dadosClienteRes.ok) warnings.push(`dados_cliente: ${dadosClienteRes.error}`)
 
   let noteText =
-    kind === 'matricula'
-      ? 'Encaminhamento automático: lead pediu matrícula/inscrição via WhatsApp (agente IA).'
+    kind === 'matricula_pos_form'
+      ? 'Form Sumar preenchido — salesbot pós-formulário disparado (agente IA).'
       : 'Encaminhamento automático: lead pediu atendimento humano via WhatsApp (agente IA).'
   if (cursoHint) noteText += `\nCurso mencionado: ${String(cursoHint).trim()}`
   if (tipoIngressoHint) noteText += `\nIngresso: ${String(tipoIngressoHint).trim()}`
@@ -396,8 +406,8 @@ async function runMinimalDistribuirHandoff(env, ctx) {
     ok,
     handoff_mode: 'minimal',
     retorno: ok
-      ? kind === 'matricula'
-        ? 'salesbot matrícula disparado; IA pausada'
+      ? kind === 'matricula_pos_form'
+        ? 'salesbot pós-formulário (49815) disparado; IA pausada'
         : 'salesbot consultor disparado; IA pausada'
       : 'encaminhamento parcial (verifique salesbot no Kommo)',
     id_lead: idLead,
@@ -832,12 +842,12 @@ export async function runDistribuirHumano(env, body) {
     warnings.push(`kommo_salesbot: ${(salesbotRes.text || '').slice(0, 200)}`)
   }
 
-  const retornoMatricula = normalizeSalesbotMotivo(motivoFluxo) === 'matricula'
+  const retornoMatricula = normalizeSalesbotMotivo(motivoFluxo) === 'matricula_pos_form'
   return {
     ok: true,
     handoff_mode: 'full',
     retorno: retornoMatricula
-      ? 'lead encaminhado para consultor finalizar matrícula (salesbot matrícula disparado)'
+      ? 'lead encaminhado após Form Sumar (salesbot pós-formulário disparado)'
       : 'atendimento distribuido para consultor',
     id_lead: idLead,
     consultor: consultorNome,

@@ -218,7 +218,6 @@ export function messageLooksLikeOperationalChat(text) {
 export function shouldHandoffToHuman(userMessage, historyMessages = []) {
   if (messageLooksLikeOperationalChat(userMessage) && !messageRequestsHuman(userMessage)) return false
   if (messageRequestsHuman(userMessage)) return true
-  if (detectMatriculaHandoffIntent(userMessage, historyMessages)) return true
   if (userFrustratedAfterHumanRequest(userMessage)) {
     const recentUser = (historyMessages || [])
       .filter((m) => m.role === 'user')
@@ -260,9 +259,8 @@ export function detectMatriculaHandoffIntent(userMessage, historyMessages = []) 
   return hasIngresso && hasCurso
 }
 
-/** Salesbot consultor (49777) vs matrícula (49813) no encaminhamento automático. */
-export function detectHandoffMotivo(userMessage, historyMessages = []) {
-  if (detectMatriculaHandoffIntent(userMessage, historyMessages)) return 'matricula'
+/** Encaminhamento automático: só consultor (49777). Matrícula usa fluxo Form Sumar. */
+export function detectHandoffMotivo() {
   return 'consultor'
 }
 

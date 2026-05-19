@@ -3,11 +3,11 @@
  *
  * IDs padrão Sumaré:
  *   consultor / dúvida humana → 49777
- *   matrícula / inscrição     → 49813
+ *   pós Form Sumar (inscrição)  → 49815 (49813 descontinuado)
  */
 
 const DEFAULT_BOT_CONSULTOR = 49777
-const DEFAULT_BOT_MATRICULA = 49813
+const DEFAULT_BOT_MATRICULA_POS_FORM = 49815
 
 export function normalizeSalesbotMotivo(motivo) {
   const m = String(motivo || 'consultor')
@@ -15,20 +15,26 @@ export function normalizeSalesbotMotivo(motivo) {
     .toLowerCase()
     .normalize('NFD')
     .replace(/\p{M}/gu, '')
-  if (['matricula', 'inscricao', 'inscricao_ab', 'enrollment'].includes(m)) return 'matricula'
+  if (['matricula_pos_form', 'pos_form', 'apos_formulario', 'form_sumar', 'form_completed'].includes(m)) {
+    return 'matricula_pos_form'
+  }
+  if (['matricula', 'inscricao', 'inscricao_ab', 'enrollment', 'inscricao_form'].includes(m)) {
+    return 'inscricao_form'
+  }
   return 'consultor'
 }
 
 /** Resolve bot_id conforme motivo do fluxo. */
 export function resolveSalesbotBotId(env, motivo) {
   const kind = normalizeSalesbotMotivo(motivo)
-  if (kind === 'matricula') {
+  if (kind === 'matricula_pos_form') {
     const id = Number(
-      env.KOMMO_SALESBOT_MATRICULA_ID ||
+      env.KOMMO_SALESBOT_MATRICULA_POS_FORM_ID ||
+        env.KOMMO_SALESBOT_MATRICULA_ID ||
         env.KOMMO_SALESBOT_ID_MATRICULA ||
         env.KOMMO_SALESBOT_BOT_ID_MATRICULA,
     )
-    return Number.isFinite(id) && id > 0 ? id : DEFAULT_BOT_MATRICULA
+    return Number.isFinite(id) && id > 0 ? id : DEFAULT_BOT_MATRICULA_POS_FORM
   }
   const id = Number(
     env.KOMMO_SALESBOT_DISTRIBUIR_ID ||

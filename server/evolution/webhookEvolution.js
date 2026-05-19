@@ -296,6 +296,32 @@ function getTextContent(payload) {
   )
 }
 
+/** WhatsApp Flow (Form Sumar) — resposta estruturada após preenchimento. */
+function extractFormSumarPayloadText(payload) {
+  const d = payload?.data || payload
+  const m = d?.message || {}
+  const nfm =
+    m.interactiveMessage?.nativeFlowReplyMessage ||
+    m.nativeFlowReplyMessage ||
+    m.nfmReplyMessage ||
+    null
+  const rawJson =
+    nfm?.response_json ||
+    nfm?.body ||
+    m.interactive?.nfm_reply?.response_json ||
+    m.interactive?.nfm_reply?.body ||
+    null
+  if (rawJson) {
+    const s = typeof rawJson === 'string' ? rawJson : JSON.stringify(rawJson)
+    return `[FORMULARIO SUMAR]: ${s}`
+  }
+  const interactiveBody = m.interactiveMessage?.body?.text || m.interactive?.body?.text
+  if (interactiveBody && /\bformul[aá]rio\b/i.test(String(interactiveBody))) {
+    return `[FORMULARIO SUMAR]: ${interactiveBody}`
+  }
+  return ''
+}
+
 function authOk(env, req) {
   const expected = env.EVOLUTION_WEBHOOK_TOKEN
   if (!expected) return true
@@ -317,6 +343,14 @@ async function extractMessageText(env, payload, messageType) {
     case 'templateButtonReplyMessage':
     case 'listResponseMessage':
       return getTextContent(payload)
+
+    case 'interactiveMessage':
+    case 'nativeFlowReplyMessage':
+    case 'nfmReplyMessage': {
+      const formText = extractFormSumarPayloadText(payload)
+      if (formText) return formText
+      return getTextContent(payload)
+    }
 
     case 'audioMessage': {
       const { base64: b64 } = await resolveMediaBase64(env, payload, 'audio')
