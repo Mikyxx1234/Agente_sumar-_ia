@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useMemo } from 'react'
 import { Send, Settings, Trash2, Bot, User, AlertCircle, Key, Sparkles, Check, DollarSign, FileText, MessageSquare, Phone, Clock, Image as ImageIcon, Mic, Square, Loader2, Paperclip } from 'lucide-react'
 import { TOOL_DEFINITIONS, TOOL_EXECUTORS } from '../lib/supabaseSearch'
 import { generateExecutionId, saveExecution } from '../lib/executionStore'
-import { DEFAULT_SCOPE_REFUSAL, matchScopeHeuristic } from '../lib/scopeHeuristics'
+import { DEFAULT_SCOPE_REFUSAL, matchScopeHeuristic, isGreetingOnly, buildGreetingReply } from '../lib/scopeHeuristics'
 import { OPENAI_CHAT_MODELS } from '../lib/openaiPricing'
 
 const MODELS = OPENAI_CHAT_MODELS
@@ -184,13 +184,15 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
 2. Tools: buscar_conhecimento, buscar_precos, buscar_informacoes, buscar_pos, buscar_perguntas, distribuir_humano, buscar_historico_conversa (inscricao automática DESLIGADA — matrícula via consultor). USE-AS quando couber. Para curso/preço/MBA/modalidade, prefira buscar_conhecimento (base Faculdade Sumaré).
 3. MODALIDADE: a Faculdade Sumaré oferta somente EAD (a distância). Não há polo presencial nem semi-presencial — não prometa visita a unidade nem calcule distância até polo.
 4. MEMÓRIA: se o telefone do lead estiver disponível no contexto e você ainda não conhecer a conversa prévia, chame buscar_historico_conversa UMA vez no início do turno (limit 8–20) para entender o que já foi conversado antes de responder. Nunca mencione essa consulta ao usuário.
-5. MATRÍCULA / INSCRIÇÃO: NÃO chame inscricao. Colete curso (do histórico) + tipo de ingresso (ENEM ou Vestibular Múltipla Escolha). Depois chame distribuir_humano com o telefone do contexto e diga que um consultor entrará em breve para finalizar a matrícula. Proibido pedir outro telefone, citar erro de cadastro ou mandar usar canal externo.
+5. MATRÍCULA / INSCRIÇÃO: NÃO chame inscricao. Colete curso + tipo de ingresso. Depois distribuir_humano com telefone do contexto e motivo: "matricula" (salesbot 49813). Dúvida humana/FAQ → motivo: "consultor" (salesbot 49777).
 6. Quando buscar preços ou informações, apresente os resultados encontrados ao usuário de forma clara e objetiva.
 7. CURSO INDISPONÍVEL: se o curso pedido não aparecer no CONTEXT da tool, NÃO diga que não encontrou ou que não existe. Busque de novo por área e sugira SOMENTE cursos cujos nomes estejam no CONTEXT (2–3), com preço/detalhes só do que estiver no CONTEXT. Nunca invente nomes de curso.
 8. Se a busca retornar programa parecido (ex.: lead pediu "Economia" e o CONTEXT traz "Ciências Econômicas"), apresente o que veio no CONTEXT e pergunte se é isso — sem dizer que o curso pedido não existe.
 9. NÃO mencione ferramentas internas, tools, agentes ou contexto técnico ao usuário.
 10. distribuir_humano: passe telefone do contexto; id_lead é opcional. Obrigatório após coletar dados para matrícula.
-11. Seja direto, profissional e acolhedor.`
+11. OPORTUNIDADE COMERCIAL (ganhar dinheiro, carreira, mundo digital): não recuse. Use buscar_conhecimento na área, sugira 1–3 cursos do CONTEXT, comente que diploma/formação abre portas no médio prazo e convide a matrícula com gentileza.
+12. SAUDAÇÕES (oi, bom dia, boa tarde): responda com acolhimento caloroso, apresente a Sumaré e convide a falar de cursos/matrícula. Nunca use recusa de fora do escopo.
+13. Seja direto, profissional e acolhedor.`
 
     return promptsText + '\n\n---\n\n' + playgroundOverride
   }
@@ -320,6 +322,12 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
   }
 
   const blockScopeInPlayground = async (text, { pushAssistant = true } = {}) => {
+    if (isGreetingOnly(text)) {
+      if (pushAssistant) {
+        setMessages((prev) => [...prev, { role: 'assistant', content: buildGreetingReply({ userMessage: text }) }])
+      }
+      return true
+    }
     const local = matchScopeHeuristic(text)
     if (local) {
       if (pushAssistant) {
@@ -578,6 +586,19 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
     }
 
     try {
+      if (isGreetingOnly(effectiveText)) {
+        const reply = buildGreetingReply({ userMessage: effectiveText })
+        execution.steps.push({ type: 'greeting' })
+        execution.response = reply
+        execution.totalDurationMs = Date.now() - t0
+        execution.usage._meta = aiMeta
+        saveExecution(execution)
+        setMessages((prev) => [...prev, { role: 'assistant', content: reply, execId }])
+        setLoading(false)
+        setToolStatus('')
+        return
+      }
+
       const localHeuristic = matchScopeHeuristic(effectiveText)
       if (localHeuristic) {
         finishScopeBlocked({

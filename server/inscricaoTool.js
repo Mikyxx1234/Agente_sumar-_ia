@@ -28,6 +28,7 @@
 
 import { resolveModel } from './ai/modelRegistry.js'
 import { findLeadByPhone, listLeadCustomFields } from './kommoClient.js'
+import { runKommoSalesbot } from './kommoSalesbot.js'
 
 // IDs dos campos "fixos" do Kommo. Para os campos da seção
 // "Inscrição" temos uma cascata: env > ID hardcodado conhecido >
@@ -384,7 +385,9 @@ export async function runInscricao(env, body) {
   const supabaseKey = env.SUPABASE_KEY || env.VITE_SUPABASE_KEY
   const kommoBase = env.KOMMO_BASE_URL || ''
   const kommoToken = env.KOMMO_ACCESS_TOKEN || ''
-  const botId = Number(env.KOMMO_SALESBOT_BOT_ID || 46605)
+  const botId = Number(
+    env.KOMMO_SALESBOT_MATRICULA_ID || env.KOMMO_SALESBOT_BOT_ID || env.KOMMO_SALESBOT_BOT_ID_MATRICULA || 49813,
+  )
   const pipelineId = Number(env.KOMMO_PIPELINE_ID || 5481944)
   const statusAguardandoInscricao = Number(
     env.KOMMO_STATUS_AGUARDANDO_INSCRICAO || DEFAULT_STATUS_AGUARDANDO_INSCRICAO,
@@ -549,10 +552,12 @@ export async function runInscricao(env, body) {
   // série gastavam ~2-3s extras.
   const encTel = encodeURIComponent(telefone)
   const [salesbotRes, inscricaoAbRes, dadosClienteRes] = await Promise.all([
-    kommoFetch(kommoBase, kommoToken, '/api/v2/salesbot/run', {
-      method: 'POST',
-      body: [{ entity_type: 'leads', entity_id: idLead, bot_id: botId }],
-    }),
+    runKommoSalesbot(env, idLead, 'matricula').then((r) => ({
+      ok: r.ok,
+      status: r.status,
+      text: r.text || '',
+      botId: r.botId,
+    })),
     supabaseRest(
       supabaseUrl,
       supabaseKey,
@@ -570,7 +575,13 @@ export async function runInscricao(env, body) {
       .catch((e) => ({ ok: false, error: e.message })),
   ])
 
-  steps.push({ step: 'kommo_salesbot', ok: salesbotRes.ok, status: salesbotRes.status })
+  steps.push({
+    step: 'kommo_salesbot',
+    ok: salesbotRes.ok,
+    status: salesbotRes.status,
+    bot_id: salesbotRes.botId || botId,
+    motivo: 'matricula',
+  })
   if (!salesbotRes.ok) {
     // Salesbot pode falhar por motivos benignos (bot já rodando,
     // permissão, etc.). Não bloqueia o resto do fluxo — só registra.

@@ -16,6 +16,7 @@
 
 import { resolveModel } from './ai/modelRegistry.js'
 import { findLeadByPhone } from './kommoClient.js'
+import { runKommoSalesbot, normalizeSalesbotMotivo } from './kommoSalesbot.js'
 
 const DEFAULT_DISTRIB_PIPELINE_ID = 11685120
 const DEFAULT_DISTRIB_STATUS_IDS = [89820300, 89820304]
@@ -283,6 +284,7 @@ function parseLeadFromKommoGet(data) {
  */
 export async function runDistribuirHumano(env, body) {
   const telefone = normalizeTelefone(body?.telefone)
+  const motivoFluxo = body?.motivo ?? body?.fluxo ?? 'consultor'
   let idLead = normalizeIdLead(body?.id_lead ?? body?.idLead)
   // O LLM frequentemente chama a tool com id_lead = 0 (default da
   // OpenAI quando ele não tem o ID no contexto). Tratamos 0/negativo
@@ -647,10 +649,13 @@ export async function runDistribuirHumano(env, body) {
     }
   })()
 
-  const [noteRes, finalPatch, distribuicaoRes] = await Promise.all([
+  const salesbotPromise = runKommoSalesbot(env, idLead, motivoFluxo)
+
+  const [noteRes, finalPatch, distribuicaoRes, salesbotRes] = await Promise.all([
     notePromise,
     finalPatchPromise,
     distribuicaoPromise,
+    salesbotPromise,
   ])
   steps.push({ step: 'kommo_note', ok: noteRes.ok, status: noteRes.status })
   if (!noteRes.ok) warnings.push(`kommo_note: ${noteRes.text.slice(0, 200)}`)
@@ -658,10 +663,24 @@ export async function runDistribuirHumano(env, body) {
   if (!finalPatch.ok) warnings.push(`kommo_final_lead: ${finalPatch.text.slice(0, 300)}`)
   steps.push({ step: 'supabase_distribuicao', ok: distribuicaoRes.ok, via: distribuicaoRes.via })
   if (!distribuicaoRes.ok) warnings.push(`distribuicao_por_consultor: ${distribuicaoRes.error}`)
+  steps.push({
+    step: 'kommo_salesbot',
+    ok: salesbotRes.ok,
+    status: salesbotRes.status,
+    bot_id: salesbotRes.botId,
+    motivo: salesbotRes.motivo || motivoFluxo,
+    skipped: salesbotRes.skipped || false,
+  })
+  if (!salesbotRes.ok && !salesbotRes.skipped) {
+    warnings.push(`kommo_salesbot: ${(salesbotRes.text || '').slice(0, 200)}`)
+  }
 
+  const retornoMatricula = normalizeSalesbotMotivo(motivoFluxo) === 'matricula'
   return {
     ok: true,
-    retorno: 'atendimento distribuido para consultor',
+    retorno: retornoMatricula
+      ? 'lead encaminhado para consultor finalizar matrícula (salesbot matrícula disparado)'
+      : 'atendimento distribuido para consultor',
     id_lead: idLead,
     consultor: consultorNome,
     id_consultor: consultorUserId,

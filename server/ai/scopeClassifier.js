@@ -10,6 +10,8 @@ import {
   matchScopeHeuristic,
   normalizeMessageForScope,
   messageLooksEducational,
+  messageLooksCareerIncomeOpportunity,
+  isGreetingOnly,
 } from '../../libShared/scopeHeuristics.js'
 
 const URL_CHAT = 'https://api.openai.com/v1/chat/completions'
@@ -20,7 +22,10 @@ const CLASSIFIER_HARD_RULES = `
 REGRA ABSOLUTA (prioridade sobre qualquer outro texto):
 - Perguntas de cultura geral, geografia (capitais, países), política internacional, economia global, SQL, programação, APIs, planilhas, notícias e tecnologia SEM relação com cursos ou matrícula da Faculdade Sumaré → dentro_escopo: false, categoria: fora_escopo.
 - Exemplos SEMPRE fora do escopo: "qual a capital da China", "como está a relação EUA-China", "query SQL", "como criar tabela vetorizada".
-- Só é dentro_escopo se o lead pergunta sobre cursos, preços, matrícula, inscrição, modalidade EAD, grade ou atendimento educacional da Faculdade Sumaré.`
+- DENTRO DO ESCOPO (categoria: oportunidade_comercial): lead quer ganhar dinheiro, mudar de vida, carreira, emprego, futuro profissional, trabalhar no digital/mundo digital/internet — mesmo sem citar "curso". O orquestrador vai sugerir formação e cursos da Sumaré.
+- DENTRO DO ESCOPO (categoria: saudacao): cumprimentos simples sem outro assunto — "oi", "olá", "bom dia", "boa tarde", "boa noite", "tudo bem?". NUNCA classifique como fora_escopo.
+- Exemplos SEMPRE dentro do escopo: "quero ganhar dinheiro no mundo digital", "como melhorar minha carreira", "qual curso me dá mais emprego", "bom dia", "oi".
+- Também é dentro_escopo se o lead pergunta sobre cursos, preços, matrícula, inscrição, modalidade EAD, grade ou atendimento educacional da Faculdade Sumaré.`
 
 function isEnabled(env) {
   return String(env.SCOPE_CLASSIFIER_ENABLED ?? 'true').toLowerCase() !== 'false'
@@ -93,6 +98,24 @@ export async function classifyMessageScope(env, input = {}) {
     return { blocked: false, reply: null, classification: null, source: 'skipped', reason: 'empty', model, usage: null, elapsedMs: Date.now() - t0 }
   }
 
+  if (isGreetingOnly(userMessage)) {
+    return {
+      blocked: false,
+      reply: null,
+      classification: {
+        dentro_escopo: true,
+        categoria: 'saudacao',
+        nivel: 'indefinido',
+        motivo: 'saudação simples',
+      },
+      source: 'heuristic',
+      reason: 'greeting',
+      model,
+      usage: null,
+      elapsedMs: Date.now() - t0,
+    }
+  }
+
   const heuristic = matchScopeHeuristic(userMessage)
   if (heuristic) {
     return blockResult(env, heuristic, 'heuristic', 'heuristic_match', model, null, Date.now() - t0)
@@ -159,6 +182,23 @@ export async function classifyMessageScope(env, input = {}) {
     }
 
     if (classification.dentro_escopo === false) {
+      if (messageLooksCareerIncomeOpportunity(userMessage)) {
+        return {
+          blocked: false,
+          reply: null,
+          classification: {
+            ...classification,
+            dentro_escopo: true,
+            categoria: 'oportunidade_comercial',
+            motivo: 'redirecionamento comercial (carreira/dinheiro/digital)',
+          },
+          source: 'llm',
+          reason: 'commercial_redirect_override',
+          model,
+          usage,
+          elapsedMs,
+        }
+      }
       return blockResult(env, classification, 'llm', 'out_of_scope', model, usage, elapsedMs)
     }
 

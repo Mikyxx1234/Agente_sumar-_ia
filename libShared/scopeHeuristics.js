@@ -7,7 +7,49 @@ export const DEFAULT_SCOPE_REFUSAL =
 /** Indica que a mensagem trata de oferta educacional Sumaré. */
 export function messageLooksEducational(text) {
   const t = String(text || '').toLowerCase()
+  if (messageLooksCareerIncomeOpportunity(text)) return true
   return /\b(curso|cursos|gradua[cç][aã]o|p[oó]s|mba|especializa|matr[ií]cula|inscri|mensalidade|faculdade|sumar[eé]|ead|bolsa|vestibular|enem|grade|modalidade|diploma|disciplina|aulas?|tcc|cr[eé]dito|tecn[oó]logo|licenciatura|bacharelado)\b/i.test(t)
+}
+
+/**
+ * Lead fala de dinheiro, carreira ou mundo digital — oportunidade de sugerir formação (não recusar).
+ */
+export function messageLooksCareerIncomeOpportunity(text) {
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (!t || t.length < 8) return false
+  if (containsSqlLikeContent(t)) return false
+  if (/\bqual\s+(é|e)\s+a\s+capital\b/i.test(t)) return false
+  if (/\b(capital|presidente|habitantes)\s+(da|de|do)\s+/i.test(t) && !/\b(curso|faculdade|matr[ií]cula)\b/i.test(t)) return false
+
+  const moneyCareer =
+    /\b(ganhar|ganho|ganhando|dinheiro|grana|renda|sal[aá]rio|enriquecer|ficar\s+rico|liberdade\s+financeira|independ[eê]ncia\s+financeira)\b/i.test(t) ||
+    /\b(mundo\s+digital|mercado\s+digital|economia\s+digital|trabalhar\s+(na\s+)?internet|home\s*office|trabalho\s+remoto|trabalhar\s+online)\b/i.test(t) ||
+    /\b(carreira|emprego|empregabilidade|recoloca[cç][aã]o|vagas?|profiss[aã]o|futuro\s+profissional|ascens[aã]o)\b/i.test(t) ||
+    /\b(mudar\s+de\s+vida|novo\s+rumo|crescimento\s+profissional|investir\s+em\s+mim|melhorar\s+de\s+vida)\b/i.test(t) ||
+    /\b(como\s+(fazer|conseguir|ter))\b[\s\S]{0,40}\b(dinheiro|renda|emprego|carreira)\b/i.test(t)
+
+  return moneyCareer
+}
+
+/** Termos sugeridos para buscar_conhecimento em oportunidade comercial. */
+export function buildCommercialRedirectSearchQuery(text) {
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (/\b(mundo\s+digital|marketing\s+digital|redes\s+sociais|e-?commerce|empreendedor|startup)\b/i.test(t)) {
+    return 'marketing digital tecnologia gestão empreendedorismo graduação EAD'
+  }
+  if (/\b(programa[cç][aã]o|software|ti\b|tecnologia\s+da\s+informa)/i.test(t)) {
+    return 'tecnologia informação sistemas desenvolvimento graduação EAD'
+  }
+  if (/\b(sa[uú]de|hospital|enfermagem|m[eé]dic)\b/i.test(t)) {
+    return 'saúde enfermagem graduação EAD'
+  }
+  if (/\b(advogad|direito|jur[ií]dic)\b/i.test(t)) {
+    return 'direito graduação EAD'
+  }
+  if (/\b(dinheiro|rico|renda|financeir|investir)\b/i.test(t)) {
+    return 'administração gestão negócios empreendedorismo graduação EAD'
+  }
+  return 'graduação EAD carreira mercado de trabalho formação superior'
 }
 
 /** SQL, DML ou sintaxe de banco — sempre fora do escopo do agente comercial. */
@@ -57,6 +99,82 @@ export function normalizeMessageForScope(text) {
   return t.trim()
 }
 
+function compactForGreetingMatch(text) {
+  return normalizeMessageForScope(text)
+    .toLowerCase()
+    .replace(/[!?.…,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+const GREETING_ONLY_PATTERNS = [
+  /^bom\s+dia$/,
+  /^boa\s+tarde$/,
+  /^boa\s+noite$/,
+  /^bom\s+dia\s+tudo\s+bem$/,
+  /^boa\s+tarde\s+tudo\s+bem$/,
+  /^boa\s+noite\s+tudo\s+bem$/,
+  /^oi+$/,
+  /^ol[aá]+$/,
+  /^opa$/,
+  /^e\s*a[ií]+$/,
+  /^eae$/,
+  /^hey$/,
+  /^hello$/,
+  /^hi$/,
+  /^salve$/,
+  /^fala$/,
+  /^tudo\s+bem$/,
+  /^tudo\s+bom$/,
+  /^como\s+vai$/,
+  /^como\s+vc\s+vai$/,
+  /^como\s+voce\s+vai$/,
+  /^bom$/,
+]
+
+/** Saudação pura, sem pedido de curso/preço/matrícula na mesma mensagem. */
+export function isGreetingOnly(text) {
+  const t = compactForGreetingMatch(text)
+  if (!t || t.length > 55) return false
+
+  if (
+    /\b(curso|cursos|matr[ií]cula|inscri|pre[cç]o|valor|mensalidade|gradua|p[oó]s|mba|enem|vestibular|bolsa|ead)\b/i.test(t)
+  ) {
+    return false
+  }
+  if (/\b(quero|preciso|gostaria|voc[eê]s\s+tem|tem\s+como|quanto\s+custa|informa[cç][aã]o\s+sobre)\b/i.test(t) && t.length > 18) {
+    return false
+  }
+
+  return GREETING_ONLY_PATTERNS.some((re) => re.test(t))
+}
+
+function extractFirstName(pushName) {
+  const raw = String(pushName || '').trim().split(/\s+/)[0] || ''
+  if (!raw || raw.length < 2) return ''
+  if (/^\d+$/.test(raw)) return ''
+  return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase()
+}
+
+/** Resposta cordial para saudação simples (sem chamar o orquestrador). */
+export function buildGreetingReply(opts = {}) {
+  const userMessage = opts.userMessage || ''
+  const firstName = extractFirstName(opts.pushName)
+  const nameBit = firstName ? `, ${firstName}` : ''
+
+  const t = compactForGreetingMatch(userMessage)
+  let open = `Olá${nameBit}!`
+  if (/^bom\s+dia/.test(t)) open = `Bom dia${nameBit}!`
+  else if (/^boa\s+tarde/.test(t)) open = `Boa tarde${nameBit}!`
+  else if (/^boa\s+noite/.test(t)) open = `Boa noite${nameBit}!`
+
+  return (
+    `${open} Seja bem-vindo(a) à Faculdade Sumaré. ` +
+    'Sou seu assistente virtual e estou aqui para te ajudar com cursos EAD de graduação e pós-graduação, valores, matrícula e inscrição. ' +
+    'Como posso te ajudar hoje? Já tem algum curso em mente ou quer conhecer as opções?'
+  )
+}
+
 function outOfScopeResult(motivo) {
   return {
     dentro_escopo: false,
@@ -72,6 +190,10 @@ function outOfScopeResult(motivo) {
 export function matchScopeHeuristic(text) {
   const t = normalizeMessageForScope(text)
   if (!t || t.length < 4) return null
+
+  if (isGreetingOnly(t)) return null
+
+  if (messageLooksCareerIncomeOpportunity(t)) return null
 
   if (containsSqlLikeContent(t)) {
     return outOfScopeResult('heurística: SQL ou consulta de banco de dados')

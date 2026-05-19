@@ -145,6 +145,13 @@ export const TOOL_DEFINITIONS = [
             type: 'integer',
             description: 'ID do lead no Kommo. OPCIONAL — se você não souber, omita este campo (NÃO mande 0 nem inventado).',
           },
+          motivo: {
+            type: 'string',
+            enum: ['consultor', 'matricula'],
+            description:
+              'consultor = encaminhar dúvida/caso para humano (dispara salesbot 49777). ' +
+              'matricula = após coletar curso + tipo de ingresso para finalizar matrícula (dispara salesbot 49813). Default: consultor.',
+          },
         },
         required: ['telefone'],
       },

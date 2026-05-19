@@ -2,6 +2,10 @@
 export {
   DEFAULT_SCOPE_REFUSAL,
   messageLooksEducational,
+  messageLooksCareerIncomeOpportunity,
+  buildCommercialRedirectSearchQuery,
+  isGreetingOnly,
+  buildGreetingReply,
   containsSqlLikeContent,
   normalizeMessageForScope,
   matchScopeHeuristic,

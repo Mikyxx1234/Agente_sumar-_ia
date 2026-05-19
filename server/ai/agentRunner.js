@@ -14,6 +14,12 @@ import { readChatMessages } from '../historyStore.js'
 import { generateExecutionId } from './executionTelemetry.js'
 import { resolveModel } from './modelRegistry.js'
 import { createExecutionContext } from './executionContext.js'
+import {
+  messageLooksCareerIncomeOpportunity,
+  buildCommercialRedirectSearchQuery,
+  isGreetingOnly,
+  buildGreetingReply,
+} from '../../libShared/scopeHeuristics.js'
 
 const MAX_TOOL_ROUNDS = 5
 const CHAT_URL = 'https://api.openai.com/v1/chat/completions'
@@ -192,9 +198,37 @@ export async function runAgent(env, input) {
     preview: historyPreview,
   })
 
+  if (isGreetingOnly(userMessage)) {
+    const greetingReply = buildGreetingReply({ userMessage, pushName: input?.pushName })
+    ctx.recordScopeClassification?.({
+      blocked: false,
+      source: 'heuristic',
+      reason: 'greeting',
+      classification: { dentro_escopo: true, categoria: 'saudacao', nivel: 'indefinido', motivo: 'saudação simples' },
+    })
+    console.log(`[${executionId}] GREETING handled (sem orquestrador)`)
+    return {
+      ok: true,
+      reply: greetingReply,
+      scopeBlocked: false,
+      greetingHandled: true,
+      toolCalls: [],
+      orchestratorSteps: [{ type: 'greeting', durationMs: Date.now() - t0 }],
+      ctxSnapshot: { greeting: true },
+      usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      durationMs: Date.now() - t0,
+      historyLoaded: historyMessages.length,
+      executionId,
+      model,
+      aiMeta: ctx.toAiMeta(),
+    }
+  }
+
   const skipScopeCheck = historyMessages.length === 0 && isAmbiguousShortReply(userMessage)
+  let scopeClassification = null
   if (!skipScopeCheck) {
     const scope = await classifyMessageScope(env, { userMessage, historyMessages })
+    scopeClassification = scope.classification
     ctx.recordScopeClassification?.({
       blocked: scope.blocked,
       source: scope.source,
@@ -262,6 +296,19 @@ export async function runAgent(env, input) {
   // a IA tende a alucinar curso (caso "Administração" do EX-260506-1702-057).
   // Injetamos system extra deixando MUITO claro que o LLM não pode inventar
   // nem mencionar nomes de cursos que o lead não falou.
+  const commercialOpportunity =
+    messageLooksCareerIncomeOpportunity(userMessage) ||
+    scopeClassification?.categoria === 'oportunidade_comercial'
+  const commercialHint = commercialOpportunity
+    ? {
+        role: 'system',
+        content:
+          'OPORTUNIDADE COMERCIAL: o lead falou de carreira, renda ou mundo digital. ' +
+          `Chame buscar_conhecimento neste turno (query sugerida: "${buildCommercialRedirectSearchQuery(userMessage)}"). ` +
+          'Acolha o objetivo, mencione com naturalidade que diploma/formação superior abre portas no médio prazo, cite 1–3 cursos só do CONTEXT e convide a saber valores ou matrícula. Não recuse como fora do escopo.',
+      }
+    : null
+
   const ambiguousNoContext = historyMessages.length === 0 && isAmbiguousShortReply(userMessage)
   const noContextWarning = ambiguousNoContext
     ? {
@@ -279,6 +326,7 @@ export async function runAgent(env, input) {
   const apiMessages = [
     { role: 'system', content: systemMessage },
     ...(contextPreamble ? [{ role: 'system', content: contextPreamble }] : []),
+    ...(commercialHint ? [commercialHint] : []),
     ...(noContextWarning ? [noContextWarning] : []),
     ...historyMessages,
     { role: 'user', content: userMessage },

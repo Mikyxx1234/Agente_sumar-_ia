@@ -383,8 +383,7 @@ export const TOOL_DEFINITIONS = [
     function: {
       name: 'distribuir_humano',
       description:
-        'Encaminha o lead para um consultor humano. Use quando: pedir humano/atendente; após coletar curso + tipo de ingresso (ENEM ou Vestibular Múltipla Escolha) para matrícula/inscrição; negociação, caso complexo ou FAQ sem resposta. ' +
-        'O sistema localiza o lead pelo telefone — id_lead é opcional.',
+        'Encaminha o lead para consultor humano e dispara salesbot no Kommo. motivo consultor (49777): dúvida/humano/FAQ. motivo matricula (49813): após curso + tipo de ingresso. id_lead opcional.',
       parameters: {
         type: 'object',
         properties: {
@@ -395,6 +394,11 @@ export const TOOL_DEFINITIONS = [
           id_lead: {
             type: 'integer',
             description: 'ID do lead no Kommo. OPCIONAL — se você não souber, omita este campo (NÃO mande 0 nem inventado).',
+          },
+          motivo: {
+            type: 'string',
+            enum: ['consultor', 'matricula'],
+            description: 'consultor = dúvida/caso humano; matricula = finalizar inscrição após coletar curso e ingresso.',
           },
         },
         required: ['telefone'],
