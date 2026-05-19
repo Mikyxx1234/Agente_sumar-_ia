@@ -317,7 +317,7 @@ export async function tryEnsureInscricaoFormSent(env, input) {
   const llmPromisedForm =
     llmReply &&
     /\bformul[aá]rio\b/i.test(llmReply) &&
-    /\b(enviad|enviar|mandar|whatsapp|instantes|ativar)\b/i.test(llmReply)
+    /\b(enviad|enviar|mandar|whatsapp|instantes|ativar|preencher)\b/i.test(llmReply)
   const should =
     messageRequestsInscricaoForm(userMessage, historyMessages) ||
     messageAsksForFormResend(userMessage) ||
@@ -326,7 +326,7 @@ export async function tryEnsureInscricaoFormSent(env, input) {
 
   const status = await getFormStatus(env, telefone)
   if (status === INSCRICAO_FORM_STATUS_CONCLUIDO) return null
-  if (status === INSCRICAO_FORM_STATUS_AGUARDANDO && !messageAsksForFormResend(userMessage)) {
+  if (status === INSCRICAO_FORM_STATUS_AGUARDANDO && !messageAsksForFormResend(userMessage) && !llmPromisedForm) {
     return null
   }
 

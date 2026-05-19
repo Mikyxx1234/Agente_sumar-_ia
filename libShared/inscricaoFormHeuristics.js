@@ -38,25 +38,48 @@ export function messageIsCourseCatalogRequest(text) {
   return false
 }
 
-/** Confirmação curta só quando a ÚLTIMA mensagem do assistente pediu para seguir com inscrição. */
+function assistantInEnrollmentStep(lastAssist) {
+  const a = String(lastAssist || '').toLowerCase()
+  if (!a) return false
+  return (
+    /\b(quer\s+seguir|deseja\s+seguir|deseja\s+se\s+inscrever|seguir\s+com|fazer\s+(a\s+)?inscri|enviar\s+o\s+formul[aá]rio)\b/i.test(
+      a,
+    ) ||
+    /\b(inscriver|matr[ií]cula|inscri[cç][aã]o)\b/i.test(a) ||
+    /\b(enem|vestibular|nota\s+do\s+enem|tipo\s+de\s+ingresso)\b/i.test(a)
+  )
+}
+
+/** Confirmação curta quando o assistente já está no passo de inscrição / ingresso. */
 function userConfirmsEnrollmentAfterAssistant(text, historyMessages) {
   const lastAssist = lastAssistantText(historyMessages)
-  if (!lastAssist) return false
-  const a = lastAssist.toLowerCase()
-  if (
-    !/\b(quer\s+seguir|deseja\s+seguir|seguir\s+com\s+a\s+(matr|inscri)|fazer\s+(a\s+)?inscri|enviar\s+o\s+formul[aá]rio)\b/i.test(
-      a,
-    )
-  ) {
-    return false
-  }
+  if (!assistantInEnrollmentStep(lastAssist)) return false
+
   const t = normalizeMessageForScope(text).toLowerCase()
-  if (!t || t.length > 72) return false
+  if (!t || t.length > 80) return false
   if (messageIsCourseCatalogRequest(text)) return false
   if (/\b(saber|conhecer|informa|listar|quais|valores|pre[cç]o|dura[cç]|pedidos|mais\s+procurad)\b/i.test(t)) {
     return false
   }
-  return /^\s*(sim|s|quero|pode|bora|vamos|ok|gostei|esse\s+curso|fazer)\b/i.test(t)
+
+  if (/\bquero\s+esse\s+curso\b/i.test(t)) return true
+  if (/\b(quero|gostei)\b/i.test(t) && /\b(esse|essa)\s+curso\b/i.test(t)) return true
+
+  return /^\s*(sim|s|quero|pode|bora|vamos|ok|gostei|esse\s+curso|fazer|isso)\b/i.test(t)
+}
+
+/** Resposta à pergunta de ENEM / ingresso no meio do funil de matrícula. */
+function userAnswersEnrollmentIngressoQuestion(text, historyMessages) {
+  const lastAssist = lastAssistantText(historyMessages)
+  if (!/\b(enem|vestibular|nota\s+do\s+enem|ingresso)\b/i.test(String(lastAssist || '').toLowerCase())) {
+    return false
+  }
+  const t = normalizeMessageForScope(text).toLowerCase().trim()
+  if (!t || t.length > 48) return false
+  return (
+    /^(sim|s|n[aã]o|nao|n|tenho|n[aã]o\s+tenho|nao\s+tenho)$/i.test(t) ||
+    /\b(n[aã]o\s+tenho|tenho\s+sim|fiz\s+enem|n[aã]o\s+fiz)\b/i.test(t)
+  )
 }
 
 /**
@@ -100,7 +123,9 @@ export function messageRequestsInscricaoForm(text, historyMessages = []) {
   if (/\bquero\s+fazer\b/i.test(t) && /\b(curso|esse|essa)\b/i.test(t)) return true
   if (/\bgostei\b/i.test(t) && /\bquero\b/i.test(t) && /\b(fazer|curso)\b/i.test(t)) return true
   if (/\b(quero|vou)\s+(fazer|curso)\b/i.test(t) && /\bcurso\b/i.test(t)) return true
+  if (/\bquero\s+esse\s+curso\b/i.test(t)) return true
 
+  if (userAnswersEnrollmentIngressoQuestion(text, historyMessages)) return true
   if (userConfirmsEnrollmentAfterAssistant(text, historyMessages)) return true
 
   return false

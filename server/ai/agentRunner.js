@@ -217,7 +217,9 @@ export async function runAgent(env, input) {
     }
     const formStart = await tryHandleInscricaoFormStart(env, formFlowCtx)
     if (formStart?.handled) {
-      console.log(`[${executionId}] INSCRICAO_FORM_START template enviado`)
+      console.log(
+        `[${executionId}] INSCRICAO_FORM_START salesbot=${formStart.result?.ctxSnapshot?.salesbotId ?? formStart.result?.toolCalls?.[0]?.ok ?? 'n/a'}`,
+      )
       return { ...formStart.result, historyLoaded: historyMessages.length, aiMeta: ctx.toAiMeta() }
     }
   }
