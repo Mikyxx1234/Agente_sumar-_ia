@@ -214,9 +214,13 @@ app.post('/api/location/nearest-polo', async (req, res) => {
 
 // ── Tool inscrição (Kommo + Supabase + OpenAI) ──
 
-/** Diagnóstico: canais e nomes configurados para o template Form Sumar. */
-app.get('/api/inscricao/form-sumar/diagnose', (req, res) => {
-  res.json(diagnoseFormSumarTemplate(process.env))
+/** Diagnóstico: canais, nomes configurados e templates aprovados no Meta. */
+app.get('/api/inscricao/form-sumar/diagnose', async (req, res) => {
+  try {
+    res.json(await diagnoseFormSumarTemplate(process.env))
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
 })
 
 /** Teste manual: envia o template Form Sumar para um telefone (body: { telefone, id_lead? }). */
@@ -237,7 +241,7 @@ app.post('/api/inscricao/form-sumar/send', async (req, res) => {
     res.status(status).json({
       ok: templateRes.ok,
       template: templateRes,
-      diagnose: diagnoseFormSumarTemplate(process.env),
+      diagnose: await diagnoseFormSumarTemplate(process.env),
     })
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })
