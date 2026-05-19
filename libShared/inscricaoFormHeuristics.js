@@ -45,7 +45,7 @@ function assistantInEnrollmentStep(lastAssist) {
     /\b(quer\s+seguir|deseja\s+seguir|deseja\s+se\s+inscrever|seguir\s+com|fazer\s+(a\s+)?inscri|enviar\s+o\s+formul[aá]rio)\b/i.test(
       a,
     ) ||
-    /\b(inscriver|matr[ií]cula|inscri[cç][aã]o)\b/i.test(a) ||
+    /\b(inscrever|matr[ií]cula|inscri[cç][aã]o)\b/i.test(a) ||
     /\b(enem|vestibular|nota\s+do\s+enem|tipo\s+de\s+ingresso)\b/i.test(a)
   )
 }
@@ -88,7 +88,14 @@ function userAnswersEnrollmentIngressoQuestion(text, historyMessages) {
  */
 export function messageRequestsInscricaoForm(text, historyMessages = []) {
   const t = normalizeMessageForScope(text).toLowerCase()
-  if (!t || t.length < 4) return false
+  if (!t) return false
+
+  const enrollmentContextReply =
+    userAnswersEnrollmentIngressoQuestion(text, historyMessages) ||
+    userConfirmsEnrollmentAfterAssistant(text, historyMessages)
+
+  if (t.length < 4 && !enrollmentContextReply) return false
+
   if (messageLooksLikeOperationalChat(text)) return false
   if (messageLooksLikeFormSumarResponse(text)) return false
   if (messageAsksForFormResend(text)) return false
