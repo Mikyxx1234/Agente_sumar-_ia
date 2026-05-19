@@ -7,6 +7,7 @@ import {
   INSCRICAO_FORM_STATUS_AGUARDANDO,
   INSCRICAO_FORM_STATUS_CONCLUIDO,
   messageRequestsInscricaoForm,
+  messageAsksForFormResend,
   messageLooksLikeFormSumarResponse,
   buildInscricaoFormSentReply,
   buildInscricaoFormCompleteReply,
@@ -106,14 +107,16 @@ function buildAgentReturn({ executionId, model, t0, reply, steps, toolCalls, ctx
  */
 export async function tryHandleInscricaoFormStart(env, input) {
   const { telefone, userMessage, historyMessages, executionId, model, leadId: leadIdHint, pushName, t0 } = input
-  if (!telefone || !messageRequestsInscricaoForm(userMessage)) return null
-  if (messageLooksLikeOperationalChat(userMessage)) return null
+  const wantsForm = messageRequestsInscricaoForm(userMessage, historyMessages)
+  const asksResend = messageAsksForFormResend(userMessage)
+  if (!telefone || (!wantsForm && !asksResend)) return null
+  if (messageLooksLikeOperationalChat(userMessage) && !asksResend) return null
 
   const status = await getFormStatus(env, telefone)
   if (status === INSCRICAO_FORM_STATUS_CONCLUIDO) {
     return null
   }
-  if (status === INSCRICAO_FORM_STATUS_AGUARDANDO) {
+  if (status === INSCRICAO_FORM_STATUS_AGUARDANDO && !asksResend) {
     const reply =
       'Já enviei o formulário Form Sumar por aqui. Quando terminar de preencher e enviar, nossa equipe segue com você automaticamente. Precisa de ajuda com algum campo?'
     return {
@@ -140,9 +143,16 @@ export async function tryHandleInscricaoFormStart(env, input) {
   const reply = buildInscricaoFormSentReply({ pushName })
 
   let whatsappReply = reply
-  if (!templateRes.ok) {
+  if (asksResend && templateRes.ok) {
     whatsappReply =
-      'Queremos muito te ajudar com a inscrição na Faculdade Sumaré! No momento não consegui abrir o formulário automático — um consultor entrará em contato em breve por aqui.'
+      'Acabei de reenviar o formulário Form Sumar aqui no WhatsApp. Confira a mensagem com o botão "Formulário" e preencha quando puder, tudo bem?'
+  }
+  if (!templateRes.ok) {
+    console.error(
+      `[inscricaoForm] FALHA template telefone=${telefone} templates=${templateRes.template} status=${templateRes.status} err=${templateRes.error}`,
+    )
+    whatsappReply =
+      'Queremos muito te ajudar com a inscrição na Faculdade Sumaré! No momento não consegui abrir o formulário automático no WhatsApp — um consultor entrará em contato em breve por aqui.'
     await sendMessageWithNote(env, {
       telefone,
       text: whatsappReply,
@@ -239,6 +249,32 @@ export async function tryHandleInscricaoFormComplete(env, input) {
       ctxSnapshot: { inscricaoForm: 'completed', salesbotId: salesbotRes.botId },
     }),
   }
+}
+
+/**
+ * Se o orquestrador prometeu o formulário mas o envio automático não rodou antes, envia agora.
+ */
+export async function tryEnsureInscricaoFormSent(env, input) {
+  const { telefone, userMessage, historyMessages, llmReply } = input
+  if (!telefone) return null
+
+  const llmPromisedForm =
+    llmReply &&
+    /\bformul[aá]rio\b/i.test(llmReply) &&
+    /\b(enviad|enviar|mandar|whatsapp|instantes)\b/i.test(llmReply)
+  const should =
+    messageRequestsInscricaoForm(userMessage, historyMessages) ||
+    messageAsksForFormResend(userMessage) ||
+    llmPromisedForm
+  if (!should) return null
+
+  const status = await getFormStatus(env, telefone)
+  if (status === INSCRICAO_FORM_STATUS_CONCLUIDO) return null
+  if (status === INSCRICAO_FORM_STATUS_AGUARDANDO && !messageAsksForFormResend(userMessage)) {
+    return null
+  }
+
+  return tryHandleInscricaoFormStart(env, input)
 }
 
 /** Tool/API: início do fluxo (template). */

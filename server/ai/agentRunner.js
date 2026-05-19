@@ -24,7 +24,11 @@ import {
   buildHumanHandoffReply,
 } from '../../libShared/scopeHeuristics.js'
 import { runDistribuirHumano, formatDistribuirHumanoReply } from '../distribuirHumanoTool.js'
-import { tryHandleInscricaoFormComplete, tryHandleInscricaoFormStart } from '../inscricaoFormFlow.js'
+import {
+  tryHandleInscricaoFormComplete,
+  tryHandleInscricaoFormStart,
+  tryEnsureInscricaoFormSent,
+} from '../inscricaoFormFlow.js'
 
 const MAX_TOOL_ROUNDS = 5
 const CHAT_URL = 'https://api.openai.com/v1/chat/completions'
@@ -494,6 +498,22 @@ export async function runAgent(env, input) {
       }
 
       const reply = msg.content || 'Sem resposta.'
+      const formAfter = await tryEnsureInscricaoFormSent(env, {
+        ...formFlowCtx,
+        llmReply: reply,
+      })
+      if (formAfter?.handled) {
+        console.log(
+          `[${executionId}] INSCRICAO_FORM_AFTER_LLM template_ok=${formAfter.result?.toolCalls?.[0]?.ok ?? false}`,
+        )
+        return {
+          ...formAfter.result,
+          toolCalls: [...(formAfter.result.toolCalls || []), ...toolTrace],
+          orchestratorSteps,
+          historyLoaded: historyMessages.length,
+          aiMeta: ctx.toAiMeta(),
+        }
+      }
       return {
         ok: true,
         reply,

@@ -5,12 +5,44 @@ import { normalizeMessageForScope, messageLooksLikeOperationalChat } from './sco
 export const INSCRICAO_FORM_STATUS_AGUARDANDO = 'aguardando_form_sumar'
 export const INSCRICAO_FORM_STATUS_CONCLUIDO = 'form_sumar_concluido'
 
-/** Lead quer iniciar / prosseguir inscrição ou matrícula (mensagem atual). */
-export function messageRequestsInscricaoForm(text) {
+/** Lead cobra o formulário que ainda não chegou. */
+export function messageAsksForFormResend(text) {
   const t = normalizeMessageForScope(text).toLowerCase()
-  if (!t || t.length < 6) return false
+  if (!t || t.length < 5) return false
+  return (
+    /\b(cad[eê]|cadê|onde|sumiu|manda|envia|reenvi)\b[\s\S]{0,45}\bformul[aá]rio\b/i.test(t) ||
+    /\bformul[aá]rio\b[\s\S]{0,30}\b(cad[eê]|cadê|onde|n[aã]o\s+chegou)\b/i.test(t) ||
+    /\bn[aã]o\s+(recebi|chegou|veio)\b[\s\S]{0,30}\bformul[aá]rio\b/i.test(t)
+  )
+}
+
+function recentAssistantText(historyMessages, max = 3) {
+  return (historyMessages || [])
+    .filter((m) => m.role === 'assistant')
+    .slice(-max)
+    .map((m) => String(m.content || ''))
+    .join('\n')
+    .toLowerCase()
+}
+
+/**
+ * Lead quer iniciar / prosseguir inscrição ou matrícula (mensagem atual + contexto recente).
+ * Inclui confirmações como "gostei e quero fazer esse curso" (sem palavra "matrícula").
+ */
+export function messageRequestsInscricaoForm(text, historyMessages = []) {
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (!t || t.length < 4) return false
   if (messageLooksLikeOperationalChat(text)) return false
   if (messageLooksLikeFormSumarResponse(text)) return false
+  if (messageAsksForFormResend(text)) return false
+
+  // Só informação sobre curso (valores, duração) — ainda não é inscrição
+  if (
+    /\b(valor|valores|pre[cç]o|mensalidade|dura[cç][aã]o|quanto\s+custa|grade)\b/i.test(t) &&
+    !/\b(fazer|matricul|inscri|me\s+inscrever)\b/i.test(t)
+  ) {
+    return false
+  }
 
   if (
     /\b(realizar|fazer|efetuar|concluir|continuar|prosseguir|seguir|avan[cç]ar|iniciar|come[cç]ar)\b[\s\S]{0,45}\b(inscri[cç][aã]o|cadastro|matr[ií]cula)\b/i.test(
@@ -26,8 +58,19 @@ export function messageRequestsInscricaoForm(text) {
   ) {
     return true
   }
-  if (/\b(quero|preciso)\b[\s\S]{0,25}\b(matr[ií]cula|inscri[cç][aã]o)\b/i.test(t)) return true
+  if (/\b(quero|preciso|vou)\b[\s\S]{0,25}\b(matr[ií]cula|inscri[cç][aã]o)\b/i.test(t)) return true
   if (/\b(matr[ií]cula|inscri[cç][aã]o)\b[\s\S]{0,30}\b(agora|j[aá]|por\s+favor)\b/i.test(t)) return true
+
+  // "quero fazer esse curso" / "gostei e quero fazer o curso"
+  if (/\bquero\s+fazer\b/i.test(t) && /\b(curso|esse|essa)\b/i.test(t)) return true
+  if (/\bgostei\b/i.test(t) && /\bquero\b/i.test(t) && /\b(fazer|curso)\b/i.test(t)) return true
+  if (/\b(quero|vou)\s+(fazer|curso)\b/i.test(t) && /\bcurso\b/i.test(t)) return true
+
+  const assist = recentAssistantText(historyMessages)
+  if (assist && /\b(quer\s+seguir|matr[ií]cula|inscri[cç][aã]o|formul[aá]rio)\b/i.test(assist)) {
+    if (/\b(sim|quero|pode|bora|vamos|ok|esse\s+curso|fazer|gostei)\b/i.test(t) && t.length < 80) return true
+  }
+
   return false
 }
 
