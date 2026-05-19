@@ -19,7 +19,10 @@ import {
   buildCommercialRedirectSearchQuery,
   isGreetingOnly,
   buildGreetingReply,
+  shouldHandoffToHuman,
+  buildHumanHandoffReply,
 } from '../../libShared/scopeHeuristics.js'
+import { runDistribuirHumano, formatDistribuirHumanoReply } from '../distribuirHumanoTool.js'
 
 const MAX_TOOL_ROUNDS = 5
 const CHAT_URL = 'https://api.openai.com/v1/chat/completions'
@@ -197,6 +200,43 @@ export async function runAgent(env, input) {
     source: historySource,
     preview: historyPreview,
   })
+
+  if (telefone && shouldHandoffToHuman(userMessage, historyMessages)) {
+    const dist = await runDistribuirHumano(env, {
+      telefone,
+      id_lead: leadId,
+      motivo: 'consultor',
+    })
+    if (dist._meta?.toolUsage) {
+      for (const u of dist._meta.toolUsage) ctx.recordToolUsage(u)
+    }
+    const salesbotStep = dist.steps?.find((s) => s.step === 'kommo_salesbot')
+    console.log(
+      `[${executionId}] AUTO_DISTRIBUIR_HUMANO ok=${dist.ok} salesbot_ok=${salesbotStep?.ok} bot_id=${salesbotStep?.bot_id ?? 'n/a'}`,
+    )
+    return {
+      ok: true,
+      reply: buildHumanHandoffReply({ ok: dist.ok, pushName: input?.pushName }),
+      distribuirHumanoHandled: true,
+      toolCalls: [
+        {
+          tool: 'distribuir_humano',
+          args: { telefone, id_lead: leadId, motivo: 'consultor' },
+          result: formatDistribuirHumanoReply(dist),
+          ok: dist.ok,
+          steps: dist.steps,
+        },
+      ],
+      orchestratorSteps: [{ type: 'auto_distribuir_humano', ok: dist.ok, durationMs: Date.now() - t0 }],
+      ctxSnapshot: { autoDistribuirHumano: true, distribuirOk: dist.ok },
+      usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      durationMs: Date.now() - t0,
+      historyLoaded: historyMessages.length,
+      executionId,
+      model,
+      aiMeta: ctx.toAiMeta(),
+    }
+  }
 
   if (isGreetingOnly(userMessage)) {
     const greetingReply = buildGreetingReply({ userMessage, pushName: input?.pushName })

@@ -496,6 +496,18 @@ export async function runDistribuirHumano(env, body) {
   steps.push({ step: 'kommo_assign_lead', ok: assignPatch.ok, status: assignPatch.status })
   if (!assignPatch.ok) {
     warnings.push(`kommo_assign_lead: ${assignPatch.text.slice(0, 300)}`)
+    const salesbotOnFail = await runKommoSalesbot(env, idLead, motivoFluxo)
+    steps.push({
+      step: 'kommo_salesbot',
+      ok: salesbotOnFail.ok,
+      status: salesbotOnFail.status,
+      bot_id: salesbotOnFail.botId,
+      motivo: salesbotOnFail.motivo || motivoFluxo,
+      after_assign_fail: true,
+    })
+    if (!salesbotOnFail.ok && !salesbotOnFail.skipped) {
+      warnings.push(`kommo_salesbot: ${(salesbotOnFail.text || '').slice(0, 200)}`)
+    }
     return {
       ok: false,
       code: 'KOMMO_ASSIGN_LEAD_FAILED',

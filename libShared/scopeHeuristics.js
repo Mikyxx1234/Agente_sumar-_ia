@@ -156,6 +156,70 @@ function extractFirstName(pushName) {
   return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase()
 }
 
+/** Lead pede atendimento humano / consultor / atendente. */
+export function messageRequestsHuman(text) {
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (!t || t.length < 5) return false
+  if (isGreetingOnly(text) && !/\b(humano|atendente|consultor|algu[eé]m|pessoa)\b/i.test(t)) return false
+
+  if (
+    /\b(falar|falo|conversar|quero|preciso|passa|me\s+(passa|conecta|liga|transfere)|chama)\b[\s\S]{0,55}\b(humano|humana|atendente|consultor|pessoa|algu[eé]m|gente|operador|representante)\b/i.test(
+      t,
+    )
+  ) {
+    return true
+  }
+  if (/\b(quero|preciso)\s+falar\s+com\b/i.test(t)) return true
+  if (/\bfalar\s+com\s+(um\s+)?(humano|atendente|consultor|algu[eé]m|pessoa)\b/i.test(t)) return true
+  if (/\b(humano|atendente|consultor|pessoa\s+real)\b[\s\S]{0,45}\b(por\s+favor|pfv|agora|já|ja|logo|rápido|rapido)\b/i.test(t)) return true
+  if (
+    /\b(só|somente|apenas)\b[\s\S]{0,40}\b(falar|conversar|quero)\b[\s\S]{0,40}\b(humano|algu[eé]m|consultor|atendente|pessoa)\b/i.test(
+      t,
+    )
+  ) {
+    return true
+  }
+  if (
+    /\bnão\s+quero\b[\s\S]{0,55}\b(curso|informa|ajuda\s+r[aá]pida|nada\s+disso)\b/i.test(t) &&
+    /\b(humano|algu[eé]m|consultor|atendente|pessoa)\b/i.test(t)
+  ) {
+    return true
+  }
+  return false
+}
+
+/** Frustração depois de já ter pedido humano no histórico recente. */
+export function userFrustratedAfterHumanRequest(text) {
+  const t = normalizeMessageForScope(text).toLowerCase()
+  return /\b(ser[aá]?\s+que\s+voce\s+entende|voc[eê]\s+entende|não\s+entende|nao\s+entende|não\s+adianta|nao\s+adianta)\b/i.test(t)
+}
+
+/** Deve executar distribuir_humano + salesbot consultor (não só responder em texto). */
+export function shouldHandoffToHuman(userMessage, historyMessages = []) {
+  if (messageRequestsHuman(userMessage)) return true
+  if (userFrustratedAfterHumanRequest(userMessage)) {
+    const recentUser = (historyMessages || [])
+      .filter((m) => m.role === 'user')
+      .slice(-6)
+      .map((m) => m.content)
+    return recentUser.some((c) => messageRequestsHuman(c))
+  }
+  return false
+}
+
+/** Resposta ao lead após encaminhamento automático para consultor. */
+export function buildHumanHandoffReply(opts = {}) {
+  const nameBit = extractFirstName(opts.pushName) ? `, ${extractFirstName(opts.pushName)}` : ''
+  if (opts.ok) {
+    return (
+      `Entendi${nameBit}! Já encaminhei seu atendimento para um consultor da Faculdade Sumaré — em breve alguém da equipe fala com você por aqui, tudo bem?`
+    )
+  }
+  return (
+    `Peço desculpas pela espera${nameBit}. Registrei seu pedido e um consultor da Faculdade Sumaré entrará em contato em breve para te atender pessoalmente.`
+  )
+}
+
 /** Resposta cordial para saudação simples (sem chamar o orquestrador). */
 export function buildGreetingReply(opts = {}) {
   const userMessage = opts.userMessage || ''
