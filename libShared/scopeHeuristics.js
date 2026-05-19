@@ -320,6 +320,15 @@ export function matchScopeHeuristic(text) {
 
   if (isGreetingOnly(t)) return null
 
+  // Import dinâmico evitado — checagem inline para não criar dependência circular
+  if (
+    /\bcursos?\s+t[eé]cnicos?\b/i.test(t) ||
+    /\bcurso\s+t[eé]cnico\b/i.test(t) ||
+    /\bt[eé]cnico\s+profissionalizante\b/i.test(t)
+  ) {
+    return null
+  }
+
   if (messageLooksCareerIncomeOpportunity(t)) return null
 
   if (containsSqlLikeContent(t)) {

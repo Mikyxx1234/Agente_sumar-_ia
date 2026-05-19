@@ -23,6 +23,11 @@ import {
   detectHandoffMotivo,
   buildHumanHandoffReply,
 } from '../../libShared/scopeHeuristics.js'
+import {
+  conversationHasActiveTopic,
+  buildContextualGreetingReply,
+} from '../../libShared/conversationContextHeuristics.js'
+import { tryHandleUnsupportedCourseLevelInquiry } from '../courseLevelInquiry.js'
 import { runDistribuirHumano, formatDistribuirHumanoReply } from '../distribuirHumanoTool.js'
 import {
   tryHandleInscricaoFormComplete,
@@ -222,6 +227,15 @@ export async function runAgent(env, input) {
       )
       return { ...formStart.result, historyLoaded: historyMessages.length, aiMeta: ctx.toAiMeta() }
     }
+
+    const courseLevel = await tryHandleUnsupportedCourseLevelInquiry(env, {
+      ...formFlowCtx,
+      historyMessages,
+    })
+    if (courseLevel?.handled) {
+      console.log(`[${executionId}] CURSO_TECNICO_ALTERNATIVA (graduação sugerida)`)
+      return { ...courseLevel.result, historyLoaded: historyMessages.length, aiMeta: ctx.toAiMeta() }
+    }
   }
 
   if (telefone && shouldHandoffToHuman(userMessage, historyMessages)) {
@@ -264,14 +278,22 @@ export async function runAgent(env, input) {
   }
 
   if (isGreetingOnly(userMessage)) {
-    const greetingReply = buildGreetingReply({ userMessage, pushName: input?.pushName })
+    const hasContext = conversationHasActiveTopic(historyMessages)
+    const greetingReply = hasContext
+      ? buildContextualGreetingReply({ userMessage, pushName: input?.pushName, historyMessages })
+      : buildGreetingReply({ userMessage, pushName: input?.pushName })
     ctx.recordScopeClassification?.({
       blocked: false,
       source: 'heuristic',
-      reason: 'greeting',
-      classification: { dentro_escopo: true, categoria: 'saudacao', nivel: 'indefinido', motivo: 'saudação simples' },
+      reason: hasContext ? 'greeting_continuacao' : 'greeting',
+      classification: {
+        dentro_escopo: true,
+        categoria: hasContext ? 'saudacao_continuacao' : 'saudacao',
+        nivel: 'indefinido',
+        motivo: hasContext ? 'saudação com conversa em andamento' : 'saudação simples',
+      },
     })
-    console.log(`[${executionId}] GREETING handled (sem orquestrador)`)
+    console.log(`[${executionId}] GREETING handled contexto=${hasContext} (sem orquestrador)`)
     return {
       ok: true,
       reply: greetingReply,

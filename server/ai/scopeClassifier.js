@@ -13,6 +13,7 @@ import {
   messageLooksCareerIncomeOpportunity,
   isGreetingOnly,
 } from '../../libShared/scopeHeuristics.js'
+import { messageAsksUnsupportedCourseLevel } from '../../libShared/courseLevelHeuristics.js'
 
 const URL_CHAT = 'https://api.openai.com/v1/chat/completions'
 const TIMEOUT_MS = 5000
@@ -25,7 +26,8 @@ REGRA ABSOLUTA (prioridade sobre qualquer outro texto):
 - DENTRO DO ESCOPO (categoria: oportunidade_comercial): lead quer ganhar dinheiro, mudar de vida, carreira, emprego, futuro profissional, trabalhar no digital/mundo digital/internet — mesmo sem citar "curso". O orquestrador vai sugerir formação e cursos da Sumaré.
 - DENTRO DO ESCOPO (categoria: saudacao): cumprimentos simples sem outro assunto — "oi", "olá", "bom dia", "boa tarde", "boa noite", "tudo bem?". NUNCA classifique como fora_escopo.
 - Exemplos SEMPRE dentro do escopo: "quero ganhar dinheiro no mundo digital", "como melhorar minha carreira", "qual curso me dá mais emprego", "bom dia", "oi".
-- Também é dentro_escopo se o lead pergunta sobre cursos, preços, matrícula, inscrição, modalidade EAD, grade ou atendimento educacional da Faculdade Sumaré.`
+- Também é dentro_escopo se o lead pergunta sobre cursos, preços, matrícula, inscrição, modalidade EAD, grade ou atendimento educacional da Faculdade Sumaré.
+- Pergunta por CURSO TÉCNICO ou profissionalizante → dentro_escopo: true (a Sumaré não oferece técnico; o agente explica e sugere graduação EAD na mesma área). NUNCA classifique como fora_escopo.`
 
 function isEnabled(env) {
   return String(env.SCOPE_CLASSIFIER_ENABLED ?? 'true').toLowerCase() !== 'false'
@@ -110,6 +112,24 @@ export async function classifyMessageScope(env, input = {}) {
       },
       source: 'heuristic',
       reason: 'greeting',
+      model,
+      usage: null,
+      elapsedMs: Date.now() - t0,
+    }
+  }
+
+  if (messageAsksUnsupportedCourseLevel(userMessage)) {
+    return {
+      blocked: false,
+      reply: null,
+      classification: {
+        dentro_escopo: true,
+        categoria: 'curso_tecnico_alternativa',
+        nivel: 'grad',
+        motivo: 'pergunta por curso técnico — orientar graduação na área',
+      },
+      source: 'heuristic',
+      reason: 'unsupported_course_level_in_scope',
       model,
       usage: null,
       elapsedMs: Date.now() - t0,
