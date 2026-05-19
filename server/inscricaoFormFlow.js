@@ -8,13 +8,13 @@ import {
   INSCRICAO_FORM_STATUS_CONCLUIDO,
   messageRequestsInscricaoForm,
   messageAsksForFormResend,
+  messageIsCourseCatalogRequest,
   messageLooksLikeFormSumarResponse,
   buildInscricaoFormSentReply,
   buildInscricaoFormCompleteReply,
 } from '../libShared/inscricaoFormHeuristics.js'
 import { messageLooksLikeOperationalChat } from '../libShared/scopeHeuristics.js'
 import { sendFormSumarTemplate } from './whatsappTemplateSender.js'
-import { sendMessageWithNote } from './whatsappSender.js'
 import { runKommoSalesbot } from './kommoSalesbot.js'
 import { findLeadByPhone } from './kommoClient.js'
 import { updateDadosCliente, getLeadIdByTelefone, normalizeTelefone } from './dadosClienteStore.js'
@@ -153,12 +153,7 @@ export async function tryHandleInscricaoFormStart(env, input) {
     )
     whatsappReply =
       'Queremos muito te ajudar com a inscrição na Faculdade Sumaré! No momento não consegui abrir o formulário automático no WhatsApp — um consultor entrará em contato em breve por aqui.'
-    await sendMessageWithNote(env, {
-      telefone,
-      text: whatsappReply,
-      leadId: idLead,
-      executionId,
-    }).catch((e) => console.warn(`[inscricaoForm] sendMessageWithNote fallback: ${e.message}`))
+    // Envio único: flushSession já chama sendMessageWithNote com out.reply — não enviar aqui (evita duplicata).
   }
 
   return {
@@ -257,6 +252,8 @@ export async function tryHandleInscricaoFormComplete(env, input) {
 export async function tryEnsureInscricaoFormSent(env, input) {
   const { telefone, userMessage, historyMessages, llmReply } = input
   if (!telefone) return null
+
+  if (messageIsCourseCatalogRequest(userMessage)) return null
 
   const llmPromisedForm =
     llmReply &&

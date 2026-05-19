@@ -16,13 +16,47 @@ export function messageAsksForFormResend(text) {
   )
 }
 
-function recentAssistantText(historyMessages, max = 3) {
-  return (historyMessages || [])
-    .filter((m) => m.role === 'assistant')
-    .slice(-max)
-    .map((m) => String(m.content || ''))
-    .join('\n')
-    .toLowerCase()
+function lastAssistantText(historyMessages) {
+  const assistants = (historyMessages || []).filter((m) => m.role === 'assistant')
+  if (!assistants.length) return ''
+  return String(assistants[assistants.length - 1].content || '')
+}
+
+/** Lead pede catálogo / informação sobre cursos — não é pedido de inscrição. */
+export function messageIsCourseCatalogRequest(text) {
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (!t || t.length < 6) return false
+  const aboutCourses =
+    /\b(curso|curso[s]?|gradua[cç][aã]o|p[oó]s|forma[cç][õo]es|mba|especializa)\b/i.test(t)
+  if (!aboutCourses) return false
+  if (/\b(fazer|matricul|inscri|me\s+inscrever|realizar\s+a\s+inscri)\b/i.test(t)) return false
+  const asksInfo =
+    /\b(saber|conhecer|informa|listar|mostrar|ver|quais|op[cç][oõ]es|cat[aá]logo|dispon[ií]veis|oferecem|tenha|voc[eê]\s+tem)\b/i.test(t)
+  const popular = /\b(pedidos?|procurad|mais\s+vendidos?|destaques?)\b/i.test(t)
+  if (asksInfo || popular) return true
+  if (/\bquais\s+(s[aã]o\s+)?(os\s+)?curso/i.test(t)) return true
+  return false
+}
+
+/** Confirmação curta só quando a ÚLTIMA mensagem do assistente pediu para seguir com inscrição. */
+function userConfirmsEnrollmentAfterAssistant(text, historyMessages) {
+  const lastAssist = lastAssistantText(historyMessages)
+  if (!lastAssist) return false
+  const a = lastAssist.toLowerCase()
+  if (
+    !/\b(quer\s+seguir|deseja\s+seguir|seguir\s+com\s+a\s+(matr|inscri)|fazer\s+(a\s+)?inscri|enviar\s+o\s+formul[aá]rio)\b/i.test(
+      a,
+    )
+  ) {
+    return false
+  }
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (!t || t.length > 72) return false
+  if (messageIsCourseCatalogRequest(text)) return false
+  if (/\b(saber|conhecer|informa|listar|quais|valores|pre[cç]o|dura[cç]|pedidos|mais\s+procurad)\b/i.test(t)) {
+    return false
+  }
+  return /^\s*(sim|s|quero|pode|bora|vamos|ok|gostei|esse\s+curso|fazer)\b/i.test(t)
 }
 
 /**
@@ -35,6 +69,7 @@ export function messageRequestsInscricaoForm(text, historyMessages = []) {
   if (messageLooksLikeOperationalChat(text)) return false
   if (messageLooksLikeFormSumarResponse(text)) return false
   if (messageAsksForFormResend(text)) return false
+  if (messageIsCourseCatalogRequest(text)) return false
 
   // Só informação sobre curso (valores, duração) — ainda não é inscrição
   if (
@@ -66,10 +101,7 @@ export function messageRequestsInscricaoForm(text, historyMessages = []) {
   if (/\bgostei\b/i.test(t) && /\bquero\b/i.test(t) && /\b(fazer|curso)\b/i.test(t)) return true
   if (/\b(quero|vou)\s+(fazer|curso)\b/i.test(t) && /\bcurso\b/i.test(t)) return true
 
-  const assist = recentAssistantText(historyMessages)
-  if (assist && /\b(quer\s+seguir|matr[ií]cula|inscri[cç][aã]o|formul[aá]rio)\b/i.test(assist)) {
-    if (/\b(sim|quero|pode|bora|vamos|ok|esse\s+curso|fazer|gostei)\b/i.test(t) && t.length < 80) return true
-  }
+  if (userConfirmsEnrollmentAfterAssistant(text, historyMessages)) return true
 
   return false
 }

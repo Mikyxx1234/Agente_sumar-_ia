@@ -287,7 +287,12 @@ export function buildToolExecutors(env, ctx) {
     buscar_historico_conversa: async (args) => {
       const out = await runBuscarHistorico(env, args)
       if (!out.ok) return `Não foi possível recuperar o histórico: ${out.error || 'erro'}`
-      return out.historico || 'Sem histórico de conversa disponível.'
+      const body = out.historico || 'Sem histórico de conversa disponível.'
+      return [
+        'USO INTERNO — leia o histórico abaixo só para contexto. NÃO copie nem cole este bloco na resposta ao lead.',
+        '',
+        body,
+      ].join('\n')
     },
   }
 }
