@@ -22,13 +22,13 @@ import { updateDadosCliente, getLeadIdByTelefone, normalizeTelefone } from './da
 const FORM_STATUS_FIELD = 'inscricao_form_status'
 
 async function getFormStatus(env, telefone) {
-  const { url, key } = getSupabaseCfg(env)
+  const { url, key, table } = getSupabaseCfg(env)
   if (!url || !key) return null
   const fone = normalizeTelefone(telefone)
   if (!fone) return null
   try {
     const enc = encodeURIComponent(fone)
-    const res = await fetch(`${url}/rest/v1/dados_cliente?telefone=eq.${enc}&select=${FORM_STATUS_FIELD}&limit=1`, {
+    const res = await fetch(`${url}/rest/v1/${encodeURIComponent(table)}?telefone=eq.${enc}&select=${FORM_STATUS_FIELD}&limit=1`, {
       headers: { apikey: key, Authorization: `Bearer ${key}` },
     })
     if (!res.ok) return null
@@ -43,6 +43,7 @@ function getSupabaseCfg(env) {
   return {
     url: (env.SUPABASE_URL || env.VITE_SUPABASE_URL || '').replace(/\/$/, ''),
     key: env.SUPABASE_KEY || env.VITE_SUPABASE_KEY || '',
+    table: env.SUPABASE_DADOS_CLIENTE_TABLE || 'dados_cliente',
   }
 }
 
@@ -67,11 +68,11 @@ async function resolveLeadId(env, telefone, leadIdHint) {
 }
 
 async function pauseAtendimentoIa(env, telefone) {
-  const { url, key } = getSupabaseCfg(env)
+  const { url, key, table } = getSupabaseCfg(env)
   if (!url || !key) return { ok: false }
   try {
     const enc = encodeURIComponent(normalizeTelefone(telefone))
-    const res = await fetch(`${url}/rest/v1/dados_cliente?telefone=eq.${enc}`, {
+    const res = await fetch(`${url}/rest/v1/${encodeURIComponent(table)}?telefone=eq.${enc}`, {
       method: 'PATCH',
       headers: {
         apikey: key,
