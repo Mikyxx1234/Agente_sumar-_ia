@@ -52,6 +52,18 @@ export async function enqueueLeads(leadIds) {
   })
 }
 
+export async function deleteEvaluation(id) {
+  return jsonFetch(`${BASE}/evaluations/${id}`, { method: 'DELETE' })
+}
+
+export async function retryEvaluation(id) {
+  return jsonFetch(`${BASE}/evaluations/${id}/retry`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  })
+}
+
 // ── Fase 2 — regras versionadas ──
 
 export async function listRules() {

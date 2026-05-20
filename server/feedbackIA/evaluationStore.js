@@ -134,6 +134,56 @@ export async function listEvaluations(env, opts) {
 }
 
 /**
+ * Busca uma avaliação por id (numérico). Retorna { ok, data } ou
+ * { ok:false, code:'NOT_FOUND' | 'TABLE_MISSING' | 'FETCH_FAILED' }.
+ */
+export async function getEvaluationById(env, id) {
+  const numId = Number(id)
+  if (!Number.isFinite(numId)) {
+    return { ok: false, code: 'BAD_ID', error: 'id inválido' }
+  }
+  const r = await sbFetch(env, 'GET', `ai_rule_evaluations?select=*&id=eq.${numId}&limit=1`)
+  if (!r.ok) {
+    const text = typeof r.data === 'string' ? r.data : (r.data?.message || r.raw || '')
+    if (r.status === 404 || /PGRST205/.test(text)) {
+      return { ok: false, code: 'TABLE_MISSING', error: 'Tabela ai_rule_evaluations ausente.' }
+    }
+    return { ok: false, code: 'FETCH_FAILED', status: r.status, error: r.error || text?.slice(0, 200) }
+  }
+  const row = Array.isArray(r.data) && r.data[0] ? r.data[0] : null
+  if (!row) return { ok: false, code: 'NOT_FOUND', error: `Avaliação ${numId} não encontrada` }
+  return { ok: true, data: row }
+}
+
+/**
+ * Apaga uma avaliação por id. NÃO checa se é falha técnica — quem chama
+ * (server.js) é responsável por validar isso antes, pra não apagar
+ * avaliação válida por engano.
+ */
+export async function deleteEvaluationById(env, id) {
+  const numId = Number(id)
+  if (!Number.isFinite(numId)) {
+    return { ok: false, code: 'BAD_ID', error: 'id inválido' }
+  }
+  const r = await sbFetch(
+    env,
+    'DELETE',
+    `ai_rule_evaluations?id=eq.${numId}`,
+    undefined,
+    { Prefer: 'return=representation' },
+  )
+  if (!r.ok) {
+    const text = typeof r.data === 'string' ? r.data : (r.data?.message || r.raw || '')
+    if (r.status === 404 || /PGRST205/.test(text)) {
+      return { ok: false, code: 'TABLE_MISSING', error: 'Tabela ai_rule_evaluations ausente.' }
+    }
+    return { ok: false, code: 'DELETE_FAILED', status: r.status, error: r.error || text?.slice(0, 200) }
+  }
+  const removed = Array.isArray(r.data) ? r.data.length : 0
+  return { ok: true, removed }
+}
+
+/**
  * KPIs simples (hoje / esta semana / pendentes). Usa count via
  * `Prefer: count=exact` do PostgREST.
  */

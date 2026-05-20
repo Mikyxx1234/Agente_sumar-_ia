@@ -8,6 +8,8 @@ import { evaluateConversation, getFeedbackIAModelInfo } from './server/feedbackI
 import {
   listEvaluations,
   getEvaluationStats,
+  getEvaluationById,
+  deleteEvaluationById,
 } from './server/feedbackIA/evaluationStore.js'
 import {
   enqueueManualEvaluation,
@@ -321,6 +323,92 @@ app.post('/api/feedback-ia/enqueue', async (req, res) => {
     }
     const out = enqueueManualEvaluation(leadIds)
     res.json({ ok: true, ...out })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+/**
+ * Falha técnica = avaliador não rodou (sem tokens) e o erro foi
+ * preenchido pelo `ruleEvaluator`. Mesma definição usada na UI. Só
+ * essas avaliações podem ser excluídas/retentadas — avaliação real do
+ * agente nunca pode sumir por engano.
+ */
+function isTechErrorRow(row) {
+  if (!row) return false
+  if (!row.error) return false
+  const tokens = row.evaluator_total_tokens
+  return tokens == null || tokens === 0
+}
+
+app.delete('/api/feedback-ia/evaluations/:id', async (req, res) => {
+  try {
+    const id = req.params.id
+    const found = await getEvaluationById(process.env, id)
+    if (!found.ok) {
+      const httpStatus = found.code === 'NOT_FOUND' ? 404 : 500
+      res.status(httpStatus).json({ ok: false, code: found.code, error: found.error })
+      return
+    }
+    if (!isTechErrorRow(found.data)) {
+      res.status(409).json({
+        ok: false,
+        code: 'NOT_TECH_ERROR',
+        error: 'Só avaliações com falha técnica podem ser excluídas. Esta tem veredito real do agente.',
+      })
+      return
+    }
+    const del = await deleteEvaluationById(process.env, id)
+    if (!del.ok) {
+      res.status(500).json({ ok: false, code: del.code, error: del.error })
+      return
+    }
+    res.json({ ok: true, removed: del.removed, id: Number(id) })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.post('/api/feedback-ia/evaluations/:id/retry', async (req, res) => {
+  try {
+    const id = req.params.id
+    const found = await getEvaluationById(process.env, id)
+    if (!found.ok) {
+      const httpStatus = found.code === 'NOT_FOUND' ? 404 : 500
+      res.status(httpStatus).json({ ok: false, code: found.code, error: found.error })
+      return
+    }
+    const original = found.data
+    if (!isTechErrorRow(original)) {
+      res.status(409).json({
+        ok: false,
+        code: 'NOT_TECH_ERROR',
+        error: 'Só avaliações com falha técnica podem ser retentadas.',
+      })
+      return
+    }
+    if (!original.lead_id && !original.telefone) {
+      res.status(400).json({
+        ok: false,
+        code: 'NO_TARGET',
+        error: 'Avaliação original não tem lead_id nem telefone — impossível retentar.',
+      })
+      return
+    }
+    // Apaga a antiga antes pra liberar o conversation_key UNIQUE.
+    const del = await deleteEvaluationById(process.env, id)
+    if (!del.ok) {
+      res.status(500).json({ ok: false, code: del.code, error: `Falha ao limpar avaliação anterior: ${del.error}` })
+      return
+    }
+    const out = await evaluateConversation(process.env, {
+      leadId: original.lead_id || undefined,
+      telefone: original.telefone || undefined,
+      sinceIso: null,
+      untilIso: null,
+      trigger: 'retry',
+    })
+    res.json({ ok: !!out.ok, ...out, original_id: Number(id) })
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })
   }

@@ -3,11 +3,14 @@ import {
   ShieldCheck, RefreshCw, Hourglass, ListChecks, Calendar,
   Search, ChevronRight, ChevronDown, CheckCircle2, AlertTriangle,
   XCircle, Wand2, Bot, Filter, Activity, Star,
+  RotateCcw, Trash2,
 } from 'lucide-react'
 import {
   getStats,
   listEvaluations,
   evaluateNow,
+  deleteEvaluation,
+  retryEvaluation,
 } from '../lib/feedbackIAStore'
 import KommoLeadLink from './KommoLeadLink'
 import FeedbackIAPatchPanel from './FeedbackIAPatchPanel'
@@ -156,9 +159,12 @@ function RuleBreakdown({ perRule }) {
   )
 }
 
-function EvaluationItem({ ev, open, onToggle }) {
+function EvaluationItem({ ev, open, onToggle, onRetry, onDelete, busyAction }) {
   const created = formatTime(ev.created_at)
   const turns = ev.turns_count || 0
+  const techError = isTechError(ev)
+  const retrying = busyAction === 'retry'
+  const deleting = busyAction === 'delete'
   return (
     <div style={{
       padding: '10px 14px',
@@ -200,12 +206,48 @@ function EvaluationItem({ ev, open, onToggle }) {
           {ev.error && (
             <div style={{
               padding: 8, borderRadius: 6,
-              background: 'oklch(68% 0.20 25 / 0.10)',
-              border: '1px solid oklch(68% 0.20 25 / 0.30)',
-              color: 'oklch(68% 0.20 25)',
+              background: techError ? 'var(--bg-2)' : 'oklch(68% 0.20 25 / 0.10)',
+              border: `1px solid ${techError ? 'var(--line-1)' : 'oklch(68% 0.20 25 / 0.30)'}`,
+              color: techError ? 'var(--fg-2)' : 'oklch(68% 0.20 25)',
               fontSize: 12, marginBottom: 8,
             }}>
-              <strong>Falha do avaliador:</strong> {ev.error}
+              <strong>{techError ? 'Falha técnica:' : 'Falha do avaliador:'}</strong> {ev.error}
+              {techError && (
+                <div style={{ marginTop: 4, color: 'var(--fg-3)', fontSize: 11.5 }}>
+                  Esta avaliação não conta como reprovação real do agente.
+                  Você pode retentar (3× automático com backoff) ou excluir.
+                </div>
+              )}
+            </div>
+          )}
+
+          {techError && (onRetry || onDelete) && (
+            <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+              {onRetry && (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => onRetry(ev.id)}
+                  disabled={retrying || deleting}
+                  title="Apaga este registro e avalia de novo a mesma conversa"
+                >
+                  <RotateCcw size={13} className={retrying ? 'spin' : ''} />
+                  <span>{retrying ? 'Retentando…' : 'Tentar novamente'}</span>
+                </button>
+              )}
+              {onDelete && (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => onDelete(ev.id)}
+                  disabled={retrying || deleting}
+                  title="Remove esta avaliação do histórico"
+                  style={{ color: 'oklch(68% 0.20 25)' }}
+                >
+                  <Trash2 size={13} />
+                  <span>{deleting ? 'Excluindo…' : 'Excluir'}</span>
+                </button>
+              )}
             </div>
           )}
 
@@ -265,6 +307,7 @@ export default function FeedbackIA() {
   const [manualLead, setManualLead] = useState('')
   const [running, setRunning] = useState(false)
   const [statusMsg, setStatusMsg] = useState('')
+  const [busyById, setBusyById] = useState({})
 
   const fetchAll = useCallback(async () => {
     setLoading(true)
@@ -321,6 +364,40 @@ export default function FeedbackIA() {
     setRunning(false)
     setTimeout(() => setStatusMsg(''), 6000)
   }
+
+  const handleRetry = useCallback(async (id) => {
+    setBusyById((b) => ({ ...b, [id]: 'retry' }))
+    setStatusMsg('Retentando avaliação…')
+    const out = await retryEvaluation(id)
+    if (out.ok && out.evaluation) {
+      setStatusMsg(`Re-avaliado: ${out.evaluation.verdict} · ${(out.evaluation.score ?? 0).toFixed?.(1) || out.evaluation.score}/10`)
+    } else if (out.ok === false && out.skipped === 'no_executions') {
+      setStatusMsg('Lead original sem execuções da IA — retry não aplicável.')
+    } else if (out.error) {
+      setStatusMsg(`Falha no retry: ${out.error}`)
+    } else {
+      setStatusMsg('Retry concluído — atualizando lista.')
+    }
+    setBusyById((b) => { const c = { ...b }; delete c[id]; return c })
+    setOpenId(null)
+    await fetchAll()
+    setTimeout(() => setStatusMsg(''), 8000)
+  }, [fetchAll])
+
+  const handleDelete = useCallback(async (id) => {
+    if (!window.confirm('Excluir esta avaliação de falha técnica? Não pode ser desfeito.')) return
+    setBusyById((b) => ({ ...b, [id]: 'delete' }))
+    const out = await deleteEvaluation(id)
+    if (out.ok) {
+      setStatusMsg(`Avaliação ${id} excluída.`)
+    } else {
+      setStatusMsg(`Falha ao excluir: ${out.error || 'erro desconhecido'}`)
+    }
+    setBusyById((b) => { const c = { ...b }; delete c[id]; return c })
+    setOpenId(null)
+    await fetchAll()
+    setTimeout(() => setStatusMsg(''), 6000)
+  }, [fetchAll])
 
   const enabled = stats?.enabledHints
   const disabledReason =
@@ -525,6 +602,9 @@ export default function FeedbackIA() {
                     ev={ev}
                     open={openId === ev.id}
                     onToggle={() => setOpenId(openId === ev.id ? null : ev.id)}
+                    onRetry={handleRetry}
+                    onDelete={handleDelete}
+                    busyAction={busyById[ev.id]}
                   />
                 ))}
               </div>

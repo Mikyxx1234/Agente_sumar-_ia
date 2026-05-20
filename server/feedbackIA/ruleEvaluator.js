@@ -39,6 +39,11 @@ const MAX_TURNS_INLINE = 60
 const KEEP_HEAD_TURNS = 15
 const KEEP_TAIL_TURNS = 45
 
+// Falhas transitórias (timeout, 5xx, rate limit, rede) são retentadas
+// antes de marcar como erro técnico. Backoff exponencial: 2s, 4s, 8s.
+const MAX_EVAL_ATTEMPTS = 3
+const RETRY_BASE_MS = 2_000
+
 function getApiKey(env) {
   return env.OPENAI_API_KEY || env.VITE_OPENAI_API_KEY || ''
 }
@@ -177,7 +182,9 @@ async function callEvaluatorOpenAI(env, messages) {
     })
     const text = await res.text()
     if (!res.ok) {
-      throw new Error(`OpenAI ${res.status}: ${text.slice(0, 500)}`)
+      const err = new Error(`OpenAI ${res.status}: ${text.slice(0, 500)}`)
+      err.httpStatus = res.status
+      throw err
     }
     let data
     try {
@@ -197,6 +204,59 @@ async function callEvaluatorOpenAI(env, messages) {
   } finally {
     clearTimeout(t)
   }
+}
+
+/**
+ * Classifica se vale tentar de novo. Erros permanentes (config errada,
+ * 4xx exceto rate-limit/timeout) não dão retry — só gastariam tempo.
+ */
+function isTransientEvaluatorError(e) {
+  if (!e) return false
+  if (e.name === 'AbortError') return true
+  const msg = String(e.message || '').toLowerCase()
+  if (msg.includes('aborted') || msg.includes('timeout')) return true
+  if (msg.includes('network') || msg.includes('econnreset') || msg.includes('etimedout') || msg.includes('fetch failed')) return true
+  const status = e.httpStatus
+  if (Number.isFinite(status)) {
+    if (status === 408 || status === 429) return true
+    if (status >= 500 && status < 600) return true
+    return false // outros 4xx (401/403/404/400) são definitivos
+  }
+  return false
+}
+
+/**
+ * Tenta a chamada ao OpenAI até `MAX_EVAL_ATTEMPTS` em caso de falha
+ * transitória. Erros permanentes (4xx de config) abortam imediatamente.
+ * Retorna `{ parsed, model, usage, durationMs, attempts }`.
+ */
+async function callEvaluatorOpenAIWithRetry(env, messages) {
+  const errors = []
+  for (let attempt = 1; attempt <= MAX_EVAL_ATTEMPTS; attempt++) {
+    try {
+      const out = await callEvaluatorOpenAI(env, messages)
+      if (attempt > 1) {
+        console.log(`[feedbackIA] avaliador OK na tentativa ${attempt}/${MAX_EVAL_ATTEMPTS}`)
+      }
+      return { ...out, attempts: attempt }
+    } catch (e) {
+      errors.push(`tent${attempt}: ${String(e.message || e).slice(0, 160)}`)
+      const transient = isTransientEvaluatorError(e)
+      const last = attempt === MAX_EVAL_ATTEMPTS
+      if (!transient || last) {
+        const summary = errors.join(' | ')
+        const finalErr = new Error(`Avaliador falhou após ${attempt} tentativa(s) [transient=${transient}] :: ${summary}`)
+        finalErr.attempts = attempt
+        finalErr.cause = e
+        throw finalErr
+      }
+      const waitMs = RETRY_BASE_MS * Math.pow(2, attempt - 1)
+      console.warn(`[feedbackIA] tentativa ${attempt}/${MAX_EVAL_ATTEMPTS} falhou (${String(e.message || e).slice(0, 100)}). Aguardando ${waitMs}ms antes de retentar…`)
+      await new Promise((r) => setTimeout(r, waitMs))
+    }
+  }
+  // unreachable
+  throw new Error('Avaliador: loop de retry inconsistente')
 }
 
 /**
@@ -225,7 +285,7 @@ export async function evaluateConversation(env, opts = {}) {
 
   let result
   try {
-    result = await callEvaluatorOpenAI(env, messages)
+    result = await callEvaluatorOpenAIWithRetry(env, messages)
   } catch (e) {
     // Erro técnico do avaliador (timeout, rede, OpenAI 5xx). NÃO É
     // reprovação do agente. Gravamos com verdict='PARCIAL' e `error`
