@@ -12,7 +12,8 @@ import {
   buildInscricaoFormCompleteReply,
 } from '../libShared/inscricaoFormHeuristics.js'
 import { runKommoSalesbot } from './kommoSalesbot.js'
-import { findLeadByPhone } from './kommoClient.js'
+import { findLeadByPhone, listLeadNotes } from './kommoClient.js'
+import { fetchLeadFormSnapshot } from './inscricaoKommoFields.js'
 import { updateDadosCliente, getLeadIdByTelefone, normalizeTelefone } from './dadosClienteStore.js'
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
@@ -92,6 +93,62 @@ function shouldTriggerMatriculaPosForm(userMessage, status) {
   return false
 }
 
+function noteBlob(n) {
+  return [
+    n?.params?.text,
+    n?.params?.message,
+    n?.text,
+    typeof n?.params === 'object' ? JSON.stringify(n.params) : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+}
+
+/**
+ * O Flow do Form Sumar costuma aparecer só nas notas do Kommo
+ * ("Respostas recebidas no Flow"), sem mensagem no buffer WhatsApp.
+ */
+export async function detectFormSumarRecebidoNoKommo(env, leadId) {
+  const id = Number(leadId)
+  if (!Number.isFinite(id) || id <= 0) return { detected: false, reason: 'invalid_lead' }
+
+  const maxAgeH = Number(env.INSCRICAO_FORM_KOMMO_NOTE_MAX_AGE_H || 48)
+  const maxAgeMs = (Number.isFinite(maxAgeH) && maxAgeH > 0 ? maxAgeH : 48) * 3600000
+  const now = Date.now()
+
+  const notesRes = await listLeadNotes(env, id, { limit: 50, order: 'desc' })
+  if (notesRes.ok && Array.isArray(notesRes.notes)) {
+    for (const n of notesRes.notes) {
+      const created = n?.created_at ?? n?.date_create
+      if (created) {
+        const ts = Date.parse(created)
+        if (!Number.isNaN(ts) && now - ts > maxAgeMs) continue
+      }
+      const blob = noteBlob(n)
+      if (messageLooksLikeFormSumarResponse(blob)) {
+        return { detected: true, source: 'kommo_note', sample: blob.slice(0, 120) }
+      }
+      if (/\brespostas\s+recebidas\s+no\s+flow\b/i.test(blob)) {
+        return { detected: true, source: 'kommo_note_flow', sample: blob.slice(0, 120) }
+      }
+    }
+    const hadFormBot = notesRes.notes.some((n) =>
+      /formulario[_\s-]?sum|form\s+sumar|salesbot.*formulario/i.test(noteBlob(n)),
+    )
+    if (hadFormBot) {
+      const snap = await fetchLeadFormSnapshot(env, id)
+      if (snap.ok) {
+        const { nome, email, cpf, curso_inscricao } = snap.snapshot
+        if (nome && email && cpf && curso_inscricao) {
+          return { detected: true, source: 'kommo_fields_pos_form_bot' }
+        }
+      }
+    }
+  }
+
+  return { detected: false, reason: 'not_found' }
+}
+
 /**
  * Form preenchido → salesbot 49813 (matricula_pos_form) + pause IA.
  */
@@ -155,13 +212,30 @@ export async function tryProcessInscricaoPostFormPipeline(env, input) {
 
   if (status === INSCRICAO_FORM_STATUS_CONCLUIDO) return null
 
+  const idLead = await resolveLeadId(env, telefone, leadIdHint)
+
+  let kommoFormDone = false
+  let detectSource = ''
+  if (schedulerTick && idLead) {
+    const det = await detectFormSumarRecebidoNoKommo(env, idLead)
+    kommoFormDone = Boolean(det.detected)
+    detectSource = det.source || det.reason || ''
+    if (kommoFormDone) {
+      console.log(
+        `[inscricaoPostForm] scheduler lead=${idLead} formulario_detectado source=${detectSource} status_supabase=${status || 'n/a'}`,
+      )
+    }
+  }
+
   const trigger =
     shouldTriggerMatriculaPosForm(userMessage, status) ||
+    (schedulerTick &&
+      kommoFormDone &&
+      status !== INSCRICAO_FORM_STATUS_CONCLUIDO) ||
     (schedulerTick && status === INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO)
 
   if (!trigger) return null
 
-  const idLead = await resolveLeadId(env, telefone, leadIdHint)
   if (idLead == null) {
     if (schedulerTick) return { handled: false }
     return {
@@ -186,7 +260,10 @@ export async function tryHandleInscricaoFormComplete(env, input) {
   return tryProcessInscricaoPostFormPipeline(env, input)
 }
 
-/** Scheduler: leads presos em aguardando_distribuicao (fluxo antigo) → dispara 49813. */
+/**
+ * Scheduler: detecta form preenchido via notas Kommo (Flow) ou status Supabase
+ * e dispara salesbot 49813 sem depender de mensagem no buffer.
+ */
 export async function tryAdvanceInscricaoPostFormScheduler(env, { telefone, leadId }) {
   return tryProcessInscricaoPostFormPipeline(env, {
     telefone,

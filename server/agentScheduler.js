@@ -303,22 +303,29 @@ export async function runSchedulerTick(env) {
           telefone: phone,
           leadId: Number(lead.id),
         })
-        if (postFormAdv?.handled && postFormAdv.result?.reply) {
-          const execId = generateExecutionId()
-          const sendRes = await sendMessageWithNote(env, {
-            to: sessionId,
-            text: postFormAdv.result.reply,
-            leadId: Number(lead.id),
-            executionId: execId,
-          })
-          await saveConversation(env, {
-            telefone: phone,
-            userMessage: '[scheduler] avanço pós-formulário',
-            botMessage: postFormAdv.result.reply,
-          }).catch(() => {})
+        if (postFormAdv?.handled) {
+          const ctxForm = postFormAdv.result?.ctxSnapshot?.inscricaoForm ?? 'n/a'
+          const botId = postFormAdv.result?.ctxSnapshot?.salesbotId ?? 'n/a'
+          const matriculaOk = postFormAdv.result?.toolCalls?.[0]?.ok
           console.log(
-            `[scheduler] pós-form avançado lead=${lead.id} send_ok=${sendRes?.ok} step=${postFormAdv.result?.ctxSnapshot?.inscricaoForm ?? 'n/a'}`,
+            `[scheduler] pós-form lead=${lead.id} handled=true inscricaoForm=${ctxForm} salesbot=${botId} matricula_ok=${matriculaOk}`,
           )
+          const reply = postFormAdv.result?.reply
+          if (reply) {
+            const execId = generateExecutionId()
+            const sendRes = await sendMessageWithNote(env, {
+              to: sessionId,
+              text: reply,
+              leadId: Number(lead.id),
+              executionId: execId,
+            })
+            await saveConversation(env, {
+              telefone: phone,
+              userMessage: '[scheduler] avanço pós-formulário',
+              botMessage: reply,
+            }).catch(() => {})
+            console.log(`[scheduler] pós-form lead=${lead.id} whatsapp_send_ok=${sendRes?.ok}`)
+          }
         }
       } catch (postErr) {
         console.warn(`[scheduler] pós-form lead=${lead.id}:`, postErr.message)
