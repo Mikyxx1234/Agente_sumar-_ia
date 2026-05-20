@@ -1,16 +1,14 @@
-import { Sparkles, LayoutDashboard, FileText, FlaskConical, ListChecks, Settings, Star, BarChart3, Bot, Activity, Database } from 'lucide-react'
+import { Sparkles, LayoutDashboard, FileText, FlaskConical, ListChecks, Settings, Database, GraduationCap, Filter } from 'lucide-react'
 import AIKillSwitch from './AIKillSwitch'
 
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'funil-kommo', label: 'Funil Kommo', icon: Filter },
   { id: 'prompts', label: 'Prompts', icon: FileText },
   { id: 'playground', label: 'Teste IA', icon: FlaskConical },
   { id: 'executions', label: 'Execuções', icon: ListChecks },
-  { id: 'salesbot-executions', label: 'Execuções Salesbot', icon: Bot },
-  { id: 'webhook-control', label: 'Controle Webhook', icon: Activity },
+  { id: 'matriculas', label: 'Matrículas', icon: GraduationCap },
   { id: 'knowledge-update', label: 'Atualização IA', icon: Database },
-  { id: 'feedback', label: 'Feedback Comercial', icon: Star },
-  { id: 'feedback-dashboard', label: 'Dashboard Feedback', icon: BarChart3 },
 ]
 
 export default function Sidebar({ page, onNavigate, onAIStateChange }) {

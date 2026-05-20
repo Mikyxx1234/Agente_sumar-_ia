@@ -4,11 +4,9 @@ import Dashboard from './components/Dashboard'
 import PromptViewer from './components/PromptViewer'
 import Playground from './components/Playground'
 import ExecutionViewer from './components/ExecutionViewer'
-import FeedbackJobViewer from './components/FeedbackJobViewer'
-import FeedbackDashboard from './components/FeedbackDashboard'
-import SalesbotExecutions from './components/SalesbotExecutions'
-import WebhookControl from './components/WebhookControl'
 import KnowledgeUpdate from './components/KnowledgeUpdate'
+import MatriculasViewer from './components/MatriculasViewer'
+import FunilKommo from './components/FunilKommo'
 import { PowerOff } from 'lucide-react'
 import './App.css'
 
@@ -178,16 +176,14 @@ export default function App() {
             </div>
           )}
           {!loading && !error && page === 'dashboard' && <Dashboard />}
+          {!loading && !error && page === 'funil-kommo' && <FunilKommo />}
           {!loading && !error && page === 'prompts' && (
             <PromptViewer prompts={prompts} onSave={handleSavePrompt} getVersions={getVersions} onRestore={handleRestore} />
           )}
           {!loading && !error && page === 'playground' && <Playground prompts={prompts} />}
           {!loading && !error && page === 'executions' && <ExecutionViewer />}
-          {!loading && !error && page === 'salesbot-executions' && <SalesbotExecutions />}
-          {!loading && !error && page === 'webhook-control' && <WebhookControl />}
+          {!loading && !error && page === 'matriculas' && <MatriculasViewer />}
           {!loading && !error && page === 'knowledge-update' && <KnowledgeUpdate />}
-          {!loading && !error && page === 'feedback' && <FeedbackJobViewer />}
-          {!loading && !error && page === 'feedback-dashboard' && <FeedbackDashboard />}
         </div>
       </main>
     </div>

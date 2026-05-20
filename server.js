@@ -7,13 +7,19 @@ import { runNearestPolo } from './server/locationTool.js'
 import { runInscricao } from './server/inscricaoTool.js'
 import { isInscricaoAutomaticaEnabled, matriculaViaConsultorInstruction } from './server/inscricaoConfig.js'
 import { runDistribuirHumano } from './server/distribuirHumanoTool.js'
-import { runInscricaoFormStart } from './server/inscricaoFormFlow.js'
-import { sendFormSumarTemplate, diagnoseFormSumarTemplate } from './server/whatsappTemplateSender.js'
 import { runBuscarHistorico } from './server/memoryTool.js'
 import { marcarClienteIA, updateDadosCliente, getLeadIdByTelefone } from './server/dadosClienteStore.js'
 import { saveConversation } from './server/historyStore.js'
 import { withSessionLock } from './server/evolution/concurrency.js'
-import { findLeadByPhone, createLeadNote } from './server/kommoClient.js'
+import {
+  findLeadByPhone,
+  createLeadNote,
+  getLeadSummary,
+  listLeadsByStatus,
+  bulkGetContactsByIds,
+  extractContactPhone,
+  extractLeadPhone,
+} from './server/kommoClient.js'
 import { sendMessageWithNote, sendText, splitMessage } from './server/whatsappSender.js'
 import { generateExecutionId, saveExecution } from './server/ai/executionTelemetry.js'
 import { sendTyping } from './server/evolution/typingIndicator.js'
@@ -39,7 +45,8 @@ import {
   getMessagesByLead as dispatcherGetMessagesByLead,
   checkDispatcherHealth,
 } from './server/kommoDispatcherClient.js'
-import { pingBackend, pushMessage, getMessages, clearMessages } from './server/evolution/messageBuffer.js'
+import { pingBackend, pushMessage, getMessages, clearMessages, getLastTouchedAt } from './server/evolution/messageBuffer.js'
+import { phoneToWhatsAppSessionId } from './server/phoneWhatsApp.js'
 import { getDebounceMs } from './server/evolution/debouncer.js'
 import { runAgent } from './server/ai/agentRunner.js'
 import { classifyMessageScope } from './server/ai/scopeClassifier.js'
@@ -214,84 +221,13 @@ app.post('/api/location/nearest-polo', async (req, res) => {
 
 // ── Tool inscrição (Kommo + Supabase + OpenAI) ──
 
-/** Diagnóstico: canais, nomes configurados e templates aprovados no Meta. */
-app.get('/api/inscricao/form-sumar/diagnose', async (req, res) => {
-  try {
-    res.json(await diagnoseFormSumarTemplate(process.env))
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message })
-  }
-})
-
-/** Teste: ativa salesbot Formulario_Sum (body: { telefone, id_lead? }). */
-app.post('/api/inscricao/formulario-sum/trigger', async (req, res) => {
-  try {
-    const telefone = req.body?.telefone
-    const idLead = req.body?.id_lead ?? req.body?.idLead
-    if (!telefone && !idLead) {
-      res.status(400).json({ ok: false, code: 'MISSING_PARAMS', error: 'Informe telefone ou id_lead.' })
-      return
-    }
-    const form = await runInscricaoFormStart(process.env, { telefone, id_lead: idLead })
-    res.status(form.ok ? 200 : 502).json(form)
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message })
-  }
-})
-
-/** Teste manual: mesmo fluxo de inscrição (salesbot Formulario_Sum por padrão). */
-app.post('/api/inscricao/form-sumar/send', async (req, res) => {
-  try {
-    const telefone = req.body?.telefone
-    if (!telefone) {
-      res.status(400).json({ ok: false, code: 'MISSING_TELEFONE', error: 'Informe telefone no body.' })
-      return
-    }
-    const idLead = req.body?.id_lead ?? req.body?.idLead
-    const templateRes = await sendFormSumarTemplate(process.env, {
-      to: telefone,
-      leadId: idLead,
-      executionId: generateExecutionId(),
-    })
-    const status = templateRes.ok ? 200 : 502
-    res.status(status).json({
-      ok: templateRes.ok,
-      template: templateRes,
-      diagnose: await diagnoseFormSumarTemplate(process.env),
-    })
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message })
-  }
-})
-
 app.post('/api/inscricao/run', async (req, res) => {
   try {
     if (!isInscricaoAutomaticaEnabled(process.env)) {
-      const body = req.body || {}
-      const telefone = body.telefone
-      const curso = body.curso ?? body.Curso
-      const tipo = body.tipo_ingresso ?? body.tipoIngresso
-      if (telefone && curso && tipo) {
-        const form = await runInscricaoFormStart(process.env, {
-          telefone,
-          id_lead: body.id_lead ?? body.idLead,
-          curso,
-          tipo_ingresso: tipo,
-        })
-        res.json({
-          ok: form.ok,
-          code: form.ok ? 'FORMULARIO_SUM_STARTED' : form.result?.code,
-          form,
-          message: form.ok
-            ? 'Salesbot Formulario_Sum ativado. Salesbot 49815 após preenchimento do formulário.'
-            : matriculaViaConsultorInstruction(body),
-        })
-        return
-      }
       res.json({
         ok: false,
         code: 'MATRICULA_VIA_CONSULTOR',
-        message: matriculaViaConsultorInstruction(body),
+        message: matriculaViaConsultorInstruction(req.body || {}),
       })
       return
     }
@@ -418,6 +354,16 @@ app.get('/api/kommo/lead-by-phone', async (req, res) => {
     }
     const out = await findLeadByPhone(process.env, telefone)
     res.status(out.ok ? 200 : 500).json(out)
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+/** Nome do lead no Kommo — usado pelo painel Execuções quando o histórico não gravou o nome. */
+app.get('/api/kommo/lead/:leadId/summary', async (req, res) => {
+  try {
+    const out = await getLeadSummary(process.env, req.params.leadId)
+    res.status(out.ok ? 200 : 404).json(out)
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })
   }
@@ -1875,6 +1821,181 @@ app.post('/api/scheduler/tick', async (_req, res) => {
     res.json({ ok: true, stats })
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+/**
+ * Snapshot do funil/fila Kommo + buffer para o painel "Funil Kommo".
+ *
+ * Une, num único GET:
+ *   • configuração do scheduler (pipeline/status/intervalo/debounce)
+ *   • whitelist KOMMO_AGENT_TEST_LEAD_IDS
+ *   • leads que estão na etapa configurada com telefone resolvido e estado
+ *     do buffer Evolution (mensagens pendentes, idade da última)
+ *   • sessões "órfãs": buffer cheio sem lead correspondente no funil
+ *
+ * Usado pela aba do painel para responder "quem está prestes a ser
+ * processado pelo agente?" sem precisar consultar Kommo no navegador.
+ */
+app.get('/api/scheduler/funnel', async (_req, res) => {
+  const env = process.env
+  const enabled = (() => {
+    const flag = String(env.KOMMO_SCHEDULER_ENABLED || '').trim().toLowerCase()
+    if (flag === 'false' || flag === '0' || flag === 'no') return false
+    return Boolean(env.KOMMO_AGENT_PIPELINE_ID && env.KOMMO_AGENT_STATUS_ID && env.KOMMO_BASE_URL && env.KOMMO_ACCESS_TOKEN)
+  })()
+  const pipelineId = env.KOMMO_AGENT_PIPELINE_ID ? Number(env.KOMMO_AGENT_PIPELINE_ID) : null
+  const statusId = env.KOMMO_AGENT_STATUS_ID ? Number(env.KOMMO_AGENT_STATUS_ID) : null
+  const intervalSec = Number(env.KOMMO_SCHEDULER_INTERVAL_SEC) || 10
+  const debounceSec = Number(env.KOMMO_SCHEDULER_DEBOUNCE_SEC) || 5
+  const debounceMs = debounceSec * 1000
+  const orphanFlush = ['true', '1', 'yes'].includes(
+    String(env.KOMMO_SCHEDULER_WEBHOOK_ORPHAN_FLUSH || '').trim().toLowerCase(),
+  )
+  const whitelistRaw = String(env.KOMMO_AGENT_TEST_LEAD_IDS || '').trim()
+  const whitelist = whitelistRaw
+    ? whitelistRaw.split(/[,\s;]+/).map((s) => Number(String(s).trim())).filter((n) => Number.isFinite(n) && n > 0)
+    : []
+  const whitelistSet = whitelist.length ? new Set(whitelist) : null
+  const publicWebhookBaseUrl = env.PUBLIC_WEBHOOK_BASE_URL || null
+
+  const config = {
+    running: isSchedulerRunning(),
+    enabled,
+    pipelineId,
+    statusId,
+    intervalSec,
+    debounceSec,
+    orphanFlush,
+    whitelist,
+    publicWebhookBaseUrl,
+    kommoBaseUrl: env.KOMMO_BASE_URL || null,
+  }
+
+  if (!enabled || !Number.isFinite(pipelineId) || !Number.isFinite(statusId)) {
+    res.json({
+      ok: true,
+      config,
+      kommoOk: false,
+      leads: [],
+      orphans: [],
+      hint: 'Scheduler desligado — preencha KOMMO_AGENT_PIPELINE_ID / KOMMO_AGENT_STATUS_ID e o token Kommo no .env.',
+    })
+    return
+  }
+
+  try {
+    const listing = await listLeadsByStatus(env, { pipelineId, statusId })
+    if (!listing.ok) {
+      res.json({
+        ok: true,
+        config,
+        kommoOk: false,
+        kommoError: listing.error || listing.status,
+        leads: [],
+        orphans: [],
+      })
+      return
+    }
+    const leadsAll = listing.leads || []
+    const contactIds = []
+    for (const lead of leadsAll) {
+      const cs = lead?._embedded?.contacts || []
+      for (const c of cs) {
+        if (Number.isFinite(Number(c.id))) contactIds.push(Number(c.id))
+      }
+    }
+    const contactById = new Map()
+    if (contactIds.length > 0) {
+      const bulk = await bulkGetContactsByIds(env, contactIds)
+      if (bulk.ok) {
+        for (const c of bulk.contacts) contactById.set(Number(c.id), c)
+      }
+    }
+
+    const inFunnelSessionIds = new Set()
+    const leadsOut = []
+    for (const lead of leadsAll) {
+      const cs = lead?._embedded?.contacts || []
+      let phone = null
+      let contactName = null
+      for (const c of cs) {
+        const detail = contactById.get(Number(c.id))
+        if (!detail) continue
+        const p = extractContactPhone(detail)
+        if (p) {
+          phone = p
+          contactName = (typeof detail.name === 'string' && detail.name.trim()) || null
+          break
+        }
+      }
+      if (!phone) phone = extractLeadPhone(lead)
+      const sessionId = phone ? phoneToWhatsAppSessionId(phone) : null
+      let bufferCount = 0
+      let lastTouchedAt = null
+      let ageMs = null
+      if (sessionId) {
+        inFunnelSessionIds.add(sessionId)
+        try {
+          const [msgs, last] = await Promise.all([
+            getMessages(env, sessionId),
+            getLastTouchedAt(env, sessionId),
+          ])
+          bufferCount = Array.isArray(msgs) ? msgs.length : 0
+          lastTouchedAt = last ? last.toISOString() : null
+          if (last) ageMs = Date.now() - last.getTime()
+        } catch (err) {
+          console.warn('[funnel] buffer read falhou', sessionId, err.message)
+        }
+      }
+      const eligibleNow = bufferCount > 0 && ageMs != null && ageMs >= debounceMs
+      const inWhitelist = whitelistSet ? whitelistSet.has(Number(lead.id)) : true
+      leadsOut.push({
+        leadId: Number(lead.id),
+        leadName: typeof lead.name === 'string' ? lead.name : null,
+        contactName,
+        phone: phone || null,
+        sessionId,
+        bufferCount,
+        lastTouchedAt,
+        ageSec: ageMs != null ? Math.round(ageMs / 1000) : null,
+        eligibleNow,
+        inWhitelist,
+        statusId: Number(lead.status_id) || null,
+        pipelineId: Number(lead.pipeline_id) || null,
+      })
+    }
+
+    let orphans = []
+    try {
+      const pending = await listSessionsWithPendingMessages(env, 80)
+      const candidates = pending.filter((sid) => !inFunnelSessionIds.has(sid))
+      for (const sid of candidates) {
+        try {
+          const [msgs, last] = await Promise.all([
+            getMessages(env, sid),
+            getLastTouchedAt(env, sid),
+          ])
+          if (!Array.isArray(msgs) || msgs.length === 0) continue
+          orphans.push({
+            sessionId: sid,
+            bufferCount: msgs.length,
+            lastTouchedAt: last ? last.toISOString() : null,
+            ageSec: last ? Math.round((Date.now() - last.getTime()) / 1000) : null,
+            preview: String(msgs[msgs.length - 1] || '').slice(0, 180),
+          })
+        } catch (err) {
+          console.warn('[funnel] orphan read falhou', sid, err.message)
+        }
+      }
+      orphans.sort((a, b) => (a.ageSec ?? 0) - (b.ageSec ?? 0))
+    } catch (err) {
+      console.warn('[funnel] listSessionsWithPendingMessages falhou:', err.message)
+    }
+
+    res.json({ ok: true, config, kommoOk: true, leads: leadsOut, orphans })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message, config })
   }
 })
 

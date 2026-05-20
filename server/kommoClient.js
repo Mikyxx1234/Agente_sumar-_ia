@@ -8,7 +8,7 @@
  * refactor separado.
  *
  * Env:
- *   KOMMO_BASE_URL       ex: https://admamoeduitcombr.kommo.com
+ *   KOMMO_BASE_URL       ex: https://academicosoead.kommo.com
  *   KOMMO_ACCESS_TOKEN   Bearer (OAuth ou long-lived)
  */
 
@@ -79,6 +79,44 @@ export async function findLeadByPhone(env, telefone) {
     matched: leads.length,
     leads,
   }
+}
+
+/**
+ * Nome do lead/contato no Kommo (para exibir no painel ao lado do link CRM).
+ *
+ * @returns {Promise<{ ok: boolean, leadId?: number, name?: string|null, error?: string }>}
+ */
+export async function getLeadSummary(env, leadId) {
+  const id = Number(leadId)
+  if (!Number.isFinite(id) || id <= 0) {
+    return { ok: false, error: 'leadId inválido' }
+  }
+  const r = await kommoFetch(env, `/api/v4/leads/${id}?with=contacts`)
+  if (!r.ok) {
+    return { ok: false, status: r.status, error: summarizeError(r) }
+  }
+  const lead = r.data
+  let name = lead?.name && String(lead.name).trim() ? String(lead.name).trim() : null
+  const contact = lead?._embedded?.contacts?.[0]
+  if (!name && contact?.name) name = String(contact.name).trim()
+
+  let phone = extractLeadPhone(lead)
+  if (!phone) {
+    const contactIds = (lead?._embedded?.contacts || [])
+      .map((c) => Number(c?.id))
+      .filter((n) => Number.isFinite(n) && n > 0)
+    if (contactIds.length > 0) {
+      const bulk = await bulkGetContactsByIds(env, contactIds)
+      if (bulk.ok) {
+        for (const c of bulk.contacts) {
+          const p = extractContactPhone(c)
+          if (p) { phone = p; if (!name && c.name) name = String(c.name).trim(); break }
+        }
+      }
+    }
+  }
+
+  return { ok: true, leadId: id, name: name || null, phone: phone || null }
 }
 
 /**
