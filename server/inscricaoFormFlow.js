@@ -1,7 +1,8 @@
 /**
  * Fluxo inscrição Sumaré:
  *   início → salesbot Kommo "Formulario_Sum" (envia o formulário no WhatsApp)
- *   pós preenchimento → salesbot 49815 + pause IA
+ *   pós preenchimento → distribuição → validação campos → salesbot 49813 + pause IA
+ *   (ver server/inscricaoPostFormPipeline.js)
  */
 
 import {
@@ -12,7 +13,6 @@ import {
   messageIsCourseCatalogRequest,
   messageLooksLikeFormSumarResponse,
   buildInscricaoFormSentReply,
-  buildInscricaoFormCompleteReply,
 } from '../libShared/inscricaoFormHeuristics.js'
 import { messageLooksLikeOperationalChat } from '../libShared/scopeHeuristics.js'
 import { sendFormSumarTemplate } from './whatsappTemplateSender.js'
@@ -71,27 +71,6 @@ async function resolveLeadId(env, telefone, leadIdHint) {
     /* ignore */
   }
   return null
-}
-
-async function pauseAtendimentoIa(env, telefone) {
-  const { url, key, table } = getSupabaseCfg(env)
-  if (!url || !key) return { ok: false }
-  try {
-    const enc = encodeURIComponent(normalizeTelefone(telefone))
-    const res = await fetch(`${url}/rest/v1/${encodeURIComponent(table)}?telefone=eq.${enc}`, {
-      method: 'PATCH',
-      headers: {
-        apikey: key,
-        Authorization: `Bearer ${key}`,
-        'Content-Type': 'application/json',
-        Prefer: 'return=minimal',
-      },
-      body: JSON.stringify({ atendimento_ia: 'pause' }),
-    })
-    return { ok: res.ok }
-  } catch {
-    return { ok: false }
-  }
 }
 
 function buildAgentReturn({ executionId, model, t0, reply, steps, toolCalls, ctxSnapshot, ok = true }) {
@@ -243,71 +222,7 @@ export async function tryHandleInscricaoFormStart(env, input) {
   }
 }
 
-/**
- * Formulário preenchido → salesbot 49815 + pause IA.
- */
-export async function tryHandleInscricaoFormComplete(env, input) {
-  const { telefone, userMessage, executionId, model, leadId: leadIdHint, pushName, t0 } = input
-  if (!telefone) return null
-
-  const status = await getFormStatus(env, telefone)
-  const looksLikeForm = messageLooksLikeFormSumarResponse(userMessage)
-  if (!looksLikeForm && status !== INSCRICAO_FORM_STATUS_AGUARDANDO) return null
-  if (!looksLikeForm) return null
-
-  const idLead = await resolveLeadId(env, telefone, leadIdHint)
-  if (idLead == null) {
-    return {
-      handled: true,
-      result: buildAgentReturn({
-        executionId,
-        model,
-        t0,
-        ok: false,
-        reply:
-          'Recebi seu formulário! Para seguir, preciso localizar seu cadastro — em instantes um consultor da Faculdade Sumaré fala com você.',
-        steps: [{ type: 'inscricao_form_complete', ok: false, code: 'LEAD_NOT_FOUND' }],
-      }),
-    }
-  }
-
-  const [salesbotRes, pauseRes] = await Promise.all([
-    runKommoSalesbot(env, idLead, 'matricula_pos_form'),
-    pauseAtendimentoIa(env, telefone),
-  ])
-  await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_CONCLUIDO)
-
-  const handoffOk = Boolean(salesbotRes.ok && !salesbotRes.skipped)
-  const reply = buildInscricaoFormCompleteReply({ pushName, ok: handoffOk })
-
-  return {
-    handled: true,
-    result: buildAgentReturn({
-      executionId,
-      model,
-      t0,
-      reply,
-      steps: [
-        {
-          type: 'inscricao_form_complete',
-          ok: handoffOk,
-          salesbot_ok: salesbotRes.ok,
-          bot_id: salesbotRes.botId,
-          pause_ok: pauseRes.ok,
-        },
-      ],
-      toolCalls: [
-        {
-          tool: 'matricula_pos_form',
-          args: { telefone, id_lead: idLead },
-          result: handoffOk ? `Salesbot ${salesbotRes.botId} disparado` : salesbotRes.text || 'falha',
-          ok: handoffOk,
-        },
-      ],
-      ctxSnapshot: { inscricaoForm: 'completed', salesbotId: salesbotRes.botId },
-    }),
-  }
-}
+export { tryHandleInscricaoFormComplete } from './inscricaoPostFormPipeline.js'
 
 export async function tryEnsureInscricaoFormSent(env, input) {
   const { telefone, userMessage, historyMessages, llmReply } = input

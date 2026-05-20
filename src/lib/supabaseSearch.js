@@ -147,11 +147,7 @@ export async function executarInscricao(args) {
     throw new Error('Resposta inválida da API de inscrição')
   }
   if (data.ok) {
-    const lines = [
-      data.retorno || 'Inscrição processada.',
-      `Curso: ${data.curso}`,
-      `Tipo de ingresso: ${data.tipo_ingresso}`,
-    ]
+    const lines = [data.retorno || 'Inscrição processada.', `Curso: ${data.curso}`]
     if (data.destino === 'aguardando_inscricao') lines.push('Destino no CRM: Aguardando Inscrição.')
     if (data.destino === 'atendimento') lines.push('Destino no CRM: atendimento (consultor).')
     if (data.missing_fields?.length) {
@@ -163,7 +159,7 @@ export async function executarInscricao(args) {
   }
   if (data.code === 'MATRICULA_VIA_CONSULTOR' && data.message) return data.message
   if (data.code === 'MISSING_CRM_FIELDS' && data.message) return data.message
-  if (data.code === 'MISSING_PARAMS') return data.error || 'Informe curso e tipo de ingresso (ENEM ou Vestibular Múltipla Escolha).'
+  if (data.code === 'MISSING_PARAMS') return data.error || 'Informe o curso confirmado pelo lead.'
   return `Inscrição não executada: ${data.error || data.message || data.code || `HTTP ${res.status}`}`
 }
 
@@ -327,7 +323,7 @@ export const TOOL_DEFINITIONS = [
     function: {
       name: 'inscricao',
       description:
-        'Inscrição automática no Kommo (só com INSCRICAO_AUTOMATICA_ENABLED=true no servidor). Fase atual: NÃO USE — colete curso + tipo de ingresso e chame distribuir_humano para o consultor finalizar a matrícula.',
+        'Inscrição automática no Kommo (só com INSCRICAO_AUTOMATICA_ENABLED=true). Fase atual: NÃO USE — confirme o curso e siga o fluxo Form Sumar. Não peça ENEM/Vestibular ao lead.',
       parameters: {
         type: 'object',
         properties: {
@@ -337,8 +333,7 @@ export const TOOL_DEFINITIONS = [
           },
           tipo_ingresso: {
             type: 'string',
-            enum: ['ENEM', 'Vestibular Múltipla Escolha'],
-            description: 'Prova de ingresso: ENEM ou Vestibular Múltipla Escolha.',
+            description: 'OPCIONAL — não pergunte ao lead; servidor usa padrão se omitido.',
           },
           telefone: {
             type: 'string',
@@ -349,7 +344,7 @@ export const TOOL_DEFINITIONS = [
             description: 'OPCIONAL — id_lead do Kommo se já estiver no Contexto. OMITA se não souber.',
           },
         },
-        required: ['curso', 'tipo_ingresso', 'telefone'],
+        required: ['curso', 'telefone'],
       },
     },
   },
@@ -383,7 +378,7 @@ export const TOOL_DEFINITIONS = [
     function: {
       name: 'distribuir_humano',
       description:
-        'Encaminha o lead para consultor humano e dispara salesbot no Kommo. motivo consultor (49777): dúvida/humano/FAQ. motivo matricula (49813): após curso + tipo de ingresso. id_lead opcional.',
+        'Encaminha o lead para consultor humano e dispara salesbot no Kommo. motivo consultor (49777): dúvida/humano/FAQ. id_lead opcional.',
       parameters: {
         type: 'object',
         properties: {

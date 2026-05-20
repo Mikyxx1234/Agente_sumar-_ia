@@ -399,7 +399,7 @@ async function runMinimalDistribuirHandoff(env, ctx) {
     handoff_mode: 'minimal',
     retorno: ok
       ? kind === 'matricula_pos_form'
-        ? 'salesbot pós-formulário (49815) disparado; IA pausada'
+        ? 'salesbot pós-formulário (matrícula) disparado; IA pausada'
         : kind === 'formulario_sum'
           ? 'salesbot Formulario_Sum disparado'
           : 'salesbot consultor disparado; IA pausada'

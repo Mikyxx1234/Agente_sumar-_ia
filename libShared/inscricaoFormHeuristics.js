@@ -3,6 +3,8 @@
 import { normalizeMessageForScope, messageLooksLikeOperationalChat } from './scopeHeuristics.js'
 
 export const INSCRICAO_FORM_STATUS_AGUARDANDO = 'aguardando_form_sumar'
+/** Formulário recebido — salesbot de distribuição em andamento. */
+export const INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO = 'aguardando_distribuicao_form'
 export const INSCRICAO_FORM_STATUS_CONCLUIDO = 'form_sumar_concluido'
 
 /** Lead cobra o formulário que ainda não chegou. */
@@ -45,8 +47,7 @@ function assistantInEnrollmentStep(lastAssist) {
     /\b(quer\s+seguir|deseja\s+seguir|deseja\s+se\s+inscrever|seguir\s+com|fazer\s+(a\s+)?inscri|enviar\s+o\s+formul[aá]rio)\b/i.test(
       a,
     ) ||
-    /\b(inscrever|matr[ií]cula|inscri[cç][aã]o)\b/i.test(a) ||
-    /\b(enem|vestibular|nota\s+do\s+enem|tipo\s+de\s+ingresso)\b/i.test(a)
+    /\b(inscrever|matr[ií]cula|inscri[cç][aã]o)\b/i.test(a)
   )
 }
 
@@ -68,20 +69,6 @@ function userConfirmsEnrollmentAfterAssistant(text, historyMessages) {
   return /^\s*(sim|s|quero|pode|bora|vamos|ok|gostei|esse\s+curso|fazer|isso)\b/i.test(t)
 }
 
-/** Resposta à pergunta de ENEM / ingresso no meio do funil de matrícula. */
-function userAnswersEnrollmentIngressoQuestion(text, historyMessages) {
-  const lastAssist = lastAssistantText(historyMessages)
-  if (!/\b(enem|vestibular|nota\s+do\s+enem|ingresso)\b/i.test(String(lastAssist || '').toLowerCase())) {
-    return false
-  }
-  const t = normalizeMessageForScope(text).toLowerCase().trim()
-  if (!t || t.length > 48) return false
-  return (
-    /^(sim|s|n[aã]o|nao|n|tenho|n[aã]o\s+tenho|nao\s+tenho)$/i.test(t) ||
-    /\b(n[aã]o\s+tenho|tenho\s+sim|fiz\s+enem|n[aã]o\s+fiz)\b/i.test(t)
-  )
-}
-
 /**
  * Lead quer iniciar / prosseguir inscrição ou matrícula (mensagem atual + contexto recente).
  * Inclui confirmações como "gostei e quero fazer esse curso" (sem palavra "matrícula").
@@ -90,9 +77,7 @@ export function messageRequestsInscricaoForm(text, historyMessages = []) {
   const t = normalizeMessageForScope(text).toLowerCase()
   if (!t) return false
 
-  const enrollmentContextReply =
-    userAnswersEnrollmentIngressoQuestion(text, historyMessages) ||
-    userConfirmsEnrollmentAfterAssistant(text, historyMessages)
+  const enrollmentContextReply = userConfirmsEnrollmentAfterAssistant(text, historyMessages)
 
   if (t.length < 4 && !enrollmentContextReply) return false
 
@@ -132,7 +117,6 @@ export function messageRequestsInscricaoForm(text, historyMessages = []) {
   if (/\b(quero|vou)\s+(fazer|curso)\b/i.test(t) && /\bcurso\b/i.test(t)) return true
   if (/\bquero\s+esse\s+curso\b/i.test(t)) return true
 
-  if (userAnswersEnrollmentIngressoQuestion(text, historyMessages)) return true
   if (userConfirmsEnrollmentAfterAssistant(text, historyMessages)) return true
 
   return false
@@ -145,6 +129,8 @@ export function messageLooksLikeFormSumarResponse(text) {
   const t = raw.toLowerCase()
 
   if (/\[formulario\s+sumar\]/i.test(raw)) return true
+  if (/\brespostas\s+recebidas\s+no\s+flow\b/i.test(t)) return true
+  if (/\bflow\b/i.test(t) && /\b(respondid|recebid|preenchid|enviad)\b/i.test(t)) return true
   if (/\bnfm_reply\b/i.test(t) || /\bresponse_json\b/i.test(t)) return true
   if (/^\s*[\{\[]/.test(raw) && /"(nome|name|email|e-mail|telefone|phone|cpf|curso)"/i.test(raw)) {
     return true
@@ -174,12 +160,34 @@ export function buildInscricaoFormSentReply(opts = {}) {
   )
 }
 
+/** Logo após o Flow / formulário ser preenchido (antes da matrícula automática). */
+export function buildInscricaoFormReceivedReply(opts = {}) {
+  const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
+  return (
+    `Obrigado${nameBit}! Recebemos suas respostas no formulário. ` +
+    `Estou encaminhando seu cadastro para a equipe de atendimento da Faculdade Sumaré — ` +
+    `em instantes seguimos com o próximo passo da sua inscrição. ` +
+    `Se quiser, pode continuar por aqui tirando dúvidas sobre o curso ou a matrícula.`
+  )
+}
+
+export function buildInscricaoFormFieldsIncompleteReply(opts = {}) {
+  const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
+  const missing = Array.isArray(opts.missingFields) ? opts.missingFields : []
+  const list = missing.length ? missing.join(', ') : 'alguns dados do cadastro'
+  return (
+    `Obrigado${nameBit}! Recebemos o formulário, mas ainda faltam informações no cadastro: **${list}**. ` +
+    `Um consultor pode te ajudar a completar — ou, se preferir, preencha novamente o formulário quando reenviarmos. ` +
+    `Posso esclarecer qualquer dúvida sobre o curso enquanto isso.`
+  )
+}
+
 export function buildInscricaoFormCompleteReply(opts = {}) {
   const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
   if (opts.ok) {
     return (
-      `Obrigado${nameBit}! Recebemos o formulário e já encaminhamos seu cadastro para um consultor ` +
-      `da Faculdade Sumaré finalizar sua inscrição — em breve alguém da equipe fala com você por aqui, tudo bem?`
+      `Perfeito${nameBit}! Seu cadastro foi validado e já iniciamos o próximo passo da matrícula na Faculdade Sumaré. ` +
+      `Em breve nossa equipe segue com você por aqui para finalizar tudo, tudo bem?`
     )
   }
   return (

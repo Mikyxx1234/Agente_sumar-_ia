@@ -89,7 +89,7 @@ export const TOOL_DEFINITIONS = [
     function: {
       name: 'inscricao',
       description:
-        'Inscrição automática no Kommo (só quando INSCRICAO_AUTOMATICA_ENABLED=true). Na fase atual da operação NÃO USE — colete curso + tipo de ingresso e chame distribuir_humano para o consultor finalizar a matrícula. Se ainda assim for chamada com automação desligada, a tool devolverá instrução para distribuir_humano.',
+        'Inscrição automática no Kommo (só quando INSCRICAO_AUTOMATICA_ENABLED=true). Na fase atual NÃO USE — confirme o curso e dispare o fluxo Form Sumar (regra 7). Não peça ENEM/Vestibular ao lead.',
       parameters: {
         type: 'object',
         properties: {
@@ -97,14 +97,17 @@ export const TOOL_DEFINITIONS = [
             type: 'string',
             description: 'Nome completo do curso confirmado pelo lead (ex.: "Desenvolvimento Backend").',
           },
-          tipo_ingresso: { type: 'string', enum: ['ENEM', 'Vestibular Múltipla Escolha'] },
+          tipo_ingresso: {
+            type: 'string',
+            description: 'OPCIONAL — não pergunte ao lead. Se omitido, o servidor usa valor padrão (Vestibular).',
+          },
           telefone: { type: 'string', description: 'Telefone do lead (Contexto do atendimento).' },
           id_lead: {
             type: 'integer',
             description: 'OPCIONAL — id_lead do Kommo se já estiver no Contexto. OMITA se não souber.',
           },
         },
-        required: ['curso', 'tipo_ingresso', 'telefone'],
+        required: ['curso', 'telefone'],
       },
     },
   },

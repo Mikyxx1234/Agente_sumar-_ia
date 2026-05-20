@@ -29,6 +29,7 @@
 import { resolveModel } from './ai/modelRegistry.js'
 import { findLeadByPhone, listLeadCustomFields } from './kommoClient.js'
 import { runKommoSalesbot } from './kommoSalesbot.js'
+import { getDefaultTipoIngresso } from './inscricaoConfig.js'
 
 // IDs dos campos "fixos" do Kommo. Para os campos da seção
 // "Inscrição" temos uma cascata: env > ID hardcodado conhecido >
@@ -320,17 +321,17 @@ async function supabaseRest(url, key, method, pathAndQuery, body, extraPrefer) {
 export async function runInscricao(env, body) {
   const curso = String(body?.curso ?? body?.Curso ?? '').trim()
   const tipoRaw = String(
-    body?.tipo_ingresso ?? body?.tipoIngresso ?? body?.['Tipo de ingresso'] ?? '',
+    body?.tipo_ingresso ?? body?.tipoIngresso ?? body?.['Tipo de ingresso'] ?? getDefaultTipoIngresso(env),
   ).trim()
 
   const telefone = normalizeTelefone(body?.telefone)
   let idLead = normalizeIdLead(body?.id_lead ?? body?.idLead)
 
-  if (!curso || !tipoRaw) {
+  if (!curso) {
     return {
       ok: false,
       code: 'MISSING_PARAMS',
-      error: 'Informe curso e tipo_ingresso (ENEM ou Vestibular Múltipla Escolha).',
+      error: 'Informe o curso confirmado pelo lead.',
     }
   }
 
@@ -390,7 +391,7 @@ export async function runInscricao(env, body) {
       env.KOMMO_SALESBOT_MATRICULA_ID ||
       env.KOMMO_SALESBOT_BOT_ID ||
       env.KOMMO_SALESBOT_BOT_ID_MATRICULA ||
-      49815,
+      49813,
   )
   const pipelineId = Number(env.KOMMO_PIPELINE_ID || 5481944)
   const statusAguardandoInscricao = Number(

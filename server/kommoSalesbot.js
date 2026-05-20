@@ -4,13 +4,15 @@
  * IDs padrão Sumaré:
  *   consultor / dúvida humana     → 49777
  *   formulário inscrição (início) → KOMMO_SALESBOT_FORMULARIO_SUM_ID (obrigatório no .env)
- *   pós formulário preenchido     → 49815 (49813 descontinuado)
+ *   distribuição pós-formulário   → KOMMO_SALESBOT_DISTRIBUICAO_FORM_ID
+ *   pós formulário validado       → 49813 (matrícula)
  */
 
 import { createLeadNote } from './kommoClient.js'
 
 const DEFAULT_BOT_CONSULTOR = 49777
-const DEFAULT_BOT_MATRICULA_POS_FORM = 49815
+const DEFAULT_BOT_DISTRIBUICAO_FORM = 49777
+const DEFAULT_BOT_MATRICULA_POS_FORM = 49813
 
 export function normalizeSalesbotMotivo(motivo) {
   const m = String(motivo || 'consultor')
@@ -18,8 +20,19 @@ export function normalizeSalesbotMotivo(motivo) {
     .toLowerCase()
     .normalize('NFD')
     .replace(/\p{M}/gu, '')
-  if (['matricula_pos_form', 'pos_form', 'apos_formulario', 'form_completed'].includes(m)) {
+  if (['matricula_pos_form', 'pos_form', 'apos_formulario', 'form_completed', 'matricula', '49813'].includes(m)) {
     return 'matricula_pos_form'
+  }
+  if (
+    [
+      'distribuicao_pos_form',
+      'distribuir_pos_form',
+      'distribuir_lead',
+      'distribuicao_form',
+      'distribuicao',
+    ].includes(m)
+  ) {
+    return 'distribuicao_pos_form'
   }
   if (
     [
@@ -42,6 +55,14 @@ export function normalizeSalesbotMotivo(motivo) {
 /** Resolve bot_id conforme motivo do fluxo. */
 export function resolveSalesbotBotId(env, motivo) {
   const kind = normalizeSalesbotMotivo(motivo)
+  if (kind === 'distribuicao_pos_form') {
+    const id = Number(
+      env.KOMMO_SALESBOT_DISTRIBUICAO_FORM_ID ||
+        env.KOMMO_SALESBOT_DISTRIBUICAO_ID ||
+        env.KOMMO_SALESBOT_DISTRIBUIR_ID,
+    )
+    return Number.isFinite(id) && id > 0 ? id : DEFAULT_BOT_DISTRIBUICAO_FORM
+  }
   if (kind === 'matricula_pos_form') {
     const id = Number(
       env.KOMMO_SALESBOT_MATRICULA_POS_FORM_ID ||

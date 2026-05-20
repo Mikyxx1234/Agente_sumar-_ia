@@ -28,6 +28,8 @@ import {
   extractDiscussedCourseFromHistory,
   buildContextualGreetingReply,
 } from '../../libShared/conversationContextHeuristics.js'
+import { detectCursoConfirmadoPeloLead } from '../../libShared/cursoConfirmation.js'
+import { setSumCursoOnLead } from '../sumareLeadFields.js'
 import { tryHandleUnsupportedCourseLevelInquiry } from '../courseLevelInquiry.js'
 import { runDistribuirHumano, formatDistribuirHumanoReply } from '../distribuirHumanoTool.js'
 import {
@@ -215,10 +217,30 @@ export async function runAgent(env, input) {
 
   const formFlowCtx = { telefone, userMessage, historyMessages, executionId, model, leadId, pushName: input?.pushName, t0 }
 
+  // Pré-preenchimento sum_Curso: assim que o lead confirma interesse num
+  // curso (mesmo antes de pedir inscrição), gravamos no Kommo. Função
+  // interna já trata dedupe (mesmo lead+curso em <6h) — log apenas.
+  if (telefone) {
+    try {
+      const cursoConfirmado = detectCursoConfirmadoPeloLead(userMessage, historyMessages)
+      if (cursoConfirmado) {
+        const r = await setSumCursoOnLead(env, { leadId, telefone, cursoNome: cursoConfirmado })
+        console.log(
+          `[${executionId}] SUM_CURSO_UPDATE curso="${cursoConfirmado}" ok=${r.ok} skipped=${Boolean(r.skipped)} code=${r.code || 'n/a'} previous="${r.previous || ''}"`,
+        )
+      }
+    } catch (err) {
+      console.warn(`[${executionId}] SUM_CURSO_UPDATE erro: ${err.message}`)
+    }
+  }
+
   if (telefone) {
     const formDone = await tryHandleInscricaoFormComplete(env, formFlowCtx)
     if (formDone?.handled) {
-      console.log(`[${executionId}] INSCRICAO_FORM_COMPLETE salesbot=${formDone.result?.ctxSnapshot?.salesbotId ?? 'n/a'}`)
+      const step = formDone.result?.ctxSnapshot?.inscricaoForm ?? 'post_form'
+      console.log(
+        `[${executionId}] INSCRICAO_POST_FORM step=${step} salesbot=${formDone.result?.ctxSnapshot?.salesbotId ?? formDone.result?.ctxSnapshot?.distribSalesbotId ?? 'n/a'}`,
+      )
       return { ...formDone.result, historyLoaded: historyMessages.length, aiMeta: ctx.toAiMeta() }
     }
     const formStart = await tryHandleInscricaoFormStart(env, formFlowCtx)

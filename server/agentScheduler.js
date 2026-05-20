@@ -58,6 +58,10 @@ import {
 import { phoneToWhatsAppSessionId } from './phoneWhatsApp.js'
 import { getMessages, getLastTouchedAt, listSessionsWithPendingMessages } from './evolution/messageBuffer.js'
 import { flushSession } from './evolution/webhookEvolution.js'
+import { tryAdvanceInscricaoPostFormScheduler } from './inscricaoPostFormPipeline.js'
+import { sendMessageWithNote } from './whatsappSender.js'
+import { saveConversation } from './historyStore.js'
+import { generateExecutionId } from './ai/executionTelemetry.js'
 import {
   syncKommoInboundToBuffer,
   isKommoInboundPollEnabled,
@@ -282,6 +286,32 @@ export async function runSchedulerTick(env) {
             ? contactIdForPoll
             : null,
       })
+
+      try {
+        const postFormAdv = await tryAdvanceInscricaoPostFormScheduler(env, {
+          telefone: phone,
+          leadId: Number(lead.id),
+        })
+        if (postFormAdv?.handled && postFormAdv.result?.reply) {
+          const execId = generateExecutionId()
+          const sendRes = await sendMessageWithNote(env, {
+            to: sessionId,
+            text: postFormAdv.result.reply,
+            leadId: Number(lead.id),
+            executionId: execId,
+          })
+          await saveConversation(env, {
+            telefone: phone,
+            userMessage: '[scheduler] avanço pós-formulário',
+            botMessage: postFormAdv.result.reply,
+          }).catch(() => {})
+          console.log(
+            `[scheduler] pós-form avançado lead=${lead.id} send_ok=${sendRes?.ok} step=${postFormAdv.result?.ctxSnapshot?.inscricaoForm ?? 'n/a'}`,
+          )
+        }
+      } catch (postErr) {
+        console.warn(`[scheduler] pós-form lead=${lead.id}:`, postErr.message)
+      }
       if (isKommoInboundPollDebugLead(env, Number(lead.id))) {
         console.log(
           `[scheduler][debug] pós-sync lead=${lead.id} session=${sessionId} pushed=${syncRes.pushed} byMode=${JSON.stringify(syncRes.byMode)}`,
