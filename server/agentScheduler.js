@@ -59,6 +59,7 @@ import { phoneToWhatsAppSessionId } from './phoneWhatsApp.js'
 import { getMessages, getLastTouchedAt, listSessionsWithPendingMessages } from './evolution/messageBuffer.js'
 import { flushSession } from './evolution/webhookEvolution.js'
 import { tryAdvanceInscricaoPostFormScheduler } from './inscricaoPostFormPipeline.js'
+import { tryInactivityReengagement } from './inactivityReengagement.js'
 import { sendMessageWithNote } from './whatsappSender.js'
 import { saveConversation } from './historyStore.js'
 import { generateExecutionId } from './ai/executionTelemetry.js'
@@ -325,6 +326,20 @@ export async function runSchedulerTick(env) {
         getLastTouchedAt(env, sessionId),
       ])
       if (!messages || messages.length === 0) {
+        try {
+          const inact = await tryInactivityReengagement(env, {
+            telefone: phone,
+            leadId: Number(lead.id),
+            sessionId,
+            lead,
+          })
+          if (inact?.action && !['skip', 'disabled'].includes(inact.action)) {
+            console.log(`[scheduler] inatividade lead=${lead.id} action=${inact.action}`)
+          }
+        } catch (inactErr) {
+          console.warn(`[scheduler] inatividade lead=${lead.id}:`, inactErr.message)
+        }
+
         stats.skippedNoMessages += 1
         const pollOn = isKommoInboundPollEnabled(env)
         const mode = normalizeKommoInboundPollMode(env.KOMMO_INBOUND_POLL_MODE)

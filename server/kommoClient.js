@@ -554,3 +554,28 @@ export async function listLeadEvents(env, leadId, opts = {}) {
   const events = r.data?._embedded?.events || []
   return { ok: true, events, status: r.status, requestUrl: path }
 }
+
+/**
+ * Move o lead para outro estágio do funil (pipeline + status).
+ *
+ * @returns {Promise<{ ok: boolean, status?: number, error?: string }>}
+ */
+export async function updateLeadPipelineStatus(env, leadId, { pipelineId, statusId }) {
+  const id = Number(leadId)
+  if (!Number.isFinite(id) || id <= 0) {
+    return { ok: false, code: 'MISSING_LEAD_ID', error: 'leadId inválido' }
+  }
+  const pip = Number(pipelineId)
+  const st = Number(statusId)
+  if (!Number.isFinite(pip) || pip <= 0 || !Number.isFinite(st) || st <= 0) {
+    return { ok: false, code: 'MISSING_PIPELINE_STATUS', error: 'pipelineId/statusId inválidos' }
+  }
+  const r = await kommoFetch(env, `/api/v4/leads/${id}`, {
+    method: 'PATCH',
+    body: { pipeline_id: pip, status_id: st },
+  })
+  if (!r.ok) {
+    return { ok: false, code: r.code || 'KOMMO_ERROR', status: r.status, error: summarizeError(r) }
+  }
+  return { ok: true, status: r.status }
+}

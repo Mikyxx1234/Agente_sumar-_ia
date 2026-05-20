@@ -179,6 +179,26 @@ export async function insertChatMessage(env, {
  * Cada linha de chat_messages contém um par (user_message, bot_message),
  * então expandimos em 2 mensagens — primeiro user, depois assistant.
  */
+/**
+ * Últimas linhas brutas de chat_messages (mais recente primeiro).
+ * Usado pelo scheduler de inatividade (timestamps + user/bot).
+ */
+export async function fetchRecentChatRows(env, telefone, limit = 30) {
+  const cfg = getConfig(env)
+  if (!cfg.url || !cfg.key) return []
+  const fone = normalizeTelefone(telefone)
+  if (!fone) return []
+  const enc = encodeURIComponent(fone)
+  const lim = Math.max(1, Math.min(100, Number(limit) || 30))
+  const path =
+    `${encodeURIComponent(cfg.messagesTable)}` +
+    `?phone=eq.${enc}&select=user_message,bot_message,created_at` +
+    `&order=created_at.desc&limit=${lim}`
+  const r = await sbRequest(cfg.url, cfg.key, 'GET', path)
+  if (!r.ok || !Array.isArray(r.data)) return []
+  return r.data
+}
+
 export async function readChatMessages(env, telefone, limit = 8) {
   const cfg = getConfig(env)
   if (!cfg.url || !cfg.key) return []
