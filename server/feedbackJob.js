@@ -269,6 +269,11 @@ function isUniqueViolation(err) {
   return m.includes('23505') || m.includes('duplicate key') || /unique constraint/i.test(m)
 }
 
+function isMissingTableError(err) {
+  const m = String(err?.message || err || '')
+  return m.includes('PGRST205') || /Could not find the table/i.test(m)
+}
+
 async function reclaimHourSlotIfPreviousFailed(sb, execId, startedAtIso, trigger) {
   try {
     const rows = await sb.select(
@@ -1408,6 +1413,12 @@ export async function runFeedbackJob(env, trigger = 'cron') {
           trigger,
         }
       }
+    } else if (isMissingTableError(e)) {
+      console.error(
+        '[FeedbackJob] Tabela feedback_job_runs ausente no Supabase. ' +
+          'Rode scripts/sql/feedback_job_runs.sql (ou npm run db:ensure-feedback-job-runs).',
+      )
+      return { skipped: true, id: execId, reason: 'table_missing', trigger }
     } else {
       console.error('[FeedbackJob] Falha ao criar run:', e.message)
       throw e
