@@ -40,14 +40,15 @@ export function messageIsCourseCatalogRequest(text) {
   return false
 }
 
+/** Assistente já apresentou curso e perguntou se o lead quer seguir com inscrição/matrícula. */
 function assistantInEnrollmentStep(lastAssist) {
   const a = String(lastAssist || '').toLowerCase()
   if (!a) return false
   return (
-    /\b(quer\s+seguir|deseja\s+seguir|deseja\s+se\s+inscrever|seguir\s+com|fazer\s+(a\s+)?inscri|enviar\s+o\s+formul[aá]rio)\b/i.test(
-      a,
-    ) ||
-    /\b(inscrever|matr[ií]cula|inscri[cç][aã]o)\b/i.test(a)
+    /\b(deseja|quer|gostaria|posso)\b[\s\S]{0,70}\b(seguir|inscri|matricul|prosseguir|enviar|mandar|ativar)\b/i.test(a) ||
+    /\b(seguir|prosseguir)\b[\s\S]{0,45}\b(com\s+a\s+)?(inscri|matricul)\b/i.test(a) ||
+    /\b(enviar|mandar|ativar)\b[\s\S]{0,40}\bformul[aá]rio\b/i.test(a) ||
+    /\bformul[aá]rio\b[\s\S]{0,50}\b(inscri|matricul|enviar)\b/i.test(a)
   )
 }
 
@@ -70,23 +71,39 @@ function userConfirmsEnrollmentAfterAssistant(text, historyMessages) {
 }
 
 /**
- * Lead quer iniciar / prosseguir inscrição ou matrícula (mensagem atual + contexto recente).
- * Inclui confirmações como "gostei e quero fazer esse curso" (sem palavra "matrícula").
+ * Lead citou interesse em um curso, mas ainda não confirmou matrícula/inscrição.
+ * Ex.: "quero fazer curso de ads", "quero o curso de enfermagem".
  */
-export function messageRequestsInscricaoForm(text, historyMessages = []) {
+export function messageExpressesCourseInterestOnly(text, historyMessages = []) {
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (!t || t.length < 4) return false
+  if (messageConfirmsProceedToInscricaoForm(text, historyMessages)) return false
+  if (messageAsksForFormResend(text)) return false
+  if (messageLooksLikeOperationalChat(text)) return false
+
+  if (messageIsCourseCatalogRequest(text)) return true
+
+  if (/\bquero\b/i.test(t) && /\b(curso|fazer)\b/i.test(t)) return true
+  if (/\bquero\s+(o\s+)?curso\s+de\b/i.test(t)) return true
+  if (/\b(interesse|gostaria)\b/i.test(t) && /\b(curso|fazer|estudar)\b/i.test(t)) return true
+  if (/\bquero\s+fazer\b/i.test(t) && !/\b(inscri|matricul|me\s+inscrever)\b/i.test(t)) return true
+
+  return false
+}
+
+/**
+ * Lead confirmou que quer seguir com matrícula/inscrição — momento de enviar o formulário.
+ * Não dispara em "quero fazer curso de X" sem confirmação após informações do curso.
+ */
+export function messageConfirmsProceedToInscricaoForm(text, historyMessages = []) {
   const t = normalizeMessageForScope(text).toLowerCase()
   if (!t) return false
 
-  const enrollmentContextReply = userConfirmsEnrollmentAfterAssistant(text, historyMessages)
-
-  if (t.length < 4 && !enrollmentContextReply) return false
-
   if (messageLooksLikeOperationalChat(text)) return false
   if (messageLooksLikeFormSumarResponse(text)) return false
-  if (messageAsksForFormResend(text)) return false
+  if (messageAsksForFormResend(text)) return true
   if (messageIsCourseCatalogRequest(text)) return false
 
-  // Só informação sobre curso (valores, duração) — ainda não é inscrição
   if (
     /\b(valor|valores|pre[cç]o|mensalidade|dura[cç][aã]o|quanto\s+custa|grade)\b/i.test(t) &&
     !/\b(fazer|matricul|inscri|me\s+inscrever)\b/i.test(t)
@@ -94,8 +111,10 @@ export function messageRequestsInscricaoForm(text, historyMessages = []) {
     return false
   }
 
+  if (userConfirmsEnrollmentAfterAssistant(text, historyMessages)) return true
+
   if (
-    /\b(realizar|fazer|efetuar|concluir|continuar|prosseguir|seguir|avan[cç]ar|iniciar|come[cç]ar)\b[\s\S]{0,45}\b(inscri[cç][aã]o|cadastro|matr[ií]cula)\b/i.test(
+    /\b(realizar|efetuar|concluir|continuar|prosseguir|seguir|avan[cç]ar|iniciar|come[cç]ar)\b[\s\S]{0,45}\b(inscri[cç][aã]o|cadastro|matr[ií]cula)\b/i.test(
       t,
     )
   ) {
@@ -111,15 +130,16 @@ export function messageRequestsInscricaoForm(text, historyMessages = []) {
   if (/\b(quero|preciso|vou)\b[\s\S]{0,25}\b(matr[ií]cula|inscri[cç][aã]o)\b/i.test(t)) return true
   if (/\b(matr[ií]cula|inscri[cç][aã]o)\b[\s\S]{0,30}\b(agora|j[aá]|por\s+favor)\b/i.test(t)) return true
 
-  // "quero fazer esse curso" / "gostei e quero fazer o curso"
-  if (/\bquero\s+fazer\b/i.test(t) && /\b(curso|esse|essa)\b/i.test(t)) return true
-  if (/\bgostei\b/i.test(t) && /\bquero\b/i.test(t) && /\b(fazer|curso)\b/i.test(t)) return true
-  if (/\b(quero|vou)\s+(fazer|curso)\b/i.test(t) && /\bcurso\b/i.test(t)) return true
-  if (/\bquero\s+esse\s+curso\b/i.test(t)) return true
-
-  if (userConfirmsEnrollmentAfterAssistant(text, historyMessages)) return true
+  if (/\bgostei\b/i.test(t) && /\bquero\b/i.test(t) && /\b(fazer|inscri|matricul)\b/i.test(t)) {
+    return userConfirmsEnrollmentAfterAssistant(text, historyMessages)
+  }
 
   return false
+}
+
+/** @deprecated Use messageConfirmsProceedToInscricaoForm — mantido para imports existentes. */
+export function messageRequestsInscricaoForm(text, historyMessages = []) {
+  return messageConfirmsProceedToInscricaoForm(text, historyMessages)
 }
 
 /**

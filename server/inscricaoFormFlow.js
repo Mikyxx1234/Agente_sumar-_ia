@@ -8,10 +8,12 @@
 import {
   INSCRICAO_FORM_STATUS_AGUARDANDO,
   INSCRICAO_FORM_STATUS_CONCLUIDO,
-  messageRequestsInscricaoForm,
+  messageConfirmsProceedToInscricaoForm,
+  messageExpressesCourseInterestOnly,
   messageAsksForFormResend,
   messageIsCourseCatalogRequest,
   messageLooksLikeFormSumarResponse,
+  messageLooksLikeFormFollowUp,
   buildInscricaoFormSentReply,
 } from '../libShared/inscricaoFormHeuristics.js'
 import { messageLooksLikeOperationalChat } from '../libShared/scopeHeuristics.js'
@@ -64,6 +66,13 @@ async function setFormStatus(env, telefone, status) {
  * Claim atômico no Supabase: só um processo/réplica dispara o Formulario_Sum.
  * PATCH só quando inscricao_form_status ainda é null.
  */
+async function releaseInscricaoFormStartClaim(env, telefone) {
+  return updateDadosCliente(env, {
+    telefone,
+    fields: { [FORM_STATUS_FIELD]: null },
+  })
+}
+
 async function claimInscricaoFormStartExclusive(env, telefone) {
   const { url, key, table } = getSupabaseCfg(env)
   if (!url || !key) return { claimed: true, reason: 'no_supabase' }
@@ -168,7 +177,7 @@ async function deliverInscricaoForm(env, { telefone, leadId, executionId, forceR
  */
 export async function tryHandleInscricaoFormStart(env, input) {
   const { telefone, userMessage, historyMessages, executionId, model, leadId: leadIdHint, pushName, t0 } = input
-  const wantsForm = messageRequestsInscricaoForm(userMessage, historyMessages)
+  const wantsForm = messageConfirmsProceedToInscricaoForm(userMessage, historyMessages)
   const asksResend = messageAsksForFormResend(userMessage)
   if (!telefone || (!wantsForm && !asksResend)) return null
   if (messageLooksLikeOperationalChat(userMessage) && !asksResend) return null
@@ -177,20 +186,29 @@ export async function tryHandleInscricaoFormStart(env, input) {
   if (status === INSCRICAO_FORM_STATUS_CONCLUIDO) {
     return null
   }
-  if (status === INSCRICAO_FORM_STATUS_AGUARDANDO && !asksResend) {
-    const reply =
-      'Já ativei o envio do formulário de inscrição por aqui. Quando terminar de preencher e enviar, nossa equipe segue com você automaticamente. Precisa de ajuda com algum campo?'
-    return {
-      handled: true,
-      result: buildAgentReturn({
-        executionId,
-        model,
-        t0,
-        reply,
-        steps: [{ type: 'inscricao_form_reminder', status }],
-        ctxSnapshot: { inscricaoForm: 'aguardando' },
-      }),
+  if (status === INSCRICAO_FORM_STATUS_AGUARDANDO && !asksResend && !wantsForm) {
+    if (
+      messageExpressesCourseInterestOnly(userMessage, historyMessages) ||
+      messageIsCourseCatalogRequest(userMessage)
+    ) {
+      return null
     }
+    if (messageLooksLikeFormFollowUp(userMessage) || messageAsksForFormResend(userMessage)) {
+      const reply =
+        'Já ativei o envio do formulário de inscrição por aqui. Quando terminar de preencher e enviar, nossa equipe segue com você automaticamente. Precisa de ajuda com algum campo?'
+      return {
+        handled: true,
+        result: buildAgentReturn({
+          executionId,
+          model,
+          t0,
+          reply,
+          steps: [{ type: 'inscricao_form_reminder', status }],
+          ctxSnapshot: { inscricaoForm: 'aguardando' },
+        }),
+      }
+    }
+    return null
   }
 
   const idLead = await resolveLeadId(env, telefone, leadIdHint)
@@ -250,6 +268,10 @@ export async function tryHandleInscricaoFormStart(env, input) {
         ctxSnapshot: { inscricaoForm: 'aguardando' },
       }),
     }
+  }
+
+  if (!sendOk && !asksResend) {
+    await releaseInscricaoFormStartClaim(env, telefone).catch(() => {})
   }
 
   let whatsappReply = buildInscricaoFormSentReply({ pushName, resend: asksResend })
@@ -313,19 +335,22 @@ export async function tryEnsureInscricaoFormSent(env, input) {
   if (!telefone) return null
   if (messageIsCourseCatalogRequest(userMessage)) return null
 
+  const userConfirmed = messageConfirmsProceedToInscricaoForm(userMessage, historyMessages)
   const llmPromisedForm =
+    userConfirmed &&
     llmReply &&
     /\bformul[aá]rio\b/i.test(llmReply) &&
     /\b(enviad|enviar|mandar|whatsapp|instantes|ativar|preencher)\b/i.test(llmReply)
-  const should =
-    messageRequestsInscricaoForm(userMessage, historyMessages) ||
-    messageAsksForFormResend(userMessage) ||
-    llmPromisedForm
+  const should = userConfirmed || messageAsksForFormResend(userMessage) || llmPromisedForm
   if (!should) return null
 
   const status = await getFormStatus(env, telefone)
   if (status === INSCRICAO_FORM_STATUS_CONCLUIDO) return null
-  if (status === INSCRICAO_FORM_STATUS_AGUARDANDO && !messageAsksForFormResend(userMessage) && !llmPromisedForm) {
+  if (
+    status === INSCRICAO_FORM_STATUS_AGUARDANDO &&
+    !messageAsksForFormResend(userMessage) &&
+    !userConfirmed
+  ) {
     return null
   }
 

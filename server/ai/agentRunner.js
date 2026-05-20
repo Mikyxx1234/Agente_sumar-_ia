@@ -37,6 +37,7 @@ import {
   tryHandleInscricaoFormStart,
   tryEnsureInscricaoFormSent,
 } from '../inscricaoFormFlow.js'
+import { messageExpressesCourseInterestOnly } from '../../libShared/inscricaoFormHeuristics.js'
 
 const MAX_TOOL_ROUNDS = 5
 const CHAT_URL = 'https://api.openai.com/v1/chat/completions'
@@ -421,6 +422,22 @@ export async function runAgent(env, input) {
       }
     : null
 
+  const courseFromMsg = extractDiscussedCourseFromHistory([
+    ...historyMessages,
+    { role: 'user', content: userMessage },
+  ])
+  const courseInterestHint = messageExpressesCourseInterestOnly(userMessage, historyMessages)
+    ? {
+        role: 'system',
+        content:
+          'INTERESSE EM CURSO (ainda sem confirmação de matrícula): o lead citou um curso ou pediu para fazer um curso. ' +
+          `OBRIGATÓRIO neste turno: chame buscar_conhecimento (query com o curso, ex.: "${courseFromMsg || 'nome do curso mencionado'}") ` +
+          'e/ou buscar_precos_graduacao ou buscar_precos_pos conforme o nível. Apresente informações objetivas do CONTEXT (modalidade, duração, investimento quando existir). ' +
+          'Depois pergunte explicitamente se deseja seguir com a matrícula/inscrição. ' +
+          'PROIBIDO neste turno: dizer que já enviou o formulário — o sistema só dispara o Formulario_Sum após o lead confirmar (sim, quero me inscrever, quero seguir com a matrícula, etc.).',
+      }
+    : null
+
   const ambiguousNoContext = historyMessages.length === 0 && isAmbiguousShortReply(userMessage)
   const noContextWarning = ambiguousNoContext
     ? {
@@ -439,6 +456,7 @@ export async function runAgent(env, input) {
     { role: 'system', content: systemMessage },
     ...(contextPreamble ? [{ role: 'system', content: contextPreamble }] : []),
     ...(commercialHint ? [commercialHint] : []),
+    ...(courseInterestHint ? [courseInterestHint] : []),
     ...(noContextWarning ? [noContextWarning] : []),
     ...historyMessages,
     { role: 'user', content: userMessage },
