@@ -133,9 +133,9 @@ export const TOOL_DEFINITIONS = [
     function: {
       name: 'distribuir_humano',
       description:
-        'Encaminha o lead para um consultor humano finalizar o atendimento. Use quando: (1) o lead pedir humano/atendente/consultor; ' +
-        '(2) após coletar curso confirmado + tipo de ingresso (ENEM ou Vestibular Múltipla Escolha) para MATRÍCULA/INSCRIÇÃO — obrigatório nesse caso; ' +
-        '(3) negociação, caso complexo, FAQ sem resposta ou fora do escopo da IA. ' +
+        'Encaminha o lead para um consultor humano. Use SOMENTE quando: (1) o lead pedir EXPLICITAMENTE humano/atendente/consultor; ' +
+        '(2) negociação especial, reclamação grave, ou caso que a base de conhecimento não cobre após buscar_conhecimento/buscar_perguntas. ' +
+        'NÃO use para: informar curso, preços, dúvidas sobre matrícula, áudio do lead, ou "quero continuar com a matrícula" — nesses casos use buscar_conhecimento e conduza o atendimento; o formulário Form Sumar é disparado pelo sistema após confirmação do lead. ' +
         'O sistema localiza o lead pelo telefone automaticamente — você NÃO precisa passar id_lead se não souber.',
       parameters: {
         type: 'object',

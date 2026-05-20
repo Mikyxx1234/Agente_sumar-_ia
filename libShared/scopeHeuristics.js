@@ -1,5 +1,11 @@
 /** Heurísticas compartilhadas (browser + Node) para bloquear perguntas fora do escopo. */
 
+import {
+  conversationHasActiveTopic,
+  userLikelyContinuingEnrollmentFlow,
+  assistantAskedEnrollmentInLastReply,
+} from './conversationContextHeuristics.js'
+
 export const DEFAULT_SCOPE_REFUSAL =
   'Olá! Sou o assistente da Faculdade Sumaré e posso te ajudar com cursos, valores, matrícula e informações sobre nossos programas de graduação e pós-graduação (EAD). ' +
   'Sua pergunta foge desse atendimento — tem alguma dúvida sobre nossos cursos ou sobre como se matricular?'
@@ -156,6 +162,37 @@ function extractFirstName(pushName) {
   return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase()
 }
 
+/** Marcador interno de falha de áudio/imagem — não é pedido do lead. */
+export function messageIsInboundMediaPlaceholder(text) {
+  const t = normalizeMessageForScope(text)
+  return /^\[(ÁUDIO RECEBIDO|ÁUDIO TRANSCRITO|IMAGEM RECEBIDA)/i.test(t)
+}
+
+/**
+ * Pedido explícito de humano/consultor (não confundir com "quero matrícula" ou "falar com alguém" genérico).
+ */
+export function messageStrongHumanEscalation(text) {
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (!t || t.length < 5) return false
+  if (messageIsInboundMediaPlaceholder(text)) return false
+  if (messageLooksLikeOperationalChat(text) && !/\b(humano|consultor|atendente)\b/i.test(t)) return false
+
+  if (/\batendimento\s+humano\b/i.test(t)) return true
+  if (/\b(falar|conversar|passar|transferir|chamar|me\s+(passa|conecta|liga))\b[\s\S]{0,50}\b(humano|humana|atendente|consultor)\b/i.test(t)) {
+    return true
+  }
+  if (/\b(quero|preciso)\s+falar\s+com\s+(um\s+)?(humano|atendente|consultor)\b/i.test(t)) return true
+  if (/\b(humano|atendente|consultor|pessoa\s+real)\b[\s\S]{0,40}\b(por\s+favor|pfv|agora|j[aá]|logo)\b/i.test(t)) return true
+  if (/\b(só|somente|apenas)\b[\s\S]{0,40}\b(humano|consultor|atendente|pessoa)\b/i.test(t)) return true
+  if (
+    /\bnão\s+quero\b[\s\S]{0,55}\b(rob[oô]|bot|ia|assistente)\b/i.test(t) &&
+    /\b(humano|consultor|atendente|pessoa)\b/i.test(t)
+  ) {
+    return true
+  }
+  return false
+}
+
 /** Lead pede atendimento humano / consultor / atendente. */
 export function messageRequestsHuman(text) {
   const t = normalizeMessageForScope(text).toLowerCase()
@@ -216,14 +253,28 @@ export function messageLooksLikeOperationalChat(text) {
 
 /** Deve executar distribuir_humano + salesbot consultor (não só responder em texto). */
 export function shouldHandoffToHuman(userMessage, historyMessages = []) {
-  if (messageLooksLikeOperationalChat(userMessage) && !messageRequestsHuman(userMessage)) return false
-  if (messageRequestsHuman(userMessage)) return true
+  if (messageLooksLikeOperationalChat(userMessage) && !messageStrongHumanEscalation(userMessage)) {
+    return false
+  }
+  if (messageIsInboundMediaPlaceholder(userMessage)) return false
+
+  if (messageStrongHumanEscalation(userMessage)) return true
+
+  if (userLikelyContinuingEnrollmentFlow(userMessage, historyMessages)) return false
+
+  if (
+    conversationHasActiveTopic(historyMessages) ||
+    assistantAskedEnrollmentInLastReply(historyMessages)
+  ) {
+    return false
+  }
+
   if (userFrustratedAfterHumanRequest(userMessage)) {
     const recentUser = (historyMessages || [])
       .filter((m) => m.role === 'user')
       .slice(-6)
       .map((m) => m.content)
-    return recentUser.some((c) => messageRequestsHuman(c))
+    return recentUser.some((c) => messageStrongHumanEscalation(c))
   }
   return false
 }

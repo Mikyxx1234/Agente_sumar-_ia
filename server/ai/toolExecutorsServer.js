@@ -238,8 +238,8 @@ export function buildToolExecutors(env, ctx) {
         return [
           'Nenhum resultado encontrado na base de FAQ para esta pergunta.',
           '',
-          'INSTRUÇÃO OBRIGATÓRIA: NÃO invente resposta sobre processos da empresa. NÃO mande o cliente "procurar a faculdade", "ligar para a coordenação", "consultar a secretaria", "verificar com o polo". Quem analisa esse tipo de caso somos NÓS.',
-          'Em vez disso, chame a tool distribuir_humano (telefone do Contexto, motivo: "consultor" — salesbot 49777) e responda ao cliente que um consultor entrará em contato em breve para ajudar.',
+          'INSTRUÇÃO: NÃO invente processos internos. Se for dúvida sobre CURSO, valores ou matrícula, tente buscar_conhecimento com o nome do curso antes de encaminhar.',
+          'Só chame distribuir_humano se for processo administrativo raro sem resposta na base E o lead já esgotou as opções — ou se pediu humano explicitamente.',
         ].join('\n')
       }
       return out

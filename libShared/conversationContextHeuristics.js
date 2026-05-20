@@ -6,6 +6,30 @@ function recentTranscript(historyMessages, max = 8) {
   return (historyMessages || []).slice(-max)
 }
 
+function lastAssistantText(historyMessages) {
+  const assistants = (historyMessages || []).filter((m) => m.role === 'assistant' || m.role === 'assistente')
+  if (!assistants.length) return ''
+  return String(assistants[assistants.length - 1].content || '')
+}
+
+/** Assistente perguntou se o lead quer seguir com matrícula/inscrição. */
+export function assistantAskedEnrollmentInLastReply(historyMessages) {
+  const a = lastAssistantText(historyMessages).toLowerCase()
+  if (!a) return false
+  return (
+    /\b(deseja|quer|gostaria|posso|continuar)\b[\s\S]{0,70}\b(seguir|inscri|matricul|prosseguir|matr[ií]cula)\b/i.test(a) ||
+    /\b(estávamos|estavamos)\s+vendo\s+o\s+curso\b/i.test(a) &&
+      /\b(matricul|inscri|continuar|dúvida)\b/i.test(a)
+  )
+}
+
+/** Lead responde após pergunta sobre matrícula (ex.: áudio) — não tratar como pedido de consultor. */
+export function userLikelyContinuingEnrollmentFlow(userMessage, historyMessages) {
+  if (!assistantAskedEnrollmentInLastReply(historyMessages)) return false
+  const t = normalizeMessageForScope(userMessage)
+  return Boolean(t && t.length >= 1)
+}
+
 export function extractDiscussedCourseFromHistory(historyMessages) {
   const re =
     /\bcurso\s+de\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s]{2,48}?)(?:\s+que|\s+no|\s+na|\?|\.|,|$)/i

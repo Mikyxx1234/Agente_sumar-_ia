@@ -366,7 +366,7 @@ async function extractMessageText(env, payload, messageType) {
           )
           return ''
         }
-        return '[ÁUDIO RECEBIDO mas não foi possível baixar o conteúdo. Peça desculpas e diga que vai pedir pra um consultor escutar — ou peça pro lead reenviar/digitar a mensagem.]'
+        return '[ÁUDIO RECEBIDO mas não foi possível baixar o conteúdo. Peça desculpas, resuma o que já foi conversado sobre o curso (se houver no histórico) e peça pro lead reenviar em texto ou gravar de novo. NÃO encaminhe para consultor humano neste turno.]'
       }
       try {
         // mimeType padrão do WhatsApp é audio/ogg; codecs=opus, mas
@@ -390,7 +390,7 @@ async function extractMessageText(env, payload, messageType) {
           console.log(`[Evolution][audio] erro na transcrição e dispatcher ativo — pulando push`)
           return ''
         }
-        return '[ÁUDIO RECEBIDO mas houve falha técnica na transcrição — peça ao lead pra reenviar ou digitar a mensagem.]'
+        return '[ÁUDIO RECEBIDO mas houve falha técnica na transcrição. Peça para reenviar ou digitar; continue o atendimento sobre o curso em discussão. NÃO encaminhe para consultor humano neste turno.]'
       }
     }
 

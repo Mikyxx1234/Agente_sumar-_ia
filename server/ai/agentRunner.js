@@ -23,11 +23,7 @@ import {
   detectHandoffMotivo,
   buildHumanHandoffReply,
 } from '../../libShared/scopeHeuristics.js'
-import {
-  conversationHasActiveTopic,
-  extractDiscussedCourseFromHistory,
-  buildContextualGreetingReply,
-} from '../../libShared/conversationContextHeuristics.js'
+import { buildContextualGreetingReply } from '../../libShared/conversationContextHeuristics.js'
 import { detectCursoConfirmadoPeloLead } from '../../libShared/cursoConfirmation.js'
 import { setSumCursoOnLead } from '../sumareLeadFields.js'
 import { tryHandleUnsupportedCourseLevelInquiry } from '../courseLevelInquiry.js'
@@ -38,6 +34,11 @@ import {
   tryEnsureInscricaoFormSent,
 } from '../inscricaoFormFlow.js'
 import { messageExpressesCourseInterestOnly } from '../../libShared/inscricaoFormHeuristics.js'
+import {
+  conversationHasActiveTopic,
+  extractDiscussedCourseFromHistory,
+} from '../../libShared/conversationContextHeuristics.js'
+import { messageIsInboundMediaPlaceholder } from '../../libShared/scopeHeuristics.js'
 
 const MAX_TOOL_ROUNDS = 5
 const CHAT_URL = 'https://api.openai.com/v1/chat/completions'
@@ -432,11 +433,28 @@ export async function runAgent(env, input) {
         content:
           'INTERESSE EM CURSO (ainda sem confirmação de matrícula): o lead citou um curso ou pediu para fazer um curso. ' +
           `OBRIGATÓRIO neste turno: chame buscar_conhecimento (query com o curso, ex.: "${courseFromMsg || 'nome do curso mencionado'}") ` +
-          'e/ou buscar_precos_graduacao ou buscar_precos_pos conforme o nível. Apresente informações objetivas do CONTEXT (modalidade, duração, investimento quando existir). ' +
+          'e/ou buscar_precos conforme o nível. Apresente informações objetivas do CONTEXT (modalidade, duração, investimento quando existir). ' +
           'Depois pergunte explicitamente se deseja seguir com a matrícula/inscrição. ' +
-          'PROIBIDO neste turno: dizer que já enviou o formulário — o sistema só dispara o Formulario_Sum após o lead confirmar (sim, quero me inscrever, quero seguir com a matrícula, etc.).',
+          'PROIBIDO neste turno: distribuir_humano, dizer que já enviou o formulário — o sistema só dispara o Formulario_Sum após confirmação explícita.',
       }
     : null
+
+  const activeCourse = extractDiscussedCourseFromHistory(historyMessages)
+  const activeFlowHint =
+    conversationHasActiveTopic(historyMessages) || messageIsInboundMediaPlaceholder(userMessage)
+      ? {
+          role: 'system',
+          content:
+            'ATENDIMENTO COMERCIAL EM ANDAMENTO' +
+            (activeCourse ? ` (curso: ${activeCourse})` : '') +
+            '. O lead NÃO pediu consultor humano de forma explícita. ' +
+            'OBRIGATÓRIO: buscar_conhecimento e/ou buscar_precos sobre o curso em pauta antes de qualquer encaminhamento. ' +
+            'PROIBIDO chamar distribuir_humano neste turno, exceto se o lead escrever claramente que quer falar com humano/atendente/consultor. ' +
+            (messageIsInboundMediaPlaceholder(userMessage)
+              ? 'Se veio áudio: interprete a transcrição no contexto da conversa; se não entendeu, peça para digitar — não encaminhe para consultor.'
+              : ''),
+        }
+      : null
 
   const ambiguousNoContext = historyMessages.length === 0 && isAmbiguousShortReply(userMessage)
   const noContextWarning = ambiguousNoContext
@@ -457,6 +475,7 @@ export async function runAgent(env, input) {
     ...(contextPreamble ? [{ role: 'system', content: contextPreamble }] : []),
     ...(commercialHint ? [commercialHint] : []),
     ...(courseInterestHint ? [courseInterestHint] : []),
+    ...(activeFlowHint ? [activeFlowHint] : []),
     ...(noContextWarning ? [noContextWarning] : []),
     ...historyMessages,
     { role: 'user', content: userMessage },

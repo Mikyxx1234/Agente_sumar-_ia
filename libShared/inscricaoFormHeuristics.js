@@ -18,7 +18,7 @@ export function messageAsksForFormResend(text) {
   )
 }
 
-function lastAssistantText(historyMessages) {
+export function lastAssistantText(historyMessages) {
   const assistants = (historyMessages || []).filter((m) => m.role === 'assistant')
   if (!assistants.length) return ''
   return String(assistants[assistants.length - 1].content || '')
@@ -41,7 +41,7 @@ export function messageIsCourseCatalogRequest(text) {
 }
 
 /** Assistente já apresentou curso e perguntou se o lead quer seguir com inscrição/matrícula. */
-function assistantInEnrollmentStep(lastAssist) {
+export function assistantInEnrollmentStep(lastAssist) {
   const a = String(lastAssist || '').toLowerCase()
   if (!a) return false
   return (
