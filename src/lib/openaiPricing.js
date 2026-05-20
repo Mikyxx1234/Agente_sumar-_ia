@@ -24,6 +24,10 @@ export const TOKEN_COSTS_USD_PER_1M = {
   'gpt-4.1': { input: 2.0, output: 8.0 },
   'gpt-4o-mini': { input: 0.15, output: 0.6 },
   'gpt-4o': { input: 2.5, output: 10.0 },
+  // GPT-5 family (lançados 2025). Usados pelo Feedback IA.
+  'gpt-5': { input: 1.25, output: 10.0 },
+  'gpt-5-mini': { input: 0.25, output: 2.0 },
+  'gpt-5-nano': { input: 0.05, output: 0.4 },
 
   // — OpenAI Embeddings (usado no RAG; não tem output) —
   'text-embedding-3-small': { input: 0.02, output: 0 },
@@ -89,9 +93,12 @@ export function calcCostBRLMulti(items) {
 
 /** Lista de modelos OpenAI Chat exibíveis em UI (Playground select etc.). */
 export const OPENAI_CHAT_MODELS = [
-  'gpt-4.1-nano',
-  'gpt-4.1-mini',
+  'gpt-5',
+  'gpt-5-mini',
+  'gpt-5-nano',
   'gpt-4.1',
-  'gpt-4o-mini',
+  'gpt-4.1-mini',
+  'gpt-4.1-nano',
   'gpt-4o',
+  'gpt-4o-mini',
 ]

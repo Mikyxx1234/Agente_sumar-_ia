@@ -172,14 +172,20 @@ export async function loadClassifierSystemPrompt() {
   return classifierPromptCache
 }
 
-export function buildSystemMessage(prompts, env = process.env) {
-  const promptsText = prompts.map((p) => `### ${p.name} (${p.type})\n\n${p.body}`).join('\n\n---\n\n')
-  logLegacyBrandScanInPrompts(promptsText)
+/**
+ * Texto completo do override (regras 1-22). Exposto separadamente para
+ * que o avaliador de Feedback IA (`server/feedbackIA/ruleEvaluator.js`)
+ * possa reproduzir EXATAMENTE as mesmas regras que governam a IA em
+ * produção, sem precisar carregar prompts do n8n. Fonte única — quando
+ * uma regra muda aqui, o avaliador automaticamente passa a checar pela
+ * versão nova.
+ */
+export function getAgentRulesText(env = process.env) {
   const inscricaoAuto = isInscricaoAutomaticaEnabled(env)
   const toolsLine = inscricaoAuto
     ? 'buscar_conhecimento, buscar_precos, buscar_informacoes, buscar_pos, buscar_perguntas, inscricao, distribuir_humano e buscar_historico_conversa'
     : 'buscar_conhecimento, buscar_precos, buscar_informacoes, buscar_pos, buscar_perguntas, distribuir_humano e buscar_historico_conversa (a tool inscricao está DESLIGADA — matrícula via consultor, regra 7)'
-  const override = `
+  return `
 ## INSTRUÇÕES DO AGENTE (PRIORIDADE MÁXIMA)
 
 Você representa a **Faculdade Sumaré** no atendimento comercial (WhatsApp via Evolution API). Regras abaixo substituem qualquer instrução conflitante dos prompts acima — inclusive textos legados que mencionem outras marcas.
@@ -505,5 +511,40 @@ Você representa a **Faculdade Sumaré** no atendimento comercial (WhatsApp via 
     PROIBIDO: dizer que a mensagem "foge do atendimento" ou usar o texto padrão de recusa de fora do escopo para saudações.
 
     Se a saudação vier junto com dúvida ("bom dia, quanto custa direito?") → NÃO é só saudação; trate a dúvida normalmente (tools + regras de preço).`
-  return promptsText + '\n\n---\n\n' + override
 }
+
+export function buildSystemMessage(prompts, env = process.env) {
+  const promptsText = prompts.map((p) => `### ${p.name} (${p.type})\n\n${p.body}`).join('\n\n---\n\n')
+  logLegacyBrandScanInPrompts(promptsText)
+  return promptsText + '\n\n---\n\n' + getAgentRulesText(env)
+}
+
+/**
+ * Catálogo enxuto das 22 regras (id + título). Usado pelo avaliador
+ * para renderizar resultado por regra na UI sem precisar parsear o
+ * texto longo. Sincronizar manualmente se o título mudar.
+ */
+export const AGENT_RULES_CATALOG = [
+  { id: 1, title: 'Linguagem natural (nunca XML/JSON)' },
+  { id: 2, title: 'Tools permitidas / sem tool de localização' },
+  { id: 3, title: 'Base de conhecimento — não inventar' },
+  { id: 4, title: 'buscar_perguntas (FAQ institucional)' },
+  { id: 5, title: 'Memória — usar histórico recente' },
+  { id: 6, title: 'Modalidade — somente EAD' },
+  { id: 7, title: 'Matrícula via Form Sumar (sem ENEM/Vestibular)' },
+  { id: 8, title: 'Apresentar preços/info de forma clara' },
+  { id: 9, title: 'Cursos parecidos — perguntar qual' },
+  { id: 10, title: 'Não mencionar ferramentas/tools ao usuário' },
+  { id: 11, title: 'distribuir_humano — quando usar' },
+  { id: 12, title: 'Tom direto, profissional e acolhedor' },
+  { id: 13, title: 'Nível do curso (grad x pós) e valores reais' },
+  { id: 14, title: 'Grade curricular — verificar marcador antes' },
+  { id: 15, title: 'Preços — filtrar curso/nível/modalidade' },
+  { id: 16, title: 'Mídia (imagem/áudio) — sempre responder' },
+  { id: 17, title: 'Resposta curta — progredir, nunca repetir' },
+  { id: 18, title: 'Cobertura geográfica — só se na base' },
+  { id: 19, title: 'Estágio — verificar marcador antes' },
+  { id: 20, title: 'Curso fora do catálogo — sugerir do CONTEXT' },
+  { id: 21, title: 'Oportunidade comercial — não recusar' },
+  { id: 22, title: 'Saudações — acolhimento cordial' },
+]

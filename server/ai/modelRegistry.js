@@ -42,6 +42,12 @@ const DEFAULTS = {
   distribuir_humano_summary: 'gpt-4.1-mini',
   salesbot_curso: 'gpt-4.1',             // melhor accuracy pra normalizar nome de curso (rara execução)
   feedback: 'gpt-4.1-mini',
+  // Avaliação automática da IA contra as Regras 1-22 (Feedback IA).
+  // gpt-5 = melhor follow-instructions em prompt longo com regras
+  // numeradas; custo alto mas roda 1× por conversa.
+  rules_eval: 'gpt-5',
+  // Gera patch sugerido de regra (texto longo, raro).
+  rules_patch: 'gpt-5',
   vision: 'gpt-4.1-mini',
   transcribe: 'whisper-1',               // gpt-4o-transcribe é mais caro
   embeddings: 'text-embedding-3-small',  // 3-large é 6.5x mais caro
@@ -59,6 +65,8 @@ const ROLE_ENVS = {
   distribuir_humano_summary: 'OPENAI_MODEL_DISTRIBUIR_HUMANO',
   salesbot_curso: 'OPENAI_MODEL_SALESBOT_CURSO',
   feedback: 'OPENAI_MODEL_FEEDBACK',
+  rules_eval: 'OPENAI_MODEL_RULES_EVAL',
+  rules_patch: 'OPENAI_MODEL_RULES_PATCH',
   vision: 'OPENAI_MODEL_VISION',
   transcribe: 'OPENAI_MODEL_TRANSCRIBE',
   embeddings: 'OPENAI_MODEL_EMBEDDINGS',

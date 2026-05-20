@@ -74,6 +74,7 @@ import {
   formatEventsDiagLine,
   formatDispatcherDiagLine,
 } from './kommoInboundDiagnostics.js'
+import { notifyFunnelSnapshot } from './feedbackIA/funnelExitWatcher.js'
 
 // Defaults agressivos pra reduzir latência ponta-a-ponta.
 // - Interval: a cada 10s o scheduler verifica se há leads c/ msgs prontas.
@@ -203,6 +204,15 @@ export async function runSchedulerTick(env) {
   }
   const leadsAll = listing.leads || []
   stats.leadsInFunnel = leadsAll.length
+
+  // Feedback IA — detecta leads que saíram do funil entre ticks. Roda
+  // assim que temos a lista crua (ANTES da whitelist de teste, pra que
+  // saídas de leads fora da whitelist também sejam avaliadas).
+  try {
+    notifyFunnelSnapshot(env, leadsAll.map((l) => Number(l.id)))
+  } catch (err) {
+    console.error('[scheduler] feedbackIA notify falhou:', err.message)
+  }
 
   // Whitelist de teste: descarta leads fora da lista ANTES do bulk de
   // contatos, evitando 1 chamada Kommo extra à toa.

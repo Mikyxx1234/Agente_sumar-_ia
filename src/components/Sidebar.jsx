@@ -1,4 +1,4 @@
-import { Sparkles, LayoutDashboard, FileText, FlaskConical, ListChecks, Settings, Database, Filter } from 'lucide-react'
+import { Sparkles, LayoutDashboard, FileText, FlaskConical, ListChecks, Settings, Database, GraduationCap, Filter, ShieldCheck } from 'lucide-react'
 import AIKillSwitch from './AIKillSwitch'
 
 const NAV_ITEMS = [
@@ -7,6 +7,8 @@ const NAV_ITEMS = [
   { id: 'prompts', label: 'Prompts', icon: FileText },
   { id: 'playground', label: 'Teste IA', icon: FlaskConical },
   { id: 'executions', label: 'Execuções', icon: ListChecks },
+  { id: 'feedback-ia', label: 'Feedback IA', icon: ShieldCheck },
+  { id: 'matriculas', label: 'Matrículas', icon: GraduationCap },
   { id: 'knowledge-update', label: 'Atualização IA', icon: Database },
 ]
 

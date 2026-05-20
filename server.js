@@ -3,6 +3,15 @@ import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { startScheduler, getStatus } from './server/feedbackJobRunner.js'
 import { reapStaleFeedbackRuns } from './server/feedbackJob.js'
+import { evaluateConversation, getFeedbackIAModelInfo } from './server/feedbackIA/ruleEvaluator.js'
+import {
+  listEvaluations,
+  getEvaluationStats,
+} from './server/feedbackIA/evaluationStore.js'
+import {
+  enqueueManualEvaluation,
+  getFunnelWatcherState,
+} from './server/feedbackIA/funnelExitWatcher.js'
 import { runNearestPolo } from './server/locationTool.js'
 import { runInscricao } from './server/inscricaoTool.js'
 import { isInscricaoAutomaticaEnabled, matriculaViaConsultorInstruction } from './server/inscricaoConfig.js'
@@ -198,6 +207,97 @@ app.get('/api/feedback-job/status', async (_req, res) => {
 app.post('/api/feedback-job/reap-stale', async (req, res) => {
   try {
     const out = await reapStaleFeedbackRuns(process.env, req.body?.max_age_minutes)
+    res.json({ ok: true, ...out })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// ── Feedback IA: avaliação automática contra Regras 1-22 ──
+
+app.post('/api/feedback-ia/evaluate', async (req, res) => {
+  try {
+    const { leadId, telefone, sinceIso, untilIso, trigger } = req.body || {}
+    if (leadId == null && !telefone) {
+      res.status(400).json({ ok: false, error: 'Informe leadId ou telefone' })
+      return
+    }
+    const out = await evaluateConversation(process.env, {
+      leadId,
+      telefone,
+      sinceIso: sinceIso || null,
+      untilIso: untilIso || null,
+      trigger: trigger || 'manual',
+    })
+    if (!out.ok && (out.skipped === 'no_executions' || out.skipped === 'duplicate')) {
+      res.status(200).json(out)
+      return
+    }
+    if (!out.ok) {
+      res.status(500).json(out)
+      return
+    }
+    res.json(out)
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.get('/api/feedback-ia/evaluations', async (req, res) => {
+  try {
+    const { since, until, verdict, leadId, limit } = req.query || {}
+    const out = await listEvaluations(process.env, {
+      sinceIso: since || null,
+      untilIso: until || null,
+      verdict: verdict || null,
+      leadId: leadId || null,
+      limit: limit ? Number(limit) : 200,
+    })
+    if (!out.ok) {
+      // TABLE_MISSING e demais erros do Supabase voltam sempre 200 c/
+      // body { ok:false, code, error, data:[] } para a UI tratar.
+      res.json({ ok: false, code: out.code, error: out.error, data: out.data || [] })
+      return
+    }
+    res.json({ ok: true, data: out.data })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.get('/api/feedback-ia/stats', async (_req, res) => {
+  try {
+    const stats = await getEvaluationStats(process.env)
+    const watcher = getFunnelWatcherState()
+    const models = getFeedbackIAModelInfo(process.env)
+    res.json({
+      ok: true,
+      stats,
+      watcher: {
+        pendingCount: watcher.pendingCount,
+        previousFunnelCount: watcher.previousFunnelCount,
+        draining: watcher.draining,
+      },
+      models,
+      enabledHints: {
+        OPENAI_API_KEY: Boolean(process.env.OPENAI_API_KEY || process.env.VITE_OPENAI_API_KEY),
+        SUPABASE_URL: Boolean(process.env.SUPABASE_URL),
+        FEEDBACK_IA_ENABLED: process.env.FEEDBACK_IA_ENABLED !== 'false',
+      },
+    })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.post('/api/feedback-ia/enqueue', async (req, res) => {
+  try {
+    const { leadIds } = req.body || {}
+    if (!Array.isArray(leadIds) || leadIds.length === 0) {
+      res.status(400).json({ ok: false, error: 'leadIds (array) é obrigatório' })
+      return
+    }
+    const out = enqueueManualEvaluation(leadIds)
     res.json({ ok: true, ...out })
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })
