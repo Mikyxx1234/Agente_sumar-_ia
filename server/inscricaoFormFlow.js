@@ -1,7 +1,7 @@
 /**
  * Fluxo inscrição Sumaré:
  *   início → salesbot Kommo "Formulario_Sum" (envia o formulário no WhatsApp)
- *   pós preenchimento → distribuição → validação campos → salesbot 49813 + pause IA
+ *   pós preenchimento → salesbot 49813 (matrícula) + pause IA
  *   (ver server/inscricaoPostFormPipeline.js)
  */
 

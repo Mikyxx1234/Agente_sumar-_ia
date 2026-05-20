@@ -122,6 +122,24 @@ export function messageRequestsInscricaoForm(text, historyMessages = []) {
   return false
 }
 
+/**
+ * Confirmação curta após o formulário ter sido enviado (status aguardando).
+ * Ex.: "preenchido", "e agora", "pronto".
+ */
+export function messageLooksLikeFormFollowUp(text) {
+  const t = normalizeMessageForScope(text).toLowerCase().trim()
+  if (!t || t.length > 60) return false
+  if (messageLooksLikeOperationalChat(text)) return false
+  if (
+    /\b(preenchid[oa]?|respondid[oa]?|enviei|mandei|terminei|finalizei|j[aá]\s+preenchi)\b/i.test(t) ||
+    /^\s*preenchid[oa]?\s*[.!?]*\s*$/i.test(t)
+  ) {
+    return true
+  }
+  if (/^\s*(e\s+agora|e\s+ai|e\s+aí|ok|pronto|feito|done)\s*[.!?]*\s*$/i.test(t)) return true
+  return false
+}
+
 /** Resposta do WhatsApp Flow / formulário "Form Sumar" após preenchimento. */
 export function messageLooksLikeFormSumarResponse(text) {
   const raw = String(text || '').trim()
@@ -142,6 +160,7 @@ export function messageLooksLikeFormSumarResponse(text) {
     return true
   }
   if (/\bformul[aá]rio\b/i.test(t) && /\b(preenchido|enviado|respondido|conclu[ií]do)\b/i.test(t)) return true
+  if (/^\s*preenchid[oa]?\s*[.!?]*\s*$/i.test(t)) return true
   return false
 }
 
@@ -157,17 +176,6 @@ export function buildInscricaoFormSentReply(opts = {}) {
     `Perfeito${nameBit}! Para dar continuidade à sua inscrição na Faculdade Sumaré, acabei de enviar ` +
     `o formulário de dados básicos aqui no WhatsApp. É rapidinho — preencha e envie; em seguida ` +
     `nossa equipe segue com o próximo passo com você por aqui.`
-  )
-}
-
-/** Logo após o Flow / formulário ser preenchido (antes da matrícula automática). */
-export function buildInscricaoFormReceivedReply(opts = {}) {
-  const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
-  return (
-    `Obrigado${nameBit}! Recebemos suas respostas no formulário. ` +
-    `Estou encaminhando seu cadastro para a equipe de atendimento da Faculdade Sumaré — ` +
-    `em instantes seguimos com o próximo passo da sua inscrição. ` +
-    `Se quiser, pode continuar por aqui tirando dúvidas sobre o curso ou a matrícula.`
   )
 }
 
