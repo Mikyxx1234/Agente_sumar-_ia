@@ -13,7 +13,6 @@ import {
 } from '../libShared/inscricaoFormHeuristics.js'
 import { runKommoSalesbot } from './kommoSalesbot.js'
 import { findLeadByPhone, listLeadNotes } from './kommoClient.js'
-import { fetchLeadFormSnapshot } from './inscricaoKommoFields.js'
 import { updateDadosCliente, getLeadIdByTelefone, normalizeTelefone } from './dadosClienteStore.js'
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
@@ -48,6 +47,68 @@ async function getClienteRow(env, telefone) {
 
 async function setFormStatus(env, telefone, status) {
   return updateDadosCliente(env, { telefone, fields: { [FORM_STATUS_FIELD]: status } })
+}
+
+/**
+ * Claim atômico: marca concluído antes do salesbot 49813 — evita 5 disparos em réplicas paralelas.
+ */
+async function claimMatriculaPosFormExclusive(env, telefone) {
+  const { url, key, table } = getSupabaseCfg(env)
+  if (!url || !key) return { claimed: true, reason: 'no_supabase' }
+  const fone = normalizeTelefone(telefone)
+  if (!fone) return { claimed: false, reason: 'invalid_phone' }
+  const waiting = [
+    INSCRICAO_FORM_STATUS_AGUARDANDO,
+    INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
+  ].join(',')
+  try {
+    const enc = encodeURIComponent(fone)
+    const res = await fetch(
+      `${url}/rest/v1/${encodeURIComponent(table)}?telefone=eq.${enc}&${FORM_STATUS_FIELD}=in.(${waiting})`,
+      {
+        method: 'PATCH',
+        headers: {
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          'Content-Type': 'application/json',
+          Prefer: 'return=representation',
+        },
+        body: JSON.stringify({ [FORM_STATUS_FIELD]: INSCRICAO_FORM_STATUS_CONCLUIDO }),
+      },
+    )
+    if (!res.ok) return { claimed: false, reason: `patch_${res.status}` }
+    const rows = await res.json()
+    if (Array.isArray(rows) && rows.length > 0) {
+      return { claimed: true, reason: 'claimed_waiting_status' }
+    }
+    const resNull = await fetch(
+      `${url}/rest/v1/${encodeURIComponent(table)}?telefone=eq.${enc}&${FORM_STATUS_FIELD}=is.null`,
+      {
+        method: 'PATCH',
+        headers: {
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          'Content-Type': 'application/json',
+          Prefer: 'return=representation',
+        },
+        body: JSON.stringify({ [FORM_STATUS_FIELD]: INSCRICAO_FORM_STATUS_CONCLUIDO }),
+      },
+    )
+    if (resNull.ok) {
+      const rowsNull = await resNull.json()
+      if (Array.isArray(rowsNull) && rowsNull.length > 0) {
+        return { claimed: true, reason: 'claimed_null_status' }
+      }
+    }
+    const row = await getClienteRow(env, telefone)
+    const st = row?.[FORM_STATUS_FIELD] ?? null
+    if (st === INSCRICAO_FORM_STATUS_CONCLUIDO) {
+      return { claimed: false, reason: 'already_completed', status: st }
+    }
+    return { claimed: false, reason: 'no_waiting_row', status: st }
+  } catch (err) {
+    return { claimed: true, reason: `claim_error_${err.message}` }
+  }
 }
 
 async function resolveLeadId(env, telefone, leadIdHint) {
@@ -132,18 +193,6 @@ export async function detectFormSumarRecebidoNoKommo(env, leadId) {
         return { detected: true, source: 'kommo_note_flow', sample: blob.slice(0, 120) }
       }
     }
-    const hadFormBot = notesRes.notes.some((n) =>
-      /formulario[_\s-]?sum|form\s+sumar|salesbot.*formulario/i.test(noteBlob(n)),
-    )
-    if (hadFormBot) {
-      const snap = await fetchLeadFormSnapshot(env, id)
-      if (snap.ok) {
-        const { nome, email, cpf, curso_inscricao } = snap.snapshot
-        if (nome && email && cpf && curso_inscricao) {
-          return { detected: true, source: 'kommo_fields_pos_form_bot' }
-        }
-      }
-    }
   }
 
   return { detected: false, reason: 'not_found' }
@@ -155,6 +204,14 @@ export async function detectFormSumarRecebidoNoKommo(env, leadId) {
 async function stepMatriculaPosForm(env, ctx) {
   const { telefone, idLead, executionId, model, pushName, t0 } = ctx
 
+  const claim = await claimMatriculaPosFormExclusive(env, telefone)
+  if (!claim.claimed) {
+    console.log(
+      `[inscricaoPostForm] lead=${idLead} matricula_pos_form skip claim=${claim.reason} status=${claim.status || 'n/a'}`,
+    )
+    return { handled: false, reason: 'matricula_already_claimed' }
+  }
+
   const [salesbotRes, pauseRes] = await Promise.all([
     runKommoSalesbot(env, idLead, 'matricula_pos_form', {
       executionId,
@@ -162,7 +219,6 @@ async function stepMatriculaPosForm(env, ctx) {
     }),
     pauseAtendimentoIa(env, telefone),
   ])
-  await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_CONCLUIDO)
 
   const matriculaOk = Boolean(salesbotRes.ok && !salesbotRes.skipped)
   const reply = buildInscricaoFormCompleteReply({ pushName, ok: matriculaOk })

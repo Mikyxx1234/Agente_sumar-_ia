@@ -14,6 +14,20 @@ const DEFAULT_BOT_CONSULTOR = 49777
 const DEFAULT_BOT_DISTRIBUICAO_FORM = 49777
 const DEFAULT_BOT_MATRICULA_POS_FORM = 49813
 
+/** Evita disparar o mesmo salesbot no mesmo lead em loop (scheduler ~10s). */
+const _salesbotRunCache = new Map()
+/** Coalesce chamadas paralelas (race antes do cache ser gravado). */
+const _salesbotInflight = new Map()
+
+function salesbotDedupeMs(env, kind) {
+  const global = Number(env.KOMMO_SALESBOT_MIN_INTERVAL_SEC)
+  if (Number.isFinite(global) && global > 0) return global * 1000
+  if (kind === 'formulario_sum') return 6 * 60 * 60 * 1000
+  if (kind === 'matricula_pos_form') return 24 * 60 * 60 * 1000
+  if (kind === 'distribuicao_pos_form') return 30 * 60 * 1000
+  return 60 * 60 * 1000
+}
+
 export function normalizeSalesbotMotivo(motivo) {
   const m = String(motivo || 'consultor')
     .trim()
@@ -77,10 +91,9 @@ export function resolveSalesbotBotId(env, motivo) {
       env.KOMMO_SALESBOT_FORMULARIO_SUM_ID ||
         env.KOMMO_SALESBOT_FORM_SUMAR_ID ||
         env.KOMMO_SALESBOT_INSCRICAO_FORM_ID ||
-        env.KOMMO_SALESBOT_INSCRICAO_START_ID ||
-        env.KOMMO_SALESBOT_MATRICULA_POS_FORM_ID,
+        env.KOMMO_SALESBOT_INSCRICAO_START_ID,
     )
-    return Number.isFinite(id) && id > 0 ? id : DEFAULT_BOT_MATRICULA_POS_FORM
+    return Number.isFinite(id) && id > 0 ? id : 0
   }
   const id = Number(
     env.KOMMO_SALESBOT_DISTRIBUIR_ID ||
@@ -110,6 +123,57 @@ export async function runKommoSalesbot(env, idLead, motivo = 'consultor', opts =
 
   const kind = normalizeSalesbotMotivo(motivo)
   const botId = resolveSalesbotBotId(env, motivo)
+  if (!botId) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: 'missing_bot_id',
+      code: kind === 'formulario_sum' ? 'MISSING_FORMULARIO_SUM_BOT_ID' : 'MISSING_SALESBOT_BOT_ID',
+      motivo: kind,
+    }
+  }
+
+  const dedupeKey = `${leadId}:${kind}:${botId}`
+  const inflight = _salesbotInflight.get(dedupeKey)
+  if (inflight) return inflight
+
+  const promise = runKommoSalesbotOnce(env, {
+    leadId,
+    kind,
+    botId,
+    dedupeKey,
+    kommoBase,
+    kommoToken,
+    note: opts.note,
+    force: Boolean(opts.force),
+  })
+  _salesbotInflight.set(dedupeKey, promise)
+  try {
+    return await promise
+  } finally {
+    _salesbotInflight.delete(dedupeKey)
+  }
+}
+
+async function runKommoSalesbotOnce(env, ctx) {
+  const { leadId, kind, botId, dedupeKey, kommoBase, kommoToken, note, force } = ctx
+  const lastRun = _salesbotRunCache.get(dedupeKey)
+  const dedupeMs = salesbotDedupeMs(env, kind)
+  if (!force && lastRun && Date.now() - lastRun < dedupeMs) {
+    console.log(
+      `[kommoSalesbot] dedupe lead=${leadId} bot=${botId} motivo=${kind} (${Math.round((Date.now() - lastRun) / 1000)}s < ${Math.round(dedupeMs / 1000)}s)`,
+    )
+    return {
+      ok: true,
+      skipped: true,
+      reason: 'dedupe_recent',
+      botId,
+      motivo: kind,
+      text: 'salesbot já disparado recentemente para este lead',
+    }
+  }
+
+  _salesbotRunCache.set(dedupeKey, Date.now())
 
   const url = `${kommoBase.replace(/\/$/, '')}/api/v2/salesbot/run`
   const res = await fetch(url, {
@@ -126,8 +190,10 @@ export async function runKommoSalesbot(env, idLead, motivo = 'consultor', opts =
     `[kommoSalesbot] run lead=${leadId} bot=${botId} motivo=${kind} ok=${res.ok} status=${res.status} body=${text.slice(0, 120)}`,
   )
 
-  if (res.ok && opts.note) {
-    await createLeadNote(env, leadId, opts.note).catch(() => {})
+  if (!res.ok) {
+    _salesbotRunCache.delete(dedupeKey)
+  } else if (note) {
+    await createLeadNote(env, leadId, note).catch(() => {})
   }
 
   return {

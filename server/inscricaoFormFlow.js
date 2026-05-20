@@ -60,6 +60,42 @@ async function setFormStatus(env, telefone, status) {
   })
 }
 
+/**
+ * Claim atômico no Supabase: só um processo/réplica dispara o Formulario_Sum.
+ * PATCH só quando inscricao_form_status ainda é null.
+ */
+async function claimInscricaoFormStartExclusive(env, telefone) {
+  const { url, key, table } = getSupabaseCfg(env)
+  if (!url || !key) return { claimed: true, reason: 'no_supabase' }
+  const fone = normalizeTelefone(telefone)
+  if (!fone) return { claimed: false, reason: 'invalid_phone' }
+  try {
+    const enc = encodeURIComponent(fone)
+    const res = await fetch(
+      `${url}/rest/v1/${encodeURIComponent(table)}?telefone=eq.${enc}&${FORM_STATUS_FIELD}=is.null`,
+      {
+        method: 'PATCH',
+        headers: {
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          'Content-Type': 'application/json',
+          Prefer: 'return=representation',
+        },
+        body: JSON.stringify({ [FORM_STATUS_FIELD]: INSCRICAO_FORM_STATUS_AGUARDANDO }),
+      },
+    )
+    if (!res.ok) return { claimed: false, reason: `patch_${res.status}` }
+    const rows = await res.json()
+    if (Array.isArray(rows) && rows.length > 0) {
+      return { claimed: true, reason: 'claimed_null_status' }
+    }
+    const status = await getFormStatus(env, telefone)
+    return { claimed: false, reason: 'already_started', status }
+  } catch (err) {
+    return { claimed: true, reason: `claim_error_${err.message}` }
+  }
+}
+
 async function resolveLeadId(env, telefone, leadIdHint) {
   if (Number.isFinite(leadIdHint) && leadIdHint > 0) return leadIdHint
   const fromDb = await getLeadIdByTelefone(env, telefone)
@@ -89,7 +125,7 @@ function buildAgentReturn({ executionId, model, t0, reply, steps, toolCalls, ctx
 }
 
 /** Dispara salesbot Formulario_Sum ou template Meta (fallback legado). */
-async function deliverInscricaoForm(env, { telefone, leadId, executionId }) {
+async function deliverInscricaoForm(env, { telefone, leadId, executionId, forceResend = false }) {
   if (useWhatsappTemplateDelivery(env)) {
     return {
       delivery: 'whatsapp_template',
@@ -110,17 +146,19 @@ async function deliverInscricaoForm(env, { telefone, leadId, executionId }) {
 
   const salesbotRes = await runKommoSalesbot(env, leadId, 'formulario_sum', {
     executionId,
+    force: forceResend,
     note: `Salesbot Formulario_Sum ativado (inscrição via agente IA) — ${executionId || ''}`.trim(),
   })
   return {
     delivery: 'kommo_salesbot',
     result: {
       ok: Boolean(salesbotRes.ok && !salesbotRes.skipped),
+      skipped: Boolean(salesbotRes.skipped),
+      reason: salesbotRes.reason,
       code: salesbotRes.code || (salesbotRes.ok ? 'SALESBOT_STARTED' : 'SALESBOT_FAILED'),
       botId: salesbotRes.botId,
       status: salesbotRes.status,
       error: salesbotRes.error || salesbotRes.reason || salesbotRes.text,
-      skipped: salesbotRes.skipped,
     },
   }
 }
@@ -156,16 +194,62 @@ export async function tryHandleInscricaoFormStart(env, input) {
   }
 
   const idLead = await resolveLeadId(env, telefone, leadIdHint)
+
+  if (!asksResend) {
+    const claim = await claimInscricaoFormStartExclusive(env, telefone)
+    if (!claim.claimed) {
+      const st = claim.status ?? (await getFormStatus(env, telefone))
+      if (st === INSCRICAO_FORM_STATUS_AGUARDANDO) {
+        const reply =
+          'Já ativei o envio do formulário de inscrição por aqui. Quando terminar de preencher e enviar, nossa equipe segue com você automaticamente. Precisa de ajuda com algum campo?'
+        return {
+          handled: true,
+          result: buildAgentReturn({
+            executionId,
+            model,
+            t0,
+            reply,
+            steps: [{ type: 'inscricao_form_reminder', status: st, claim: claim.reason }],
+            ctxSnapshot: { inscricaoForm: 'aguardando' },
+          }),
+        }
+      }
+      if (st === INSCRICAO_FORM_STATUS_CONCLUIDO) return null
+    }
+  }
+
   const delivery = await deliverInscricaoForm(env, {
     telefone,
     leadId: idLead,
     executionId,
+    forceResend: asksResend,
   })
+  const dedupeSkipped = Boolean(
+    delivery.result?.skipped && delivery.delivery === 'kommo_salesbot',
+  )
   const sendOk = Boolean(delivery.result?.ok)
 
   let statusUpdate = { ok: false, skipped: true }
-  if (sendOk) {
+  if (sendOk && asksResend) {
     statusUpdate = await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO)
+  } else if (sendOk) {
+    statusUpdate = { ok: true, skipped: false, matched: true }
+  }
+
+  if (dedupeSkipped && !asksResend) {
+    const reply =
+      'Já ativei o envio do formulário de inscrição por aqui. Quando terminar de preencher e enviar, nossa equipe segue com você automaticamente. Precisa de ajuda com algum campo?'
+    return {
+      handled: true,
+      result: buildAgentReturn({
+        executionId,
+        model,
+        t0,
+        reply,
+        steps: [{ type: 'inscricao_form_reminder', status: 'dedupe_salesbot' }],
+        ctxSnapshot: { inscricaoForm: 'aguardando' },
+      }),
+    }
   }
 
   let whatsappReply = buildInscricaoFormSentReply({ pushName, resend: asksResend })
@@ -252,12 +336,31 @@ export async function tryEnsureInscricaoFormSent(env, input) {
 export async function runInscricaoFormStart(env, body) {
   const telefone = body?.telefone
   if (!telefone) return { ok: false, code: 'MISSING_TELEFONE' }
+  const forceResend = Boolean(body?.force || body?.resend)
+  if (!forceResend) {
+    const claim = await claimInscricaoFormStartExclusive(env, telefone)
+    if (!claim.claimed) {
+      const st = claim.status ?? (await getFormStatus(env, telefone))
+      if (st === INSCRICAO_FORM_STATUS_AGUARDANDO || st === INSCRICAO_FORM_STATUS_CONCLUIDO) {
+        return {
+          ok: true,
+          skipped: true,
+          code: 'FORM_ALREADY_STARTED',
+          message: 'Formulário já foi ativado para este lead.',
+          status: st,
+        }
+      }
+    }
+  }
   const idLead = await resolveLeadId(env, telefone, body?.id_lead ?? body?.idLead)
-  const delivery = await deliverInscricaoForm(env, { telefone, leadId: idLead })
+  const delivery = await deliverInscricaoForm(env, { telefone, leadId: idLead, forceResend })
   const sendOk = Boolean(delivery.result?.ok)
-  const statusUpdate = sendOk
-    ? await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO)
-    : { ok: false, skipped: true }
+  const statusUpdate =
+    sendOk && forceResend
+      ? await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO)
+      : sendOk
+        ? { ok: true, skipped: false }
+        : { ok: false, skipped: true }
   return {
     ok: sendOk,
     delivery: delivery.delivery,
