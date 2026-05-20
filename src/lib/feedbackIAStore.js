@@ -51,3 +51,45 @@ export async function enqueueLeads(leadIds) {
     body: JSON.stringify({ leadIds }),
   })
 }
+
+// ── Fase 2 — regras versionadas ──
+
+export async function listRules() {
+  return jsonFetch(`${BASE}/rules`)
+}
+
+export async function listRuleViolations({ days = 30 } = {}) {
+  return jsonFetch(`${BASE}/rules/violations?days=${days}`)
+}
+
+export async function listRuleVersions(ruleId) {
+  return jsonFetch(`${BASE}/rules/${ruleId}/versions`)
+}
+
+export async function generateRulePatch(ruleId, samples) {
+  return jsonFetch(`${BASE}/rules/${ruleId}/generate-patch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ samples }),
+  })
+}
+
+export async function applyRulePatch(ruleId, body, { sourceEvaluationId, appliedBy } = {}) {
+  return jsonFetch(`${BASE}/rules/${ruleId}/apply`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      body,
+      source_evaluation_id: sourceEvaluationId,
+      applied_by: appliedBy || 'dashboard',
+    }),
+  })
+}
+
+export async function rollbackRule(ruleId, version, { appliedBy } = {}) {
+  return jsonFetch(`${BASE}/rules/${ruleId}/rollback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ version, applied_by: appliedBy || 'dashboard' }),
+  })
+}

@@ -72,3 +72,76 @@ nova tabela Supabase `ai_rule_evaluations`. Fase 1 só avalia e sugere —
   tudo.
 - Fase 2 (extrair regras para `agent_rules` versionado + aplicação
   manual de patch) só após Fase 1 validada em produção.
+
+---
+
+### 2026-05-20 — Feedback IA · Fase 2: regras versionadas em DB + patch aprovado
+
+**Decisão.** Extrair as 22 regras hardcoded em `promptsLoader.js` para
+duas tabelas Supabase (`agent_rules` + `agent_rule_versions`).
+`getAgentRulesText` continua **síncrono** e fica com cache em memória
+de 60s. Em caso de falha do Supabase (timeout, tabela ausente, REST
+caiu), **fallback automático para o texto hardcoded**: o agente nunca
+fica sem prompt. Patch sugerido pelo avaliador vira diff aprovável na
+aba "Otimizar Prompt" (chama `gpt-5` papel `rules_patch` para
+consolidar evidências de várias avaliações). Após aprovação humana,
+nova versão é gravada e o cache invalidado — o próximo turno do agente
+já usa o texto novo.
+
+**Contexto.**
+- Fase 1 já registra violações por regra em `ai_rule_evaluations.per_rule`.
+- O hardcoded em `promptsLoader.js` é fonte única de verdade hoje;
+  alterá-lo exige deploy. Patch versionado em DB permite ajustar
+  comportamento sem novo build, com auditoria completa de quem mudou
+  o quê e quando.
+
+**Alternativas descartadas.**
+- *Arquivo JSON no repo + commit por patch.* Exige deploy a cada
+  ajuste e perde o ciclo "avaliação → sugestão → aprovação → ativação"
+  num mesmo painel.
+- *Tornar `getAgentRulesText` async.* Forçaria refactor do
+  `agentRunner` (cadeia síncrona). Não vale a pena: cache em memória
+  de 60s resolve sem mudar interface.
+- *Substituir hardcoded sem fallback.* Inaceitável — se o Supabase
+  cai, agente fica sem prompt. Fallback hardcoded é o salva-vidas.
+- *Patch aplicado direto pelo avaliador, sem aprovação.* Já descartado
+  na Fase 1 e mantido aqui — sempre passa por humano.
+
+**Impacto.**
+- Novos arquivos:
+  - `scripts/sql/agent_rules.sql` — `agent_rules` (1 row por regra) +
+    `agent_rule_versions` (histórico). PKs e checks.
+  - `server/feedbackIA/rulesStore.js` — CRUD via Supabase REST.
+  - `server/feedbackIA/rulesSeed.js` — parser do texto hardcoded
+    (regex em multilinha) + seed idempotente.
+  - `server/feedbackIA/patchGenerator.js` — agrega evidências de
+    `ai_rule_evaluations.per_rule` por `rule_id` e chama `gpt-5`
+    (papel `rules_patch`) com JSON Schema para sugerir nova redação.
+- Alterações:
+  - `server/ai/promptsLoader.js` — cache module-level
+    `_rulesCache: { ts, list }`; `getAgentRulesText` síncrono prefere
+    cache se válido, senão hardcoded; refresh em background ao boot e
+    quando endpoint de apply invalida o cache.
+  - `server.js` — endpoints `GET /api/feedback-ia/rules`,
+    `GET /api/feedback-ia/rules/:id/violations`,
+    `POST /api/feedback-ia/rules/:id/generate-patch`,
+    `POST /api/feedback-ia/rules/:id/apply`,
+    `POST /api/feedback-ia/rules/:id/rollback`. Seed roda no boot.
+  - `src/components/FeedbackIA.jsx` — aba "Otimizar Prompt" sai do
+    placeholder, mostra regras com violações + botões Gerar/Aprovar/
+    Rollback + diff side-by-side simples.
+  - `src/lib/feedbackIAStore.js` — wrappers fetch dos endpoints novos.
+- Custo: chamada de patch ≈ US$ 0,03–0,08 cada (gpt-5 com contexto
+  longo). É ação manual; não roda em loop.
+
+**Salvaguardas.**
+- Fallback hardcoded sempre presente. Logs `[promptsLoader] source=db`
+  ou `source=hardcoded` em cada `getAgentRulesText` (uma vez por
+  refresh).
+- Seed só insere se a tabela estiver vazia (`COUNT = 0`); nunca
+  sobrescreve patch aplicado.
+- Apply faz INSERT em `agent_rule_versions` ANTES do UPDATE em
+  `agent_rules` — se algo quebrar, histórico é preservado.
+- Rollback é uma operação igual ao apply (cria nova versão a partir
+  da versão alvo). Nunca perde linhas.
+- UI confirma antes de aplicar; mostra diff colorido.

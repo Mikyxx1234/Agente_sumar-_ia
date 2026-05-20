@@ -173,14 +173,120 @@ export async function loadClassifierSystemPrompt() {
 }
 
 /**
- * Texto completo do override (regras 1-22). Exposto separadamente para
- * que o avaliador de Feedback IA (`server/feedbackIA/ruleEvaluator.js`)
- * possa reproduzir EXATAMENTE as mesmas regras que governam a IA em
- * produção, sem precisar carregar prompts do n8n. Fonte única — quando
- * uma regra muda aqui, o avaliador automaticamente passa a checar pela
- * versão nova.
+ * Cache em memória das regras carregadas do DB (Feedback IA · Fase 2).
+ * Quando preenchido, `getAgentRulesText` monta o override a partir do
+ * DB. Quando vazio ou stale, cai no hardcoded — agente nunca fica sem
+ * prompt.
+ *
+ * O cache é populado por `refreshAgentRulesCache` (chamado no boot do
+ * server e quando alguém aplica/rollback um patch). TTL de 60s — após
+ * isso, refresh em background na próxima leitura.
+ *
+ * Shape do cache:
+ *   { ts: number, rules: [{ id, title, body, version }] | null,
+ *     source: 'db' | 'fallback', error?: string }
+ */
+let _rulesCache = { ts: 0, rules: null, source: 'fallback' }
+const RULES_CACHE_TTL_MS = 60_000
+let _refreshInFlight = null
+
+/**
+ * Refaz o cache lendo do Supabase. Não bloqueia: se já tiver refresh
+ * em voo, retorna a mesma Promise. Em caso de erro, marca cache como
+ * stale mas mantém última lista boa (ou null → fallback).
+ *
+ * Caller (server boot, endpoint apply/rollback) pode aguardar a
+ * Promise; em uso normal (`getAgentRulesText` síncrono), ela apenas
+ * dispara o refresh em background.
+ */
+export function refreshAgentRulesCache(env = process.env, opts = {}) {
+  if (_refreshInFlight) return _refreshInFlight
+  _refreshInFlight = (async () => {
+    try {
+      const mod = await import('../feedbackIA/rulesStore.js')
+      const r = await mod.listActiveRules(env)
+      if (r.ok && Array.isArray(r.data) && r.data.length > 0) {
+        const ordered = [...r.data].sort((a, b) => a.id - b.id)
+        _rulesCache = { ts: Date.now(), rules: ordered, source: 'db' }
+        if (!opts.silent) {
+          console.log(`[promptsLoader] regras carregadas do DB (${ordered.length}, source=db)`)
+        }
+      } else if (!r.ok && r.code === 'TABLE_MISSING') {
+        // Tabela ainda não foi criada — silencia mas marca fallback.
+        _rulesCache = { ts: Date.now(), rules: null, source: 'fallback', error: 'TABLE_MISSING' }
+        if (!opts.silent) {
+          console.log('[promptsLoader] agent_rules ausente; usando hardcoded. Rode scripts/sql/agent_rules.sql para ativar Fase 2.')
+        }
+      } else if (!r.ok) {
+        _rulesCache = { ts: Date.now(), rules: _rulesCache.rules, source: 'fallback', error: r.error || r.code }
+        console.warn(`[promptsLoader] falha ao ler agent_rules: ${r.error || r.code}. Usando hardcoded.`)
+      } else {
+        _rulesCache = { ts: Date.now(), rules: null, source: 'fallback' }
+      }
+    } catch (e) {
+      _rulesCache = { ts: Date.now(), rules: _rulesCache.rules, source: 'fallback', error: e.message }
+      console.warn('[promptsLoader] refresh cache exception:', e.message)
+    } finally {
+      _refreshInFlight = null
+    }
+  })()
+  return _refreshInFlight
+}
+
+/** Informa estado do cache (para endpoint de status / debug). */
+export function getAgentRulesCacheInfo() {
+  return {
+    source: _rulesCache.source,
+    rulesCount: _rulesCache.rules?.length || 0,
+    ageMs: _rulesCache.ts ? Date.now() - _rulesCache.ts : null,
+    error: _rulesCache.error || null,
+  }
+}
+
+/**
+ * Texto completo do override (regras 1-22). Síncrono — chamado pelo
+ * `buildSystemMessage` no loop quente do agente.
+ *
+ *  Comportamento:
+ *  - Se o cache do DB tem regras válidas → monta a partir delas
+ *    (cabeçalho hardcoded + concatenação dos bodies do DB).
+ *  - Caso contrário, ou se o cache passou do TTL e está sem regras
+ *    bons, devolve o texto hardcoded (fallback).
+ *  - Quando o cache está stale (idade > TTL), dispara refresh em
+ *    background SEM bloquear — próxima chamada já pega valor novo.
  */
 export function getAgentRulesText(env = process.env) {
+  const stale = Date.now() - _rulesCache.ts > RULES_CACHE_TTL_MS
+  if (stale) {
+    // Refresh assíncrono. Não aguardamos.
+    refreshAgentRulesCache(env, { silent: true }).catch(() => {})
+  }
+  if (_rulesCache.rules && _rulesCache.rules.length > 0) {
+    return composeOverrideFromDB(env, _rulesCache.rules)
+  }
+  return getAgentRulesHardcoded(env)
+}
+
+/**
+ * Monta o override a partir do header hardcoded + lista de regras do DB.
+ * Mantém o exato cabeçalho ("## INSTRUÇÕES DO AGENTE...") para que o
+ * comportamento do agente fique idêntico — só os corpos numerados são
+ * substituídos.
+ */
+function composeOverrideFromDB(env, rules) {
+  const hard = getAgentRulesHardcoded(env)
+  // Pega tudo até antes do primeiro "1. "
+  const firstIdx = hard.search(/(^|\n)\s*1\.\s+/)
+  const header = firstIdx >= 0 ? hard.slice(0, firstIdx).trimEnd() : hard.slice(0, 0)
+  const bodies = rules
+    .slice()
+    .sort((a, b) => a.id - b.id)
+    .map((r) => String(r.body || '').trim())
+    .filter(Boolean)
+  return [header, '', bodies.join('\n\n')].filter(Boolean).join('\n').trim() + '\n'
+}
+
+function getAgentRulesHardcoded(env = process.env) {
   const inscricaoAuto = isInscricaoAutomaticaEnabled(env)
   const toolsLine = inscricaoAuto
     ? 'buscar_conhecimento, buscar_precos, buscar_informacoes, buscar_pos, buscar_perguntas, inscricao, distribuir_humano e buscar_historico_conversa'

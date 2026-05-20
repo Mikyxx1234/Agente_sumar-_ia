@@ -10,6 +10,7 @@ import {
   evaluateNow,
 } from '../lib/feedbackIAStore'
 import KommoLeadLink from './KommoLeadLink'
+import FeedbackIAPatchPanel from './FeedbackIAPatchPanel'
 
 const VERDICT_META = {
   APROVADO: {
@@ -522,29 +523,7 @@ export default function FeedbackIA() {
           </div>
         )}
 
-        {tab === 'patch' && (
-          <div style={{
-            padding: 24, borderRadius: 12, background: 'var(--bg-1)', border: '1px solid var(--line-1)',
-            color: 'var(--fg-2)', fontSize: 13,
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, color: 'var(--fg-1)', fontWeight: 600 }}>
-              <Wand2 size={14} /> Otimizar Prompt
-            </div>
-            <p style={{ marginTop: 0, lineHeight: 1.5 }}>
-              Esta seção, na <strong>Fase 2</strong>, vai agregar as regras com mais falhas e
-              gerar um <em>patch sugerido</em> com {stats?.models?.rules_patch?.resolved || 'gpt-5'}.
-              Depois de aprovado por você, o novo corpo da regra entra em vigor no override.
-            </p>
-            <p style={{ marginBottom: 0, lineHeight: 1.5 }}>
-              Por enquanto, cada avaliação já traz uma <em>sugestão por conversa</em>
-              (visível ao expandir o item). Use-as para detectar padrões.
-            </p>
-            <div style={{ marginTop: 16, padding: 10, borderRadius: 6, background: 'var(--bg-2)', fontSize: 11.5 }}>
-              <Star size={11} style={{ marginRight: 6, color: 'var(--fg-3)' }} />
-              <span>Recomendação: se ≥ 3 avaliações sugerirem alterar a mesma regra, vale ler com calma e abrir Fase 2.</span>
-            </div>
-          </div>
-        )}
+        {tab === 'patch' && <FeedbackIAPatchPanel />}
       </div>
 
       <style>{`

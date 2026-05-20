@@ -12,6 +12,16 @@ import {
   enqueueManualEvaluation,
   getFunnelWatcherState,
 } from './server/feedbackIA/funnelExitWatcher.js'
+import {
+  listActiveRules,
+  applyRulePatch,
+  listRuleVersions,
+  rollbackRule,
+  aggregateViolationsByRule,
+} from './server/feedbackIA/rulesStore.js'
+import { seedAgentRulesIfEmpty } from './server/feedbackIA/rulesSeed.js'
+import { generateRulePatch } from './server/feedbackIA/patchGenerator.js'
+import { refreshAgentRulesCache, getAgentRulesCacheInfo, AGENT_RULES_CATALOG } from './server/ai/promptsLoader.js'
 import { runNearestPolo } from './server/locationTool.js'
 import { runInscricao } from './server/inscricaoTool.js'
 import { isInscricaoAutomaticaEnabled, matriculaViaConsultorInstruction } from './server/inscricaoConfig.js'
@@ -303,6 +313,149 @@ app.post('/api/feedback-ia/enqueue', async (req, res) => {
     res.status(500).json({ ok: false, error: e.message })
   }
 })
+
+// ── Feedback IA · Fase 2 — regras versionadas + patch aprovado ──
+
+app.get('/api/feedback-ia/rules', async (_req, res) => {
+  try {
+    const r = await listActiveRules(process.env)
+    if (!r.ok) {
+      res.json({ ok: false, code: r.code, error: r.error, data: [], cache: getAgentRulesCacheInfo() })
+      return
+    }
+    res.json({
+      ok: true,
+      data: r.data,
+      catalog: AGENT_RULES_CATALOG,
+      cache: getAgentRulesCacheInfo(),
+    })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.get('/api/feedback-ia/rules/violations', async (req, res) => {
+  try {
+    const days = Number(req.query?.days) || 30
+    const sinceIso = new Date(Date.now() - days * 86400_000).toISOString()
+    const r = await aggregateViolationsByRule(process.env, { sinceIso, limit: 500 })
+    if (!r.ok) {
+      res.json({ ok: false, code: r.code, error: r.error, data: [] })
+      return
+    }
+    res.json({ ok: true, ...r })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.get('/api/feedback-ia/rules/:id/versions', async (req, res) => {
+  try {
+    const r = await listRuleVersions(process.env, req.params.id)
+    if (!r.ok) {
+      res.json({ ok: false, code: r.code, error: r.error, data: [] })
+      return
+    }
+    res.json({ ok: true, data: r.data })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.post('/api/feedback-ia/rules/:id/generate-patch', async (req, res) => {
+  try {
+    const ruleId = Number(req.params.id)
+    const rules = await listActiveRules(process.env)
+    if (!rules.ok) {
+      res.json({ ok: false, code: rules.code, error: rules.error })
+      return
+    }
+    const rule = rules.data.find((r) => r.id === ruleId)
+    if (!rule) {
+      res.status(404).json({ ok: false, error: `Regra ${ruleId} não encontrada` })
+      return
+    }
+    const samples = Array.isArray(req.body?.samples) ? req.body.samples : []
+    const out = await generateRulePatch(process.env, {
+      rule,
+      samples,
+      catalog: AGENT_RULES_CATALOG,
+    })
+    if (!out.ok) {
+      res.status(500).json(out)
+      return
+    }
+    res.json({ ok: true, patch: out.data, model: out.model, usage: out.usage, durationMs: out.durationMs })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.post('/api/feedback-ia/rules/:id/apply', async (req, res) => {
+  try {
+    const ruleId = Number(req.params.id)
+    const { body, applied_by, source_evaluation_id } = req.body || {}
+    if (!body || String(body).trim().length < 20) {
+      res.status(400).json({ ok: false, error: 'body obrigatório (>= 20 chars)' })
+      return
+    }
+    const out = await applyRulePatch(process.env, ruleId, {
+      body: String(body),
+      applied_by: applied_by || 'dashboard',
+      source_evaluation_id: source_evaluation_id || null,
+    })
+    if (!out.ok) {
+      res.status(out.code === 'RULE_NOT_FOUND' ? 404 : 500).json(out)
+      return
+    }
+    // Invalida cache do prompt para o próximo turno do agente já usar.
+    await refreshAgentRulesCache(process.env).catch(() => {})
+    res.json({ ok: true, ...out, cache: getAgentRulesCacheInfo() })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.post('/api/feedback-ia/rules/:id/rollback', async (req, res) => {
+  try {
+    const ruleId = Number(req.params.id)
+    const { version, applied_by } = req.body || {}
+    if (!Number.isFinite(Number(version))) {
+      res.status(400).json({ ok: false, error: 'version (numérica) é obrigatória' })
+      return
+    }
+    const out = await rollbackRule(process.env, ruleId, version, applied_by || 'dashboard')
+    if (!out.ok) {
+      res.status(out.code === 'VERSION_NOT_FOUND' ? 404 : 500).json(out)
+      return
+    }
+    await refreshAgentRulesCache(process.env).catch(() => {})
+    res.json({ ok: true, ...out, cache: getAgentRulesCacheInfo() })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// Boot: tenta seed (idempotente) e popula cache do promptsLoader.
+;(async () => {
+  try {
+    const seed = await seedAgentRulesIfEmpty(process.env)
+    if (seed.action === 'seeded') {
+      console.log(`[Server] Feedback IA · agent_rules: seed inicial com ${seed.count} regras`)
+    } else if (seed.action === 'table_missing') {
+      console.log('[Server] Feedback IA · agent_rules ausente — rode scripts/sql/agent_rules.sql para habilitar Fase 2 (sem isso, agente segue usando override hardcoded)')
+    } else if (seed.action === 'skipped') {
+      console.log(`[Server] Feedback IA · agent_rules já populada (${seed.count} regras) — não fez seed`)
+    } else if (seed.action === 'no_supabase') {
+      console.log('[Server] Feedback IA · Supabase não configurado; Fase 2 desligada')
+    } else if (!seed.ok) {
+      console.warn('[Server] Feedback IA · seed falhou:', seed.error)
+    }
+    await refreshAgentRulesCache(process.env).catch(() => {})
+  } catch (e) {
+    console.warn('[Server] Feedback IA · boot exception:', e.message)
+  }
+})()
 
 // ── Tool localização (geocode + polo_loc + Distance Matrix) ──
 
