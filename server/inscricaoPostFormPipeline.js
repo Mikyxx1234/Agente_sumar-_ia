@@ -76,7 +76,22 @@ async function claimMatriculaPosFormExclusive(env, telefone) {
         body: JSON.stringify({ [FORM_STATUS_FIELD]: INSCRICAO_FORM_STATUS_CONCLUIDO }),
       },
     )
-    if (!res.ok) return { claimed: false, reason: `patch_${res.status}` }
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '')
+      if (res.status === 400) {
+        const fallback = await updateDadosCliente(env, {
+          telefone,
+          fields: { [FORM_STATUS_FIELD]: INSCRICAO_FORM_STATUS_CONCLUIDO },
+        })
+        if (fallback.ok && fallback.matched) {
+          return { claimed: true, reason: 'fallback_update_after_patch_400' }
+        }
+        console.warn(
+          `[inscricaoPostForm] claim patch_400 telefone=${fone} — confira coluna ${FORM_STATUS_FIELD} em ${table}. ${errBody.slice(0, 200)}`,
+        )
+      }
+      return { claimed: false, reason: `patch_${res.status}`, detail: errBody.slice(0, 200) }
+    }
     const rows = await res.json()
     if (Array.isArray(rows) && rows.length > 0) {
       return { claimed: true, reason: 'claimed_waiting_status' }
@@ -202,14 +217,25 @@ export async function detectFormSumarRecebidoNoKommo(env, leadId) {
  * Form preenchido → salesbot 49813 (matricula_pos_form) + pause IA.
  */
 async function stepMatriculaPosForm(env, ctx) {
-  const { telefone, idLead, executionId, model, pushName, t0 } = ctx
+  const { telefone, idLead, executionId, model, pushName, t0, kommoFormDetected } = ctx
 
   const claim = await claimMatriculaPosFormExclusive(env, telefone)
   if (!claim.claimed) {
-    console.log(
-      `[inscricaoPostForm] lead=${idLead} matricula_pos_form skip claim=${claim.reason} status=${claim.status || 'n/a'}`,
+    if (claim.reason === 'already_completed') {
+      return { handled: false, reason: 'matricula_already_claimed' }
+    }
+    const proceedWithoutClaim =
+      kommoFormDetected &&
+      (claim.reason === 'no_waiting_row' || String(claim.reason || '').startsWith('patch_'))
+    if (!proceedWithoutClaim) {
+      console.log(
+        `[inscricaoPostForm] lead=${idLead} matricula_pos_form skip claim=${claim.reason} status=${claim.status || 'n/a'}`,
+      )
+      return { handled: false, reason: 'matricula_already_claimed' }
+    }
+    console.warn(
+      `[inscricaoPostForm] lead=${idLead} matricula_pos_form sem claim Supabase (${claim.reason}) — form detectado no Kommo, disparando salesbot`,
     )
-    return { handled: false, reason: 'matricula_already_claimed' }
   }
 
   const [salesbotRes, pauseRes] = await Promise.all([
@@ -221,6 +247,9 @@ async function stepMatriculaPosForm(env, ctx) {
   ])
 
   const matriculaOk = Boolean(salesbotRes.ok && !salesbotRes.skipped)
+  if (matriculaOk) {
+    await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_CONCLUIDO).catch(() => {})
+  }
   const reply = buildInscricaoFormCompleteReply({ pushName, ok: matriculaOk })
 
   return {
@@ -308,7 +337,15 @@ export async function tryProcessInscricaoPostFormPipeline(env, input) {
     }
   }
 
-  return stepMatriculaPosForm(env, { telefone, idLead, executionId, model, pushName, t0 })
+  return stepMatriculaPosForm(env, {
+    telefone,
+    idLead,
+    executionId,
+    model,
+    pushName,
+    t0,
+    kommoFormDetected: kommoFormDone,
+  })
 }
 
 /** Compat: agentRunner import antigo. */

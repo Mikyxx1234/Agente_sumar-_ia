@@ -314,7 +314,7 @@ export async function runSchedulerTick(env) {
           if (reply) {
             const execId = generateExecutionId()
             const sendRes = await sendMessageWithNote(env, {
-              to: sessionId,
+              telefone: phone,
               text: reply,
               leadId: Number(lead.id),
               executionId: execId,

@@ -248,7 +248,7 @@ export async function tryInactivityReengagement(env, ctx) {
   const text = pickPingMessage(leadId)
   const executionId = generateExecutionId()
   const sendRes = await sendMessageWithNote(env, {
-    to: sessionId,
+    telefone: telefone || sessionId,
     text,
     leadId,
     executionId,
