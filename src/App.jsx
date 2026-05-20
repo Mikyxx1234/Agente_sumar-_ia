@@ -5,7 +5,6 @@ import PromptViewer from './components/PromptViewer'
 import Playground from './components/Playground'
 import ExecutionViewer from './components/ExecutionViewer'
 import KnowledgeUpdate from './components/KnowledgeUpdate'
-import MatriculasViewer from './components/MatriculasViewer'
 import FunilKommo from './components/FunilKommo'
 import { PowerOff } from 'lucide-react'
 import './App.css'
@@ -182,7 +181,6 @@ export default function App() {
           )}
           {!loading && !error && page === 'playground' && <Playground prompts={prompts} />}
           {!loading && !error && page === 'executions' && <ExecutionViewer />}
-          {!loading && !error && page === 'matriculas' && <MatriculasViewer />}
           {!loading && !error && page === 'knowledge-update' && <KnowledgeUpdate />}
         </div>
       </main>
