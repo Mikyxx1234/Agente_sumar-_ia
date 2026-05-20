@@ -1,4 +1,5 @@
 import express from 'express'
+import { existsSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { startScheduler, getStatus } from './server/feedbackJobRunner.js'
@@ -94,7 +95,18 @@ import multer from 'multer'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const app = express()
-const PORT = process.env.PORT || 8000
+const PORT = Number(process.env.PORT) || 8000
+const HOST = process.env.HOST || '0.0.0.0'
+
+app.get('/api/health', (_req, res) => {
+  res.json({
+    ok: true,
+    service: 'agente-sumare',
+    uptime_sec: Math.round(process.uptime()),
+    port: PORT,
+    dist: existsSync(join(__dirname, 'dist', 'index.html')),
+  })
+})
 
 app.use(express.json({ limit: '25mb' }))
 // O webhook do amocrm/Kommo manda como application/x-www-form-urlencoded
@@ -2495,16 +2507,25 @@ app.delete('/api/training/feedback/:executionId', async (req, res) => {
   }
 })
 
-// ── Static files ──
+// ── Static files (dashboard Vite → dist/) ──
 
-app.use(express.static(join(__dirname, 'dist')))
-app.get('*path', (_req, res) => {
-  res.sendFile(join(__dirname, 'dist', 'index.html'))
-})
+const distDir = join(__dirname, 'dist')
+const distIndex = join(distDir, 'index.html')
+if (!existsSync(distIndex)) {
+  console.warn(
+    '[Server] AVISO: dist/index.html ausente — dashboard React não será servido. ' +
+      'Rode npm run build no deploy (EasyPanel: comando de build).',
+  )
+} else {
+  app.use(express.static(distDir))
+  app.get('/{*splat}', (_req, res) => {
+    res.sendFile(distIndex)
+  })
+}
 
-app.listen(PORT, async () => {
+app.listen(PORT, HOST, async () => {
   const maps = process.env.GOOGLE_MAPS_API_KEY || process.env.VITE_GOOGLE_MAPS_API_KEY
-  console.log(`[Server] Listening on port ${PORT}`)
+  console.log(`[Server] Listening on http://${HOST}:${PORT}`)
   // Carrega o kill-switch da IA no cache em memória antes de qualquer
   // mensagem ser processada (flushSession lê o cache síncrono).
   initAiControlState(process.env).catch((e) =>

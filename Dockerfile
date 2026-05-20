@@ -1,37 +1,18 @@
-FROM node:22-alpine AS build
-
+FROM node:20-alpine
 WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci
-COPY index.html vite.config.js ./
-COPY queryClassifier.mjs ./
-COPY libShared/ ./libShared/
-COPY src/ ./src/
-COPY public/ ./public/
-COPY server/ ./server/
 
-ARG VITE_OPENAI_API_KEY
-ARG VITE_SUPABASE_URL
-ARG VITE_SUPABASE_KEY
-ENV VITE_OPENAI_API_KEY=$VITE_OPENAI_API_KEY
-ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL
-ENV VITE_SUPABASE_KEY=$VITE_SUPABASE_KEY
+COPY package.json package-lock.json* ./
+RUN npm ci || npm install
 
+COPY . .
 RUN npm run build
 
-FROM node:22-alpine
-
-WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
-COPY server.js ./
-COPY queryClassifier.mjs ./
-COPY libShared/ ./libShared/
-COPY server/ ./server/
-COPY --from=build /app/dist ./dist
-COPY APAGAR.txt ./dist/APAGAR.txt
-COPY APAGAR.txt ./public/APAGAR.txt
-
+ENV NODE_ENV=production
+ENV PORT=8000
+ENV HOST=0.0.0.0
 EXPOSE 8000
 
-CMD ["node", "server.js"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:8000/api/health || exit 1
+
+CMD ["npm", "start"]

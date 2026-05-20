@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "start": "node server.js",
+    "start": "node scripts/start-production.mjs",
     "start:local": "node --env-file=.env server.js",
     "db:ensure-inscricao-columns": "node --env-file=.env scripts/ensureDadosClienteInscricaoColumns.mjs",
     "db:ensure-feedback-job-runs": "node --env-file=.env scripts/ensureFeedbackJobRunsTable.mjs"
