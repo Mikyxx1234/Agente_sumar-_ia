@@ -26,32 +26,49 @@ import {
 } from './evaluationStore.js'
 
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
-const OPENAI_TIMEOUT_MS = 90_000
+// gpt-5 + contexto grande (22 regras + transcrição até 60 turnos + JSON
+// Schema estrito) pode legitimamente passar de 2-3 min antes de devolver
+// a resposta completa. Timeout abaixo é o teto absoluto — passou disso,
+// a chamada vira erro técnico (não é reprovação real do agente).
+const OPENAI_TIMEOUT_MS = 300_000
+
+// Conversas muito longas estouram contexto e custam caro. Capamos a
+// transcrição em primeiros + últimos turnos. Mantém mais do final
+// (decisão final do funil é o que importa mais).
+const MAX_TURNS_INLINE = 60
+const KEEP_HEAD_TURNS = 15
+const KEEP_TAIL_TURNS = 45
 
 function getApiKey(env) {
   return env.OPENAI_API_KEY || env.VITE_OPENAI_API_KEY || ''
 }
 
-function buildConversationTranscript(executions) {
-  // Concatena turnos: cada `mensagens_ia` row é um turno (user → IA).
-  // Resposta é em `response` (string). `user_message` é a entrada.
-  const lines = []
-  for (const ex of executions) {
-    const ts = ex.created_at || ''
-    const user = (ex.user_message || '').toString().trim()
-    const bot = (ex.response || '').toString().trim()
-    if (!user && !bot) continue
-    lines.push(`--- turno ${ts} ---`)
-    if (user) lines.push(`USUÁRIO: ${user}`)
-    if (bot) lines.push(`IA: ${bot}`)
-    // Tools chamadas — informação útil ao auditor (Regra 11, 14, 19 etc.)
-    const tools = Array.isArray(ex.tool_calls) ? ex.tool_calls : []
-    if (tools.length > 0) {
-      const names = tools.map((t) => t?.name || t?.function?.name).filter(Boolean)
-      if (names.length) lines.push(`(IA chamou tools: ${names.join(', ')})`)
-    }
+function renderTurn(ex) {
+  const ts = ex.created_at || ''
+  const user = (ex.user_message || '').toString().trim()
+  const bot = (ex.response || '').toString().trim()
+  if (!user && !bot) return null
+  const lines = [`--- turno ${ts} ---`]
+  if (user) lines.push(`USUÁRIO: ${user}`)
+  if (bot) lines.push(`IA: ${bot}`)
+  const tools = Array.isArray(ex.tool_calls) ? ex.tool_calls : []
+  if (tools.length > 0) {
+    const names = tools.map((t) => t?.name || t?.function?.name).filter(Boolean)
+    if (names.length) lines.push(`(IA chamou tools: ${names.join(', ')})`)
   }
   return lines.join('\n')
+}
+
+function buildConversationTranscript(executions) {
+  if (executions.length <= MAX_TURNS_INLINE) {
+    return executions.map(renderTurn).filter(Boolean).join('\n')
+  }
+  // Conversa longa: head + placeholder + tail.
+  const head = executions.slice(0, KEEP_HEAD_TURNS).map(renderTurn).filter(Boolean)
+  const tail = executions.slice(-KEEP_TAIL_TURNS).map(renderTurn).filter(Boolean)
+  const omitted = executions.length - KEEP_HEAD_TURNS - KEEP_TAIL_TURNS
+  const placeholder = `\n--- [conversa longa: ${omitted} turno(s) do meio omitidos para caber no contexto. Foque nos primeiros turnos para entender o lead e nos últimos para julgar o desfecho.] ---\n`
+  return [...head, placeholder, ...tail].join('\n')
 }
 
 function buildEvaluatorMessages(env, conversation) {
@@ -210,16 +227,21 @@ export async function evaluateConversation(env, opts = {}) {
   try {
     result = await callEvaluatorOpenAI(env, messages)
   } catch (e) {
+    // Erro técnico do avaliador (timeout, rede, OpenAI 5xx). NÃO É
+    // reprovação do agente. Gravamos com verdict='PARCIAL' e `error`
+    // preenchido — frontend detecta `error + tokens=0` e renderiza
+    // como "Falha técnica" (cinza), não como reprovação vermelha.
     const row = {
       lead_id: leadId != null ? String(leadId) : null,
       telefone: telefone || null,
       conversation_key: conversationKey,
       last_message_at: lastMessageAt,
       turns_count: executions.length,
-      verdict: 'REPROVADO',
+      verdict: 'PARCIAL',
       score: 0,
       per_rule: [],
       evaluator_model: resolveModel(env, 'rules_eval'),
+      evaluator_total_tokens: 0,
       trigger,
       status: 'pending',
       error: String(e.message || e).slice(0, 1000),

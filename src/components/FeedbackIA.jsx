@@ -17,17 +17,36 @@ const VERDICT_META = {
     color: 'oklch(72% 0.14 155)',
     bg: 'oklch(72% 0.14 155 / 0.14)',
     icon: CheckCircle2,
+    label: 'APROVADO',
   },
   PARCIAL: {
     color: 'oklch(78% 0.14 75)',
     bg: 'oklch(78% 0.14 75 / 0.14)',
     icon: AlertTriangle,
+    label: 'PARCIAL',
   },
   REPROVADO: {
     color: 'oklch(68% 0.20 25)',
     bg: 'oklch(68% 0.20 25 / 0.14)',
     icon: XCircle,
+    label: 'REPROVADO',
   },
+  TECH_ERROR: {
+    color: 'var(--fg-3)',
+    bg: 'var(--bg-2)',
+    icon: AlertTriangle,
+    label: 'FALHA TÉCNICA',
+  },
+}
+
+/** Erro técnico: avaliador não rodou (sem tokens). Não é veredito real do agente. */
+function isTechError(ev) {
+  if (!ev) return false
+  return Boolean(ev.error) && !ev.evaluator_total_tokens
+}
+
+function effectiveVerdict(ev) {
+  return isTechError(ev) ? 'TECH_ERROR' : ev?.verdict
 }
 
 function formatTime(iso) {
@@ -38,8 +57,9 @@ function formatTime(iso) {
   })
 }
 
-function VerdictBadge({ verdict }) {
-  const meta = VERDICT_META[verdict] || VERDICT_META.PARCIAL
+function VerdictBadge({ verdict, evaluation }) {
+  const actual = evaluation ? effectiveVerdict(evaluation) : verdict
+  const meta = VERDICT_META[actual] || VERDICT_META.PARCIAL
   const Icon = meta.icon
   return (
     <span
@@ -54,7 +74,7 @@ function VerdictBadge({ verdict }) {
       }}
     >
       <Icon size={12} />
-      {verdict}
+      {meta.label || actual || verdict}
     </span>
   )
 }
@@ -149,8 +169,8 @@ function EvaluationItem({ ev, open, onToggle }) {
       cursor: 'pointer',
     }} onClick={onToggle}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <VerdictBadge verdict={ev.verdict} />
-        <ScorePill score={ev.score} />
+        <VerdictBadge evaluation={ev} />
+        {!isTechError(ev) && <ScorePill score={ev.score} />}
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
           {ev.lead_id
             ? <KommoLeadLink leadId={ev.lead_id} size="sm" />
