@@ -53,6 +53,12 @@ export async function fetchDadosClienteByTelefone(env, telefone, select = '*') {
   }
 }
 
+/** IA pausada após form/handoff — o flush do WhatsApp não deve chamar o orquestrador. */
+export async function isAtendimentoIaPaused(env, telefone) {
+  const row = await fetchDadosClienteByTelefone(env, telefone, 'atendimento_ia')
+  return String(row?.atendimento_ia || '').toLowerCase() === 'pause'
+}
+
 function getConfig(env) {
   const url = env.SUPABASE_URL || env.VITE_SUPABASE_URL || ''
   const key = env.SUPABASE_KEY || env.VITE_SUPABASE_KEY || ''

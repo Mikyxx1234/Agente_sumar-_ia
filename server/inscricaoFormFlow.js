@@ -70,7 +70,7 @@ async function releaseInscricaoFormStartClaim(env, telefone) {
 
 async function claimInscricaoFormStartExclusive(env, telefone) {
   const { url, key, table } = getSupabaseCfg(env)
-  if (!url || !key) return { claimed: true, reason: 'no_supabase' }
+  if (!url || !key) return { claimed: false, reason: 'no_supabase' }
   const telFilter = dadosClienteTelefoneOrFilter(telefone)
   if (!telFilter) return { claimed: false, reason: 'invalid_phone' }
   try {
@@ -95,7 +95,7 @@ async function claimInscricaoFormStartExclusive(env, telefone) {
     const status = await getFormStatus(env, telefone)
     return { claimed: false, reason: 'already_started', status }
   } catch (err) {
-    return { claimed: true, reason: `claim_error_${err.message}` }
+    return { claimed: false, reason: `claim_error_${err.message}` }
   }
 }
 

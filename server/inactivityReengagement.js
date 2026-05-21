@@ -15,7 +15,7 @@
 import { fetchRecentChatRows } from './historyStore.js'
 import { sendMessageWithNote } from './whatsappSender.js'
 import { saveConversation } from './historyStore.js'
-import { updateDadosCliente, normalizeTelefone } from './dadosClienteStore.js'
+import { updateDadosCliente, normalizeTelefone, fetchDadosClienteByTelefone } from './dadosClienteStore.js'
 import { updateLeadPipelineStatus } from './kommoClient.js'
 import { generateExecutionId } from './ai/executionTelemetry.js'
 import { createLeadNote } from './kommoClient.js'
@@ -124,27 +124,17 @@ function getDadosClienteCfg(env) {
   return {
     url: (env.SUPABASE_URL || env.VITE_SUPABASE_URL || '').replace(/\/$/, ''),
     key: env.SUPABASE_KEY || env.VITE_SUPABASE_KEY || '',
-    table: env.SUPABASE_DADOS_CLIENTE_TABLE || 'dados_cliente',
+    table: env.SUPABASE_DADOS_CLIENTE_TABLE || 'dados_cliente_sum',
   }
 }
 
 async function getClienteReativacao(env, telefone) {
-  const { url, key, table } = getDadosClienteCfg(env)
-  if (!url || !key) return null
-  const fone = normalizeTelefone(telefone)
-  if (!fone) return null
-  try {
-    const enc = encodeURIComponent(fone)
-    const res = await fetch(
-      `${url}/rest/v1/${encodeURIComponent(table)}?telefone=eq.${enc}&select=atendimento_ia,${FIELD_PING_AT},${FIELD_MOVED_AT}&limit=1`,
-      { headers: { apikey: key, Authorization: `Bearer ${key}` } },
-    )
-    if (!res.ok) return {}
-    const rows = await res.json()
-    return rows?.[0] || {}
-  } catch {
-    return {}
-  }
+  const row = await fetchDadosClienteByTelefone(
+    env,
+    telefone,
+    `atendimento_ia,${FIELD_PING_AT},${FIELD_MOVED_AT}`,
+  )
+  return row || {}
 }
 
 async function setReativacaoFields(env, telefone, fields) {

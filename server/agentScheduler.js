@@ -301,6 +301,7 @@ export async function runSchedulerTick(env) {
             : null,
       })
 
+      let skipFlushAfterPostForm = false
       if (isInscricaoPostFormSchedulerEnabled(env)) {
       try {
         const postFormAdv = await tryAdvanceInscricaoPostFormScheduler(env, {
@@ -308,6 +309,7 @@ export async function runSchedulerTick(env) {
           leadId: Number(lead.id),
         })
         if (postFormAdv?.handled) {
+          skipFlushAfterPostForm = true
           const ctxForm = postFormAdv.result?.ctxSnapshot?.inscricaoForm ?? 'n/a'
           const botId = postFormAdv.result?.ctxSnapshot?.salesbotId ?? 'n/a'
           const matriculaOk = postFormAdv.result?.toolCalls?.[0]?.ok
@@ -398,6 +400,11 @@ export async function runSchedulerTick(env) {
         }
         return
       }
+      if (skipFlushAfterPostForm) {
+        console.log(`[scheduler] lead=${lead.id} flush omitido neste tick (pós-form tratado)`)
+        return
+      }
+
       const ageMs = last ? Date.now() - last.getTime() : Infinity
       if (ageMs < debounceMs) {
         stats.skippedDebounce += 1

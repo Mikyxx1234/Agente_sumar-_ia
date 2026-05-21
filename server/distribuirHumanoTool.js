@@ -17,6 +17,7 @@
 import { resolveModel } from './ai/modelRegistry.js'
 import { findLeadByPhone } from './kommoClient.js'
 import { runKommoSalesbot, normalizeSalesbotMotivo } from './kommoSalesbot.js'
+import { updateDadosCliente } from './dadosClienteStore.js'
 
 const DEFAULT_DISTRIB_PIPELINE_ID = 11685120
 const DEFAULT_DISTRIB_STATUS_IDS = [89820300, 89820304]
@@ -309,17 +310,7 @@ async function runMinimalDistribuirHandoff(env, ctx) {
 
   const [salesbotRes, dadosClienteRes] = await Promise.all([
     runKommoSalesbot(env, idLead, motivoFluxo),
-    (async () => {
-      try {
-        const enc = encodeURIComponent(telefone)
-        await supabaseRest(mainUrl, mainKey, 'PATCH', `dados_cliente?telefone=eq.${enc}`, {
-          atendimento_ia: 'pause',
-        })
-        return { ok: true }
-      } catch (e) {
-        return { ok: false, error: e.message }
-      }
-    })(),
+    updateDadosCliente(env, { telefone, fields: { atendimento_ia: 'pause' } }),
   ])
 
   steps.push({
@@ -674,17 +665,7 @@ export async function runDistribuirHumano(env, body) {
     method: 'PATCH',
     body: { responsible_user_id: consultorUserId },
   })
-  const dadosClientePromise = (async () => {
-    try {
-      const enc = encodeURIComponent(telefone)
-      await supabaseRest(mainUrl, mainKey, 'PATCH', `dados_cliente?telefone=eq.${enc}`, {
-        atendimento_ia: 'pause',
-      })
-      return { ok: true }
-    } catch (e) {
-      return { ok: false, error: e.message }
-    }
-  })()
+  const dadosClientePromise = updateDadosCliente(env, { telefone, fields: { atendimento_ia: 'pause' } })
   // Busca chat_messages pelas 3 variantes do telefone EM PARALELO,
   // pega a primeira não-vazia. Antes era loop sequencial.
   const messagesPromise = (async () => {

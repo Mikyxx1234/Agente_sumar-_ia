@@ -28,7 +28,7 @@ import { transcribeAudioBase64, analyzeImageBase64 } from './openaiMedia.js'
 import { fetchEvolutionMediaBase64, resolveInstanceName, describeMediaPayloadShape } from './evolutionMedia.js'
 import { runAgent } from '../ai/agentRunner.js'
 import { saveConversation } from '../historyStore.js'
-import { getLeadIdByTelefone } from '../dadosClienteStore.js'
+import { getLeadIdByTelefone, isAtendimentoIaPaused } from '../dadosClienteStore.js'
 import { seenMessage, withSessionLock } from './concurrency.js'
 import { findLeadByPhone } from '../kommoClient.js'
 import { sendMessageWithNote } from '../whatsappSender.js'
@@ -466,9 +466,17 @@ async function flushSessionInner(env, sessionId, opts = {}) {
     return { skipped: 'ai_disabled', reason: aiState.reason || null, discarded: itens.length }
   }
 
-  await clearMessages(env, sessionId)
   const mensagemCompleta = itens.join(', ')
   const telefone = normalizeTelefone(sessionId)
+
+  if (telefone && (await isAtendimentoIaPaused(env, telefone))) {
+    await clearMessages(env, sessionId)
+    console.log(
+      `[Evolution][flush] ${sessionId} BLOQUEADO — atendimento_ia=pause (matrícula/consultor ativo). ` +
+        `${itens.length} msg(s) descartada(s) do buffer.`,
+    )
+    return { skipped: 'ia_paused', discarded: itens.length }
+  }
   const executionId = opts.executionId || generateExecutionId()
   const startedAt = new Date().toISOString()
   const leadIdHint = opts.leadIdHint != null ? Number(opts.leadIdHint) : null
@@ -653,6 +661,22 @@ async function flushSessionInner(env, sessionId, opts = {}) {
   }).then((r) => {
     if (!r.ok) console.warn(`[${executionId}] saveExecution falhou: ${r.error}`)
   }).catch((err) => console.error(`[${executionId}] saveExecution exception:`, err.message))
+
+  const sentOk = Boolean(
+    sendResult?.ok && (sendResult.sent || 0) > 0,
+  )
+  const shouldClearBuffer =
+    out?.ok &&
+    !out?.iaPaused &&
+    (!out.reply || sentOk || out.inscricaoFormHandled || out.distribuirHumanoHandled)
+  if (shouldClearBuffer) {
+    await clearMessages(env, sessionId)
+  } else if (itens.length > 0) {
+    console.warn(
+      `[${executionId}] buffer mantido session=${sessionId} (${itens.length} msg) — ` +
+        `agentOk=${Boolean(out?.ok)} reply=${Boolean(out?.reply)} sendOk=${sentOk}`,
+    )
+  }
 
   return out
 }

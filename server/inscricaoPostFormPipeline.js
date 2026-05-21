@@ -55,7 +55,7 @@ async function setFormStatus(env, telefone, status) {
  */
 async function claimMatriculaPosFormExclusive(env, telefone) {
   const { url, key, table } = getSupabaseCfg(env)
-  if (!url || !key) return { claimed: true, reason: 'no_supabase' }
+  if (!url || !key) return { claimed: false, reason: 'no_supabase' }
   const telFilter = dadosClienteTelefoneOrFilter(telefone)
   if (!telFilter) return { claimed: false, reason: 'invalid_phone' }
   const waiting = [
@@ -103,7 +103,7 @@ async function claimMatriculaPosFormExclusive(env, telefone) {
     }
     return { claimed: false, reason: 'no_waiting_row', status: st }
   } catch (err) {
-    return { claimed: true, reason: `claim_error_${err.message}` }
+    return { claimed: false, reason: `claim_error_${err.message}` }
   }
 }
 
@@ -145,7 +145,7 @@ function shouldTriggerMatriculaPosForm(userMessage, status) {
     status === INSCRICAO_FORM_STATUS_AGUARDANDO ||
     status === INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO
   ) {
-    return messageLooksLikeFormFollowUp(userMessage)
+    return messageLooksLikeFormFollowUp(userMessage, { strictAwaitingForm: true })
   }
   return false
 }

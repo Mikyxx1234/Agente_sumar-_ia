@@ -43,6 +43,7 @@ import {
   extractDiscussedCourseFromHistory,
 } from '../../libShared/conversationContextHeuristics.js'
 import { messageIsInboundMediaPlaceholder } from '../../libShared/scopeHeuristics.js'
+import { isAtendimentoIaPaused } from '../dadosClienteStore.js'
 
 const MAX_TOOL_ROUNDS = 5
 const CHAT_URL = 'https://api.openai.com/v1/chat/completions'
@@ -190,6 +191,24 @@ export async function runAgent(env, input) {
   const ctx = createExecutionContext()
   if (!userMessage) return { ok: false, error: 'Mensagem vazia', executionId, model, aiMeta: ctx.toAiMeta() }
 
+  if (telefone && (await isAtendimentoIaPaused(env, telefone))) {
+    console.log(`[${executionId}] IA pausada (atendimento_ia=pause) telefone=${telefone}`)
+    return {
+      ok: true,
+      reply: null,
+      iaPaused: true,
+      skipped: true,
+      toolCalls: [],
+      orchestratorSteps: [{ type: 'ia_paused', durationMs: Date.now() - t0 }],
+      ctxSnapshot: { iaPaused: true },
+      usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      durationMs: Date.now() - t0,
+      executionId,
+      model,
+      aiMeta: ctx.toAiMeta(),
+    }
+  }
+
   const [prompts, historyResult] = await Promise.all([
     loadPrompts(),
     loadRecentHistoryMessages(env, telefone),
@@ -244,7 +263,8 @@ export async function runAgent(env, input) {
     // Pós-form só quando a mensagem indica formulário respondido — evita pular
     // direto para "cadastro validado" em "sim"/"oi" com notas antigas no Kommo.
     const looksPostFormInbound =
-      messageLooksLikeFormSumarResponse(userMessage) || messageLooksLikeFormFollowUp(userMessage)
+      messageLooksLikeFormSumarResponse(userMessage) ||
+      messageLooksLikeFormFollowUp(userMessage, { strictAwaitingForm: true })
     const formDone = looksPostFormInbound
       ? await tryHandleInscricaoFormComplete(env, formFlowCtx)
       : null
@@ -284,7 +304,8 @@ export async function runAgent(env, input) {
       for (const u of dist._meta.toolUsage) ctx.recordToolUsage(u)
     }
     const salesbotStep = dist.steps?.find((s) => s.step === 'kommo_salesbot')
-    const handoffOk = Boolean(dist.ok || salesbotStep?.ok)
+    const pauseStep = dist.steps?.find((s) => s.step === 'supabase_dados_cliente_pause')
+    const handoffOk = Boolean(dist.ok && pauseStep?.ok)
     console.log(
       `[${executionId}] AUTO_DISTRIBUIR_HUMANO motivo=${handoffMotivo} ok=${dist.ok} salesbot_ok=${salesbotStep?.ok} bot_id=${salesbotStep?.bot_id ?? 'n/a'} mode=${dist.handoff_mode ?? 'n/a'}`,
     )

@@ -2,7 +2,6 @@
 
 import { normalizeMessageForScope, messageLooksLikeOperationalChat } from './scopeHeuristics.js'
 import { conversationHasActiveTopic } from './conversationContextHeuristics.js'
-import { conversationHasActiveTopic } from './conversationContextHeuristics.js'
 
 export const INSCRICAO_FORM_STATUS_AGUARDANDO = 'aguardando_form_sumar'
 /** Formulário recebido — salesbot de distribuição em andamento. */
@@ -162,10 +161,11 @@ export function messageRequestsInscricaoForm(text, historyMessages = []) {
 }
 
 /**
- * Confirmação curta após o formulário ter sido enviado (status aguardando).
- * Ex.: "preenchido", "e agora", "pronto".
+ * Confirmação após o formulário ter sido enviado (status aguardando).
+ * Em `strictAwaitingForm`, ok/pronto/feito NÃO disparam pós-form (evita matrícula sem Flow).
  */
-export function messageLooksLikeFormFollowUp(text) {
+export function messageLooksLikeFormFollowUp(text, options = {}) {
+  const strict = Boolean(options.strictAwaitingForm)
   const t = normalizeMessageForScope(text).toLowerCase().trim()
   if (!t || t.length > 60) return false
   if (messageLooksLikeOperationalChat(text)) return false
@@ -175,7 +175,8 @@ export function messageLooksLikeFormFollowUp(text) {
   ) {
     return true
   }
-  if (/^\s*(e\s+agora|e\s+ai|e\s+aí|ok|pronto|feito|done)\s*[.!?]*\s*$/i.test(t)) return true
+  if (/^\s*(e\s+agora|e\s+ai|e\s+aí)\s*[.!?]*\s*$/i.test(t)) return true
+  if (!strict && /^\s*(ok|pronto|feito|done)\s*[.!?]*\s*$/i.test(t)) return true
   return false
 }
 
