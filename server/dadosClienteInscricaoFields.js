@@ -5,7 +5,7 @@
 
 /** SELECT seguro para guards de pós-formulário. */
 export const DADOS_CLIENTE_INSCRICAO_SELECT =
-  'telefone,inscricao_form_status,inscricao_form_recebido_at,atendimento_ia'
+  'id,telefone,inscricao_form_status,inscricao_form_recebido_at,atendimento_ia'
 
 /** Prefixo da mensagem padrão quando captação/salesbot não conclui (dedupe outbound). */
 export const POST_FORM_REGISTRADO_PREFIX =

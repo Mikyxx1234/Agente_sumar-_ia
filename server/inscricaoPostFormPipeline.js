@@ -21,7 +21,6 @@ import {
   getLeadIdByTelefone,
   normalizeTelefone,
   fetchDadosClienteByTelefone,
-  dadosClienteTelefoneOrFilter,
 } from './dadosClienteStore.js'
 import { DADOS_CLIENTE_INSCRICAO_SELECT } from './dadosClienteInscricaoFields.js'
 import { isSumareCaptacaoEnabled } from './sumareCaptacaoClient.js'
@@ -55,8 +54,6 @@ async function setFormStatus(env, telefone, status) {
 async function claimMatriculaPosFormExclusive(env, telefone) {
   const { url, key, table } = getSupabaseCfg(env)
   if (!url || !key) return { claimed: false, reason: 'no_supabase' }
-  const telFilter = dadosClienteTelefoneOrFilter(telefone)
-  if (!telFilter) return { claimed: false, reason: 'invalid_phone' }
   const waiting = [
     INSCRICAO_FORM_STATUS_AGUARDANDO,
     INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
@@ -70,9 +67,13 @@ async function claimMatriculaPosFormExclusive(env, telefone) {
         status: existing?.[FORM_STATUS_FIELD],
       }
     }
+    const rowId = existing?.id != null ? Number(existing.id) : NaN
+    if (!Number.isFinite(rowId) || rowId <= 0) {
+      return { claimed: false, reason: 'no_cliente_row', status: existing?.[FORM_STATUS_FIELD] }
+    }
 
     const res = await fetch(
-      `${url}/rest/v1/${encodeURIComponent(table)}?${telFilter}&${FORM_STATUS_FIELD}=in.(${waiting})&inscricao_form_recebido_at=is.null`,
+      `${url}/rest/v1/${encodeURIComponent(table)}?id=eq.${rowId}&${FORM_STATUS_FIELD}=in.(${waiting})&inscricao_form_recebido_at=is.null`,
       {
         method: 'PATCH',
         headers: {
@@ -86,22 +87,10 @@ async function claimMatriculaPosFormExclusive(env, telefone) {
     )
     if (!res.ok) {
       const errBody = await res.text().catch(() => '')
-      if (res.status === 400) {
-        const fallback = await updateDadosCliente(env, {
-          telefone,
-          fields: { [FORM_STATUS_FIELD]: INSCRICAO_FORM_STATUS_CONCLUIDO },
-        })
-        if (fallback.ok && fallback.matched) {
-          return { claimed: true, reason: 'fallback_update_after_patch_400' }
-        }
-        console.warn(
-          `[inscricaoPostForm] claim patch_400 — confira coluna ${FORM_STATUS_FIELD} em ${table}. ${errBody.slice(0, 200)}`,
-        )
-      }
       return { claimed: false, reason: `patch_${res.status}`, detail: errBody.slice(0, 200) }
     }
     const rows = await res.json()
-    if (Array.isArray(rows) && rows.length > 0) {
+    if (Array.isArray(rows) && rows.length === 1) {
       return { claimed: true, reason: 'claimed_waiting_status' }
     }
     const row = await getClienteRow(env, telefone)
