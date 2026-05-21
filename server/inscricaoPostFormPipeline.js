@@ -7,13 +7,25 @@ import {
   INSCRICAO_FORM_STATUS_AGUARDANDO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
   INSCRICAO_FORM_STATUS_CONCLUIDO,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
   messageLooksLikeFormSumarResponse,
   messageLooksLikeFormFollowUp,
   buildInscricaoFormCompleteReply,
 } from '../libShared/inscricaoFormHeuristics.js'
 import { runKommoSalesbot } from './kommoSalesbot.js'
 import { findLeadByPhone, listLeadNotes } from './kommoClient.js'
-import { updateDadosCliente, getLeadIdByTelefone, normalizeTelefone } from './dadosClienteStore.js'
+import {
+  updateDadosCliente,
+  getLeadIdByTelefone,
+  normalizeTelefone,
+  fetchDadosClienteByTelefone,
+  dadosClienteTelefoneOrFilter,
+} from './dadosClienteStore.js'
+import { isSumareCaptacaoEnabled } from './sumareCaptacaoClient.js'
+import {
+  runMatriculaCaptacaoAfterForm,
+  shouldRunSalesbot49813,
+} from './matriculaCaptacaoPipeline.js'
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
 const MATRICULA_BOT_ID_DEFAULT = 49813
@@ -27,22 +39,11 @@ function getSupabaseCfg(env) {
 }
 
 async function getClienteRow(env, telefone) {
-  const { url, key, table } = getSupabaseCfg(env)
-  if (!url || !key) return null
-  const fone = normalizeTelefone(telefone)
-  if (!fone) return null
-  try {
-    const enc = encodeURIComponent(fone)
-    const res = await fetch(
-      `${url}/rest/v1/${encodeURIComponent(table)}?telefone=eq.${enc}&select=${FORM_STATUS_FIELD},id_lead&limit=1`,
-      { headers: { apikey: key, Authorization: `Bearer ${key}` } },
-    )
-    if (!res.ok) return null
-    const rows = await res.json()
-    return rows?.[0] || null
-  } catch {
-    return null
-  }
+  return fetchDadosClienteByTelefone(
+    env,
+    telefone,
+    `${FORM_STATUS_FIELD},id_lead,inscricao_form_recebido_at`,
+  )
 }
 
 async function setFormStatus(env, telefone, status) {
@@ -55,16 +56,15 @@ async function setFormStatus(env, telefone, status) {
 async function claimMatriculaPosFormExclusive(env, telefone) {
   const { url, key, table } = getSupabaseCfg(env)
   if (!url || !key) return { claimed: true, reason: 'no_supabase' }
-  const fone = normalizeTelefone(telefone)
-  if (!fone) return { claimed: false, reason: 'invalid_phone' }
+  const telFilter = dadosClienteTelefoneOrFilter(telefone)
+  if (!telFilter) return { claimed: false, reason: 'invalid_phone' }
   const waiting = [
     INSCRICAO_FORM_STATUS_AGUARDANDO,
     INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
   ].join(',')
   try {
-    const enc = encodeURIComponent(fone)
     const res = await fetch(
-      `${url}/rest/v1/${encodeURIComponent(table)}?telefone=eq.${enc}&${FORM_STATUS_FIELD}=in.(${waiting})`,
+      `${url}/rest/v1/${encodeURIComponent(table)}?${telFilter}&${FORM_STATUS_FIELD}=in.(${waiting})`,
       {
         method: 'PATCH',
         headers: {
@@ -97,7 +97,7 @@ async function claimMatriculaPosFormExclusive(env, telefone) {
       return { claimed: true, reason: 'claimed_waiting_status' }
     }
     const resNull = await fetch(
-      `${url}/rest/v1/${encodeURIComponent(table)}?telefone=eq.${enc}&${FORM_STATUS_FIELD}=is.null`,
+      `${url}/rest/v1/${encodeURIComponent(table)}?${telFilter}&${FORM_STATUS_FIELD}=is.null`,
       {
         method: 'PATCH',
         headers: {
@@ -184,13 +184,14 @@ function noteBlob(n) {
  * O Flow do Form Sumar costuma aparecer só nas notas do Kommo
  * ("Respostas recebidas no Flow"), sem mensagem no buffer WhatsApp.
  */
-export async function detectFormSumarRecebidoNoKommo(env, leadId) {
+export async function detectFormSumarRecebidoNoKommo(env, leadId, options = {}) {
   const id = Number(leadId)
   if (!Number.isFinite(id) || id <= 0) return { detected: false, reason: 'invalid_lead' }
 
   const maxAgeH = Number(env.INSCRICAO_FORM_KOMMO_NOTE_MAX_AGE_H || 48)
   const maxAgeMs = (Number.isFinite(maxAgeH) && maxAgeH > 0 ? maxAgeH : 48) * 3600000
   const now = Date.now()
+  const minNoteAfterMs = options.minNoteAfterIso ? Date.parse(options.minNoteAfterIso) : NaN
 
   const notesRes = await listLeadNotes(env, id, { limit: 50, order: 'desc' })
   if (notesRes.ok && Array.isArray(notesRes.notes)) {
@@ -199,6 +200,7 @@ export async function detectFormSumarRecebidoNoKommo(env, leadId) {
       if (created) {
         const ts = Date.parse(created)
         if (!Number.isNaN(ts) && now - ts > maxAgeMs) continue
+        if (!Number.isNaN(minNoteAfterMs) && !Number.isNaN(ts) && ts <= minNoteAfterMs) continue
       }
       const blob = noteBlob(n)
       if (messageLooksLikeFormSumarResponse(blob)) {
@@ -238,19 +240,84 @@ async function stepMatriculaPosForm(env, ctx) {
     )
   }
 
-  const [salesbotRes, pauseRes] = await Promise.all([
-    runKommoSalesbot(env, idLead, 'matricula_pos_form', {
+  const pauseRes = await pauseAtendimentoIa(env, telefone)
+  const steps = [{ type: 'ia_paused', ok: pauseRes.ok }]
+  const toolCalls = []
+  let reply = buildInscricaoFormCompleteReply({ pushName, ok: false })
+  let matriculaOk = false
+  let ctxForm = 'completed'
+
+  if (isSumareCaptacaoEnabled(env)) {
+    const cap = await runMatriculaCaptacaoAfterForm(env, {
+      telefone,
+      leadId: idLead,
+      pushName,
+      executionId,
+    })
+    steps.push({
+      type: 'sumare_captacao',
+      ok: cap.ok,
+      skipped: cap.skipped,
+      candidato_id: cap.candidatoId,
+      contract_url: cap.contractUrl,
+      code: cap.code,
+      error: cap.error,
+    })
+    if (cap.ok && !cap.skipped && cap.contractUrl) {
+      matriculaOk = true
+      ctxForm = INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE
+      reply = cap.reply || reply
+      toolCalls.push({
+        tool: 'sumare_captacao_contrato',
+        args: { telefone, id_lead: idLead, candidato: cap.candidatoId },
+        result: `Link contrato enviado: ${cap.contractUrl}`,
+        ok: Boolean(cap.whatsappOk),
+      })
+    } else if (!cap.skipped && !cap.ok) {
+      reply =
+        `Obrigado${pushName ? `, ${String(pushName).split(/\s+/)[0]}` : ''}! Recebemos seu formulário, mas houve um problema ao gerar sua inscrição no sistema. ` +
+        `Um consultor da Faculdade Sumaré entrará em contato em breve para concluir o aceite do contrato e o pagamento.`
+      toolCalls.push({
+        tool: 'sumare_captacao_contrato',
+        args: { telefone, id_lead: idLead },
+        result: cap.error || cap.code || 'falha',
+        ok: false,
+      })
+    }
+  }
+
+  if (!matriculaOk && (shouldRunSalesbot49813(env) || !isSumareCaptacaoEnabled(env))) {
+    const salesbotRes = await runKommoSalesbot(env, idLead, 'matricula_pos_form', {
       executionId,
       note: `Form Sumar recebido — salesbot matrícula ${MATRICULA_BOT_ID_DEFAULT} (agente IA) — ${executionId || ''}`.trim(),
-    }),
-    pauseAtendimentoIa(env, telefone),
-  ])
-
-  const matriculaOk = Boolean(salesbotRes.ok && !salesbotRes.skipped)
-  if (matriculaOk) {
-    await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_CONCLUIDO).catch(() => {})
+    })
+    matriculaOk = Boolean(salesbotRes.ok && !salesbotRes.skipped)
+    steps.push({
+      type: 'inscricao_form_complete',
+      ok: matriculaOk,
+      bot_id: salesbotRes.botId,
+    })
+    toolCalls.push({
+      tool: 'matricula_pos_form',
+      args: { telefone, id_lead: idLead },
+      result: matriculaOk ? `Salesbot ${salesbotRes.botId} disparado` : salesbotRes.text || 'falha',
+      ok: matriculaOk,
+    })
+    if (matriculaOk && !isSumareCaptacaoEnabled(env)) {
+      await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_CONCLUIDO).catch(() => {})
+      reply = buildInscricaoFormCompleteReply({ pushName, ok: true })
+      ctxForm = 'completed'
+    }
   }
-  const reply = buildInscricaoFormCompleteReply({ pushName, ok: matriculaOk })
+
+  if (!isSumareCaptacaoEnabled(env) && !matriculaOk) {
+    reply = buildInscricaoFormCompleteReply({ pushName, ok: false })
+  }
+
+  await updateDadosCliente(env, {
+    telefone,
+    fields: { inscricao_form_recebido_at: new Date().toISOString() },
+  }).catch(() => {})
 
   return {
     handled: true,
@@ -259,26 +326,13 @@ async function stepMatriculaPosForm(env, ctx) {
       model,
       t0,
       reply,
-      steps: [
-        {
-          type: 'inscricao_form_complete',
-          ok: matriculaOk,
-          bot_id: salesbotRes.botId,
-          pause_ok: pauseRes.ok,
-        },
-      ],
-      toolCalls: [
-        {
-          tool: 'matricula_pos_form',
-          args: { telefone, id_lead: idLead },
-          result: matriculaOk ? `Salesbot ${salesbotRes.botId} disparado` : salesbotRes.text || 'falha',
-          ok: matriculaOk,
-        },
-      ],
+      steps,
+      toolCalls,
       ctxSnapshot: {
-        inscricaoForm: 'completed',
-        salesbotId: salesbotRes.botId,
+        inscricaoForm: ctxForm,
         iaPaused: true,
+        sumareCaptacao: isSumareCaptacaoEnabled(env),
+        contratoLinkSent: matriculaOk && isSumareCaptacaoEnabled(env),
       },
     }),
   }
@@ -296,13 +350,16 @@ export async function tryProcessInscricaoPostFormPipeline(env, input) {
   const status = row?.[FORM_STATUS_FIELD] ?? null
 
   if (status === INSCRICAO_FORM_STATUS_CONCLUIDO) return null
+  if (status === INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE) return null
 
   const idLead = await resolveLeadId(env, telefone, leadIdHint)
 
   let kommoFormDone = false
   let detectSource = ''
   if (schedulerTick && idLead) {
-    const det = await detectFormSumarRecebidoNoKommo(env, idLead)
+    const det = await detectFormSumarRecebidoNoKommo(env, idLead, {
+      minNoteAfterIso: row?.inscricao_form_recebido_at || null,
+    })
     kommoFormDone = Boolean(det.detected)
     detectSource = det.source || det.reason || ''
     if (kommoFormDone) {

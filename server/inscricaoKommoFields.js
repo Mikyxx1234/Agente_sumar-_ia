@@ -9,9 +9,22 @@ const KOMMO_FIELD_NOME = 304628
 const FIELD_ALIASES = {
   email: ['e-mail', 'email', 'e_mail'],
   cpf: ['cpf', 'documento', 'cnpj/cpf'],
-  cursoInscricao: ['curso inscrição', 'curso da inscrição', 'curso_inscricao', 'curso da inscricao'],
+  cursoInscricao: [
+    'curso inscrição',
+    'curso da inscrição',
+    'curso_inscricao',
+    'curso da inscricao',
+    'sum_curso',
+    'sum curso',
+    'código curso',
+    'codigo curso',
+  ],
   tipoInscricao: ['tipo inscrição', 'tipo de ingresso', 'tipo_inscricao', 'tipo de inscrição'],
   poloInscricao: ['polo inscrição', 'polo da inscrição', 'polo_inscricao'],
+  dataNasc: ['data nascimento', 'data de nascimento', 'data_nasc', 'nascimento', 'dt nasc'],
+  sexo: ['sexo', 'gênero', 'genero'],
+  unidade: ['unidade', 'polo', 'campus', 'unidade inscrição'],
+  turno: ['turno', 'modalidade'],
 }
 
 function isCampoAusente(val) {
@@ -92,6 +105,10 @@ export async function fetchLeadFormSnapshot(env, leadId) {
   const cursoInscricao = pickByAliases(custom, fieldsByName, FIELD_ALIASES.cursoInscricao)
   const tipoInscricao = pickByAliases(custom, fieldsByName, FIELD_ALIASES.tipoInscricao)
   const poloInscricao = pickByAliases(custom, fieldsByName, FIELD_ALIASES.poloInscricao)
+  const dataNasc = pickByAliases(custom, fieldsByName, FIELD_ALIASES.dataNasc)
+  const sexo = pickByAliases(custom, fieldsByName, FIELD_ALIASES.sexo)
+  const unidade = pickByAliases(custom, fieldsByName, FIELD_ALIASES.unidade)
+  const turno = pickByAliases(custom, fieldsByName, FIELD_ALIASES.turno)
 
   return {
     ok: true,
@@ -103,6 +120,10 @@ export async function fetchLeadFormSnapshot(env, leadId) {
       curso_inscricao: cursoInscricao,
       tipo_inscricao: tipoInscricao,
       polo_inscricao: poloInscricao,
+      data_nasc: dataNasc,
+      sexo,
+      unidade,
+      turno,
       responsible_user_id: Number(lead.responsible_user_id) || 0,
       status_id: Number(lead.status_id) || 0,
       pipeline_id: Number(lead.pipeline_id) || 0,

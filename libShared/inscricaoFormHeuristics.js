@@ -6,6 +6,8 @@ export const INSCRICAO_FORM_STATUS_AGUARDANDO = 'aguardando_form_sumar'
 /** Formulário recebido — salesbot de distribuição em andamento. */
 export const INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO = 'aguardando_distribuicao_form'
 export const INSCRICAO_FORM_STATUS_CONCLUIDO = 'form_sumar_concluido'
+/** Inscrição na API Sumaré feita; aguardando aceite do contrato no portal. */
+export const INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE = 'aguardando_aceite_contrato'
 
 /** Lead cobra o formulário que ainda não chegou. */
 export function messageAsksForFormResend(text) {
@@ -220,5 +222,19 @@ export function buildInscricaoFormCompleteReply(opts = {}) {
   }
   return (
     `Obrigado${nameBit}! Registramos o formulário. Um consultor da Faculdade Sumaré entrará em contato em breve para concluir sua inscrição.`
+  )
+}
+
+/** Mensagem após inscrição na API Sumaré — link do portal de aceite do contrato. */
+export function buildContratoAceiteLinkReply(opts = {}) {
+  const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
+  const link = String(opts.contractUrl || '').trim()
+  if (!link) return buildInscricaoFormCompleteReply({ pushName: opts.pushName, ok: false })
+  return (
+    `Ótimo${nameBit}! Sua inscrição foi registrada na Faculdade Sumaré.\n\n` +
+    `Para concluir a matrícula, acesse o link abaixo, leia o contrato, marque que concorda com os termos e clique em *ASSINAR CONTRATO*. ` +
+    `Na mesma página você poderá seguir com o pagamento da matrícula:\n\n` +
+    `${link}\n\n` +
+    `Se tiver qualquer dúvida sobre o contrato ou o pagamento, responda aqui que te ajudamos.`
   )
 }

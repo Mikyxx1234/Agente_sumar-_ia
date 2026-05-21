@@ -23,6 +23,36 @@ export function normalizeTelefone(input) {
   return raw.replace(/[^0-9]/g, '')
 }
 
+/** JID WhatsApp usado em várias linhas de `dados_cliente_sum`. */
+export function telefoneToWhatsAppJid(digits) {
+  const d = normalizeTelefone(digits)
+  return d ? `${d}@s.whatsapp.net` : ''
+}
+
+/**
+ * Filtro PostgREST: telefone no banco pode estar só com dígitos ou com @s.whatsapp.net.
+ */
+export function dadosClienteTelefoneOrFilter(telefone) {
+  const digits = normalizeTelefone(telefone)
+  if (!digits) return null
+  const jid = telefoneToWhatsAppJid(digits)
+  return `or=(telefone.eq.${encodeURIComponent(digits)},telefone.eq.${encodeURIComponent(jid)})`
+}
+
+export async function fetchDadosClienteByTelefone(env, telefone, select = '*') {
+  const filter = dadosClienteTelefoneOrFilter(telefone)
+  if (!filter) return null
+  const { url, key, table } = getConfig(env)
+  if (!url || !key) return null
+  try {
+    const { ok, data } = await supabaseGet(url, key, `${table}?${filter}&select=${select}&limit=1`)
+    if (!ok || !Array.isArray(data) || !data.length) return null
+    return data[0]
+  } catch {
+    return null
+  }
+}
+
 function getConfig(env) {
   const url = env.SUPABASE_URL || env.VITE_SUPABASE_URL || ''
   const key = env.SUPABASE_KEY || env.VITE_SUPABASE_KEY || ''
@@ -83,13 +113,11 @@ export async function updateDadosCliente(env, { telefone, fields }) {
     return { ok: false, code: 'MISSING_FIELDS', error: 'Informe ao menos um campo para atualizar.' }
   }
 
-  const enc = encodeURIComponent(fone)
-  const { ok, status, data, raw } = await supabasePatch(
-    url,
-    key,
-    `${table}?telefone=eq.${enc}`,
-    fields,
-  )
+  const telFilter = dadosClienteTelefoneOrFilter(fone)
+  if (!telFilter) {
+    return { ok: false, code: 'MISSING_TELEFONE', error: 'Informe um telefone válido.' }
+  }
+  const { ok, status, data, raw } = await supabasePatch(url, key, `${table}?${telFilter}`, fields)
   if (!ok) {
     return {
       ok: false,
@@ -142,16 +170,9 @@ export async function getLeadIdByTelefone(env, telefone) {
   try {
     const { url, key, table } = getConfig(env)
     if (!url || !key) return null
-    const fone = normalizeTelefone(telefone)
-    if (!fone) return null
-    const enc = encodeURIComponent(fone)
-    const { ok, data } = await supabaseGet(
-      url,
-      key,
-      `${table}?telefone=eq.${enc}&select=id_lead&limit=1`,
-    )
-    if (!ok || !Array.isArray(data) || !data.length) return null
-    const raw = data[0]?.id_lead
+    const row = await fetchDadosClienteByTelefone(env, telefone, 'id_lead')
+    if (!row) return null
+    const raw = row.id_lead
     if (raw == null || raw === '') return null
     const n = Number(raw)
     return Number.isFinite(n) ? n : raw

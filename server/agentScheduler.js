@@ -311,7 +311,8 @@ export async function runSchedulerTick(env) {
             `[scheduler] pós-form lead=${lead.id} handled=true inscricaoForm=${ctxForm} salesbot=${botId} matricula_ok=${matriculaOk}`,
           )
           const reply = postFormAdv.result?.reply
-          if (reply) {
+          const linkAlreadySent = Boolean(postFormAdv.result?.ctxSnapshot?.contratoLinkSent)
+          if (reply && !linkAlreadySent) {
             const execId = generateExecutionId()
             const sendRes = await sendMessageWithNote(env, {
               telefone: phone,
@@ -325,6 +326,8 @@ export async function runSchedulerTick(env) {
               botMessage: reply,
             }).catch(() => {})
             console.log(`[scheduler] pós-form lead=${lead.id} whatsapp_send_ok=${sendRes?.ok}`)
+          } else if (linkAlreadySent) {
+            console.log(`[scheduler] pós-form lead=${lead.id} link contrato já enviado pela captação`)
           }
         }
       } catch (postErr) {

@@ -1,0 +1,175 @@
+{
+  "name": "SUMARE Captação — Teste (gerar → status → aceite → link)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger-manual",
+      "name": "Executar teste manual",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            { "id": "a1", "name": "bearerToken", "value": "={{ $env.SUMARE_CAPTACAO_TOKEN }}", "type": "string" },
+            { "id": "a2", "name": "apiBase", "value": "https://api-captacao.sumare.edu.br", "type": "string" },
+            { "id": "a3", "name": "portalBase", "value": "https://sumare.edu.br/vem-pra-sumare/vestibular/contrato", "type": "string" },
+            { "id": "a4", "name": "cpf", "value": "28314719072", "type": "string" },
+            { "id": "a5", "name": "celular", "value": "(11) 94501-0493", "type": "string" },
+            { "id": "a6", "name": "nomeCompl", "value": "CAIO SILVA", "type": "string" },
+            { "id": "a7", "name": "email", "value": "teste@exemplo.com", "type": "string" },
+            { "id": "a8", "name": "dataNasc", "value": "2000-09-08", "type": "string" },
+            { "id": "a9", "name": "sexo", "value": "M", "type": "string" },
+            { "id": "a10", "name": "curso", "value": "ECON_EAD", "type": "string" },
+            { "id": "a11", "name": "turno", "value": "EAD", "type": "string" },
+            { "id": "a12", "name": "unidade", "value": "ED_SP_P5", "type": "string" },
+            { "id": "a13", "name": "tipoIngresso", "value": "Vestibular", "type": "string" },
+            { "id": "a14", "name": "sumareComVc", "value": "N", "type": "string" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-dados-teste",
+      "name": "Dados de teste",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 0],
+      "notes": "Configure SUMARE_CAPTACAO_TOKEN nas variáveis do n8n ou edite bearerToken aqui."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.apiBase }}/api-ingresso/candidato/gerar",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "cpf", "value": "={{ $json.cpf }}" },
+            { "name": "celular", "value": "={{ $json.celular }}" },
+            { "name": "nomeCompl", "value": "={{ $json.nomeCompl }}" },
+            { "name": "email", "value": "={{ $json.email }}" },
+            { "name": "dataNasc", "value": "={{ $json.dataNasc }}" },
+            { "name": "sexo", "value": "={{ $json.sexo }}" },
+            { "name": "curso", "value": "={{ $json.curso }}" },
+            { "name": "turno", "value": "={{ $json.turno }}" },
+            { "name": "unidade", "value": "={{ $json.unidade }}" },
+            { "name": "tipoIngresso", "value": "={{ $json.tipoIngresso }}" },
+            { "name": "sumareComVc", "value": "={{ $json.sumareComVc }}" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.bearerToken.replace(/^Bearer\\s+/i, '') }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "http-gerar",
+      "name": "1 Gerar candidato",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\nconst candidato =\n  raw?.candidato ??\n  raw?.candidatoId ??\n  raw?.id ??\n  raw?.data?.candidato ??\n  (typeof raw === 'string' || typeof raw === 'number' ? String(raw) : null);\nif (!candidato) {\n  throw new Error('Resposta gerar candidato sem id. Body: ' + JSON.stringify(raw).slice(0, 500));\n}\nreturn [{ json: { candidato: String(candidato), gerarResponse: raw } }];"
+      },
+      "id": "code-extract",
+      "name": "Extrair candidato_id",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Dados de teste').item.json.apiBase }}/api-status-candidato/candidato/status",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [{ "name": "candidato", "value": "={{ $json.candidato }}" }]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Dados de teste').item.json.bearerToken.replace(/^Bearer\\s+/i, '') }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "http-status",
+      "name": "2 Status candidato",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Dados de teste').item.json.apiBase }}/api-contrato-ingresso/contrato/ingresso/aceite",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [{ "name": "candidato", "value": "={{ $('Extrair candidato_id').item.json.candidato }}" }]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Dados de teste').item.json.bearerToken.replace(/^Bearer\\s+/i, '') }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "http-aceite",
+      "name": "3 Aceite contrato",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const candidato = $('Extrair candidato_id').first().json.candidato;\nconst portalBase = $('Dados de teste').first().json.portalBase;\nconst aceite = $input.first().json;\nconst linkApi = aceite?.url || aceite?.link || aceite?.data?.url || aceite?.data?.link;\nconst contractUrl = linkApi && /^https?:\\/\\//i.test(linkApi)\n  ? linkApi\n  : `${portalBase}?id=${encodeURIComponent(candidato)}`;\nconst nome = $('Dados de teste').first().json.nomeCompl?.split(/\\s+/)[0] || '';\nconst whatsappMessage =\n  `Ótimo${nome ? ', ' + nome : ''}! Sua inscrição foi registrada na Faculdade Sumaré.\\n\\n` +\n  `Para concluir a matrícula, acesse o link abaixo, leia o contrato, marque que concorda com os termos e clique em *ASSINAR CONTRATO*. ` +\n  `Na mesma página você poderá seguir com o pagamento da matrícula:\\n\\n` +\n  `${contractUrl}\\n\\n` +\n  `Se tiver qualquer dúvida sobre o contrato ou o pagamento, responda aqui que te ajudamos.`;\nreturn [{\n  json: {\n    candidato,\n    contractUrl,\n    whatsappMessage,\n    aceiteResponse: aceite,\n    statusResponse: $('2 Status candidato').first().json,\n    testOk: true\n  }\n}];"
+      },
+      "id": "code-resultado",
+      "name": "4 Link + mensagem WhatsApp",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 0]
+    }
+  ],
+  "connections": {
+    "Executar teste manual": {
+      "main": [[{ "node": "Dados de teste", "type": "main", "index": 0 }]]
+    },
+    "Dados de teste": {
+      "main": [[{ "node": "1 Gerar candidato", "type": "main", "index": 0 }]]
+    },
+    "1 Gerar candidato": {
+      "main": [[{ "node": "Extrair candidato_id", "type": "main", "index": 0 }]]
+    },
+    "Extrair candidato_id": {
+      "main": [[{ "node": "2 Status candidato", "type": "main", "index": 0 }]]
+    },
+    "2 Status candidato": {
+      "main": [[{ "node": "3 Aceite contrato", "type": "main", "index": 0 }]]
+    },
+    "3 Aceite contrato": {
+      "main": [[{ "node": "4 Link + mensagem WhatsApp", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "meta": { "templateCredsSetupCompleted": false },
+  "tags": [{ "name": "sumare" }]
+}

@@ -28,6 +28,13 @@ import { refreshAgentRulesCache, getAgentRulesCacheInfo, AGENT_RULES_CATALOG } f
 import { runNearestPolo } from './server/locationTool.js'
 import { runInscricao } from './server/inscricaoTool.js'
 import { isInscricaoAutomaticaEnabled, matriculaViaConsultorInstruction } from './server/inscricaoConfig.js'
+import {
+  isCaptacaoTestAllowed,
+  getCaptacaoDiagnose,
+  runCaptacaoTestWorkflow,
+  runCaptacaoTestStep,
+  runCaptacaoTestPipeline,
+} from './server/inscricaoCaptacaoTest.js'
 import { runDistribuirHumano } from './server/distribuirHumanoTool.js'
 import { runBuscarHistorico } from './server/memoryTool.js'
 import { marcarClienteIA, updateDadosCliente, getLeadIdByTelefone } from './server/dadosClienteStore.js'
@@ -601,6 +608,53 @@ app.post('/api/inscricao/run', async (req, res) => {
 
 app.get('/api/agent/matricula-config', (_req, res) => {
   res.json({ inscricaoAutomaticaEnabled: isInscricaoAutomaticaEnabled(process.env) })
+})
+
+// ── Captação Sumaré — testes (SUMARE_CAPTACAO_TEST_ALLOW=true) ──
+
+function captacaoTestGuard(res) {
+  if (!isCaptacaoTestAllowed(process.env)) {
+    res.status(403).json({
+      ok: false,
+      error: 'Testes desabilitados. Defina SUMARE_CAPTACAO_TEST_ALLOW=true no .env',
+    })
+    return false
+  }
+  return true
+}
+
+app.get('/api/inscricao/captacao/diagnose', (_req, res) => {
+  res.json(getCaptacaoDiagnose(process.env))
+})
+
+app.post('/api/inscricao/captacao/test-workflow', async (req, res) => {
+  if (!captacaoTestGuard(res)) return
+  try {
+    const out = await runCaptacaoTestWorkflow(process.env, req.body || {})
+    res.status(out.ok ? 200 : 400).json(out)
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.post('/api/inscricao/captacao/test-step/:step', async (req, res) => {
+  if (!captacaoTestGuard(res)) return
+  try {
+    const out = await runCaptacaoTestStep(process.env, req.params.step, req.body || {})
+    res.status(out.ok ? 200 : 400).json(out)
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.post('/api/inscricao/captacao/test-pipeline', async (req, res) => {
+  if (!captacaoTestGuard(res)) return
+  try {
+    const out = await runCaptacaoTestPipeline(process.env, req.body || {})
+    res.status(out.ok ? 200 : 400).json(out)
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
 })
 
 // ── Tool distribuir_humano (Kommo + 2× Supabase + OpenAI) ──
