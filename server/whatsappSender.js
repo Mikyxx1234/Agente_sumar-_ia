@@ -23,6 +23,10 @@ import { createLeadNote } from './kommoClient.js'
 import { generateExecutionId } from './ai/executionTelemetry.js'
 import { sendTextViaEvolution } from './evolution/evolutionSendText.js'
 import { shouldSkipDuplicateOutbound, releaseOutboundSync } from './outboundDedupe.js'
+import {
+  isPostFormOutboundText,
+  tryClaimPostFormWhatsappSend,
+} from './postFormSendGuard.js'
 
 /**
  * Marca a mensagem do cliente como "lida" e mostra o "digitando..." pro
@@ -216,6 +220,24 @@ export async function sendMessageWithNote(env, { telefone, text, leadId, executi
     return { ok: false, code: 'EMPTY_BODY', error: 'texto vazio', total: 0, sent: 0, steps: [] }
   }
   try {
+    if (isPostFormOutboundText(text)) {
+      const postGate = await tryClaimPostFormWhatsappSend(env, telefone)
+      if (!postGate.allow) {
+        console.log(
+          `[WhatsApp] post_form_reply_blocked to=${String(telefone || '').slice(0, 20)} reason=${postGate.reason}`,
+        )
+        return {
+          ok: true,
+          skipped: true,
+          deduped: true,
+          reason: postGate.reason,
+          total: parts.length,
+          sent: 0,
+          steps: [{ step: 'post_form_guard', skipped: true, reason: postGate.reason }],
+        }
+      }
+    }
+
     const dedupe = await shouldSkipDuplicateOutbound(env, telefone, text)
     if (dedupe.skip) {
       console.log(

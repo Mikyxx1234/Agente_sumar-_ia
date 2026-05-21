@@ -12,6 +12,11 @@ import { DADOS_CLIENTE_INSCRICAO_SELECT } from './dadosClienteInscricaoFields.js
 /**
  * @returns {Promise<{ cleared: boolean, reason?: string }>}
  */
+export async function isMatriculaPosFormDoneForTelefone(env, telefone) {
+  const row = await fetchDadosClienteByTelefone(env, telefone, DADOS_CLIENTE_INSCRICAO_SELECT)
+  return matriculaPosFormAlreadyProcessed(row)
+}
+
 export async function clearStaleBufferIfMatriculaDone(env, { telefone, sessionId }) {
   if (!telefone || !sessionId) return { cleared: false, reason: 'missing_session' }
   const row = await fetchDadosClienteByTelefone(env, telefone, DADOS_CLIENTE_INSCRICAO_SELECT)

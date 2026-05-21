@@ -24,7 +24,6 @@ import {
   dadosClienteTelefoneOrFilter,
 } from './dadosClienteStore.js'
 import { DADOS_CLIENTE_INSCRICAO_SELECT } from './dadosClienteInscricaoFields.js'
-import { tryClaimPostFormSend, releasePostFormSendClaim } from './postFormSendGuard.js'
 import { isSumareCaptacaoEnabled } from './sumareCaptacaoClient.js'
 import {
   runMatriculaCaptacaoAfterForm,
@@ -62,7 +61,6 @@ async function claimMatriculaPosFormExclusive(env, telefone) {
     INSCRICAO_FORM_STATUS_AGUARDANDO,
     INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
   ].join(',')
-  const recebidoAt = new Date().toISOString()
   try {
     const existing = await getClienteRow(env, telefone)
     if (matriculaPosFormAlreadyProcessed(existing)) {
@@ -83,10 +81,7 @@ async function claimMatriculaPosFormExclusive(env, telefone) {
           'Content-Type': 'application/json',
           Prefer: 'return=representation',
         },
-        body: JSON.stringify({
-          [FORM_STATUS_FIELD]: INSCRICAO_FORM_STATUS_CONCLUIDO,
-          inscricao_form_recebido_at: recebidoAt,
-        }),
+        body: JSON.stringify({ [FORM_STATUS_FIELD]: INSCRICAO_FORM_STATUS_CONCLUIDO }),
       },
     )
     if (!res.ok) {
@@ -94,10 +89,7 @@ async function claimMatriculaPosFormExclusive(env, telefone) {
       if (res.status === 400) {
         const fallback = await updateDadosCliente(env, {
           telefone,
-          fields: {
-            [FORM_STATUS_FIELD]: INSCRICAO_FORM_STATUS_CONCLUIDO,
-            inscricao_form_recebido_at: recebidoAt,
-          },
+          fields: { [FORM_STATUS_FIELD]: INSCRICAO_FORM_STATUS_CONCLUIDO },
         })
         if (fallback.ok && fallback.matched) {
           return { claimed: true, reason: 'fallback_update_after_patch_400' }
@@ -221,14 +213,8 @@ export async function detectFormSumarRecebidoNoKommo(env, leadId, options = {}) 
 async function stepMatriculaPosForm(env, ctx) {
   const { telefone, idLead, executionId, model, pushName, t0, kommoFormDetected } = ctx
 
-  if (!tryClaimPostFormSend(telefone, env)) {
-    console.log(`[inscricaoPostForm] lead=${idLead} skip post_form_send_guard (memoria)`)
-    return { handled: false, reason: 'post_form_send_guard' }
-  }
-
   const claim = await claimMatriculaPosFormExclusive(env, telefone)
   if (!claim.claimed) {
-    releasePostFormSendClaim(telefone)
     console.log(
       `[inscricaoPostForm] lead=${idLead} matricula_pos_form skip claim=${claim.reason} status=${claim.status || 'n/a'}`,
     )

@@ -78,7 +78,11 @@ import {
   formatDispatcherDiagLine,
 } from './kommoInboundDiagnostics.js'
 import { notifyFunnelSnapshot } from './feedbackIA/funnelExitWatcher.js'
-import { clearStaleBufferIfMatriculaDone } from './funnelReentryGuard.js'
+import {
+  clearStaleBufferIfMatriculaDone,
+  isMatriculaPosFormDoneForTelefone,
+} from './funnelReentryGuard.js'
+import { clearMessages } from './evolution/messageBuffer.js'
 
 // Defaults agressivos pra reduzir latência ponta-a-ponta.
 // - Interval: a cada 10s o scheduler verifica se há leads c/ msgs prontas.
@@ -417,6 +421,20 @@ export async function runSchedulerTick(env) {
       if (skipFlushAfterPostForm) {
         console.log(`[scheduler] lead=${lead.id} flush omitido neste tick (pós-form tratado)`)
         return
+      }
+
+      try {
+        if (await isMatriculaPosFormDoneForTelefone(env, phone)) {
+          const cleared = await clearMessages(env, sessionId)
+          if (cleared > 0 || (messages && messages.length > 0)) {
+            console.log(
+              `[scheduler] lead=${lead.id} flush omitido — matrícula pós-form já feita (buffer descartado=${cleared})`,
+            )
+          }
+          return
+        }
+      } catch (skipMatErr) {
+        console.warn(`[scheduler] checagem matricula_pos_form lead=${lead.id}:`, skipMatErr.message)
       }
 
       const ageMs = last ? Date.now() - last.getTime() : Infinity
