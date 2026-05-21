@@ -58,7 +58,10 @@ import {
 import { phoneToWhatsAppSessionId } from './phoneWhatsApp.js'
 import { getMessages, getLastTouchedAt, listSessionsWithPendingMessages } from './evolution/messageBuffer.js'
 import { flushSession } from './evolution/webhookEvolution.js'
-import { tryAdvanceInscricaoPostFormScheduler } from './inscricaoPostFormPipeline.js'
+import {
+  tryAdvanceInscricaoPostFormScheduler,
+  isInscricaoPostFormSchedulerEnabled,
+} from './inscricaoPostFormPipeline.js'
 import { tryInactivityReengagement } from './inactivityReengagement.js'
 import { sendMessageWithNote } from './whatsappSender.js'
 import { saveConversation } from './historyStore.js'
@@ -298,6 +301,7 @@ export async function runSchedulerTick(env) {
             : null,
       })
 
+      if (isInscricaoPostFormSchedulerEnabled(env)) {
       try {
         const postFormAdv = await tryAdvanceInscricaoPostFormScheduler(env, {
           telefone: phone,
@@ -335,6 +339,7 @@ export async function runSchedulerTick(env) {
         }
       } catch (postErr) {
         console.warn(`[scheduler] pós-form lead=${lead.id}:`, postErr.message)
+      }
       }
       if (isKommoInboundPollDebugLead(env, Number(lead.id))) {
         console.log(

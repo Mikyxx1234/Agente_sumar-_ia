@@ -392,11 +392,20 @@ export async function tryHandleInscricaoFormComplete(env, input) {
   return tryProcessInscricaoPostFormPipeline(env, input)
 }
 
+/** Liga o avanço pós-form no tick do scheduler (default: desligado). */
+export function isInscricaoPostFormSchedulerEnabled(env = process.env) {
+  return String(env?.INSCRICAO_POST_FORM_SCHEDULER_ENABLED ?? 'false').trim().toLowerCase() === 'true'
+}
+
 /**
  * Scheduler: detecta form preenchido via notas Kommo (Flow) ou status Supabase
  * e dispara salesbot 49813 sem depender de mensagem no buffer.
+ * Desligado por padrão — defina INSCRICAO_POST_FORM_SCHEDULER_ENABLED=true para reativar.
  */
 export async function tryAdvanceInscricaoPostFormScheduler(env, { telefone, leadId }) {
+  if (!isInscricaoPostFormSchedulerEnabled(env)) {
+    return null
+  }
   return tryProcessInscricaoPostFormPipeline(env, {
     telefone,
     leadId,
