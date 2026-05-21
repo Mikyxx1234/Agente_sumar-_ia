@@ -38,7 +38,9 @@ import {
   messageExpressesCourseInterestOnly,
   messageLooksLikeFormSumarResponse,
   messageLooksLikeFormFollowUp,
+  matriculaPosFormAlreadyProcessed,
 } from '../../libShared/inscricaoFormHeuristics.js'
+import { fetchDadosClienteByTelefone } from '../dadosClienteStore.js'
 import {
   conversationHasActiveTopic,
   extractDiscussedCourseFromHistory,
@@ -279,9 +281,21 @@ export async function runAgent(env, input) {
   if (telefone) {
     // Pós-form só quando a mensagem indica formulário respondido — evita pular
     // direto para "cadastro validado" em "sim"/"oi" com notas antigas no Kommo.
+    let matriculaJaProcessada = false
+    try {
+      const inscRow = await fetchDadosClienteByTelefone(
+        env,
+        telefone,
+        'inscricao_form_status,inscricao_form_recebido_at,captacao_contrato_link_at,captacao_candidato_id,captacao_contrato_link',
+      )
+      matriculaJaProcessada = matriculaPosFormAlreadyProcessed(inscRow)
+    } catch {
+      /* segue sem bloquear */
+    }
     const looksPostFormInbound =
-      messageLooksLikeFormSumarResponse(userMessage) ||
-      messageLooksLikeFormFollowUp(userMessage, { strictAwaitingForm: true })
+      !matriculaJaProcessada &&
+      (messageLooksLikeFormSumarResponse(userMessage) ||
+        messageLooksLikeFormFollowUp(userMessage, { strictAwaitingForm: true }))
     const formDone = looksPostFormInbound
       ? await tryHandleInscricaoFormComplete(env, formFlowCtx)
       : null

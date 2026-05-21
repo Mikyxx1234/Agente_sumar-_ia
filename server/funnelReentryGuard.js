@@ -1,0 +1,26 @@
+/**
+ * Quando um lead finalizado sai do funil e volta, o poll Kommo pode reempurrar
+ * mensagens antigas no buffer e o pós-form dispara de novo. Limpamos o buffer
+ * na reentrada se a matrícula pós-formulário já foi processada.
+ */
+
+import { clearMessages } from './evolution/messageBuffer.js'
+import { fetchDadosClienteByTelefone } from './dadosClienteStore.js'
+import { matriculaPosFormAlreadyProcessed } from '../libShared/inscricaoFormHeuristics.js'
+
+/**
+ * @returns {Promise<{ cleared: boolean, reason?: string }>}
+ */
+export async function clearStaleBufferIfMatriculaDone(env, { telefone, sessionId }) {
+  if (!telefone || !sessionId) return { cleared: false, reason: 'missing_session' }
+  const row = await fetchDadosClienteByTelefone(
+    env,
+    telefone,
+    'inscricao_form_status,inscricao_form_recebido_at,captacao_contrato_link_at,captacao_candidato_id,captacao_contrato_link',
+  )
+  if (!matriculaPosFormAlreadyProcessed(row)) {
+    return { cleared: false, reason: 'matricula_not_done' }
+  }
+  const removed = await clearMessages(env, sessionId)
+  return { cleared: removed > 0, reason: removed > 0 ? 'buffer_cleared' : 'buffer_already_empty' }
+}

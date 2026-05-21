@@ -8,8 +8,12 @@ import { normalizeTelefone } from './dadosClienteStore.js'
 /** Evita dois sendMessageWithNote simultâneos no mesmo processo. */
 const inflightOutbound = new Map()
 
+/** Mesmo sufixo que sendMessageWithNote grava no Kommo (EX-YYMMDD-HHMM-NNN). */
+const AGENT_OUTBOUND_SUFFIX = /\s-\sEX-\d{6}-\d{4}-\d{3}\s*$/i
+
 function normalizeOutboundText(text) {
   return String(text || '')
+    .replace(AGENT_OUTBOUND_SUFFIX, '')
     .replace(/\s+/g, ' ')
     .trim()
 }

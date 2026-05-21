@@ -78,6 +78,7 @@ import {
   formatDispatcherDiagLine,
 } from './kommoInboundDiagnostics.js'
 import { notifyFunnelSnapshot } from './feedbackIA/funnelExitWatcher.js'
+import { clearStaleBufferIfMatriculaDone } from './funnelReentryGuard.js'
 
 // Defaults agressivos pra reduzir latência ponta-a-ponta.
 // - Interval: a cada 10s o scheduler verifica se há leads c/ msgs prontas.
@@ -208,11 +209,11 @@ export async function runSchedulerTick(env) {
   const leadsAll = listing.leads || []
   stats.leadsInFunnel = leadsAll.length
 
-  // Feedback IA — detecta leads que saíram do funil entre ticks. Roda
-  // assim que temos a lista crua (ANTES da whitelist de teste, pra que
-  // saídas de leads fora da whitelist também sejam avaliadas).
+  // Feedback IA — detecta leads que saíram/entraram no funil entre ticks.
+  let funnelEnteredIds = new Set()
   try {
-    notifyFunnelSnapshot(env, leadsAll.map((l) => Number(l.id)))
+    const snap = notifyFunnelSnapshot(env, leadsAll.map((l) => Number(l.id)))
+    funnelEnteredIds = new Set((snap.entered || []).map(Number).filter((n) => Number.isFinite(n) && n > 0))
   } catch (err) {
     console.error('[scheduler] feedbackIA notify falhou:', err.message)
   }
@@ -290,6 +291,19 @@ export async function runSchedulerTick(env) {
       }
       const sessionId = buildSessionId(phone)
       if (!sessionId) return
+
+      if (funnelEnteredIds.has(Number(lead.id))) {
+        try {
+          const reentry = await clearStaleBufferIfMatriculaDone(env, { telefone: phone, sessionId })
+          if (reentry.cleared) {
+            console.log(
+              `[scheduler] lead=${lead.id} buffer limpo na reentrada ao funil (${reentry.reason || 'ok'})`,
+            )
+          }
+        } catch (reentryErr) {
+          console.warn(`[scheduler] reentrada funil lead=${lead.id}:`, reentryErr.message)
+        }
+      }
 
       const syncRes = await syncKommoInboundToBuffer(env, {
         leadId: Number(lead.id),

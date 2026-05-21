@@ -12,6 +12,27 @@ export const INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE = 'aguardando_aceite_contra
 /** Comprovante de pagamento recebido — consultor segue o atendimento. */
 export const INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO = 'comprovante_pagamento_recebido'
 
+const MATRICULA_POS_FORM_TERMINAL_STATUSES = new Set([
+  INSCRICAO_FORM_STATUS_CONCLUIDO,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
+  INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO,
+])
+
+/**
+ * Matrícula pós-formulário já foi tratada — não reenviar mensagem ao reentrar no funil.
+ * Usa status Supabase e timestamps/captação (evita reprocessar com status stale em aguardando).
+ */
+export function matriculaPosFormAlreadyProcessed(row) {
+  if (!row || typeof row !== 'object') return false
+  const status = String(row.inscricao_form_status || '').trim()
+  if (MATRICULA_POS_FORM_TERMINAL_STATUSES.has(status)) return true
+  if (row.inscricao_form_recebido_at) return true
+  if (row.captacao_contrato_link_at) return true
+  if (row.captacao_candidato_id != null && String(row.captacao_candidato_id).trim() !== '') return true
+  if (row.captacao_contrato_link != null && String(row.captacao_contrato_link).trim() !== '') return true
+  return false
+}
+
 /** Lead cobra o formulário que ainda não chegou. */
 export function messageAsksForFormResend(text) {
   const t = normalizeMessageForScope(text).toLowerCase()

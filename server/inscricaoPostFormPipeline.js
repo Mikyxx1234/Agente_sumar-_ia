@@ -11,6 +11,8 @@ import {
   messageLooksLikeFormSumarResponse,
   messageLooksLikeFormFollowUp,
   buildInscricaoFormCompleteReply,
+  matriculaPosFormAlreadyProcessed,
+  INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO,
 } from '../libShared/inscricaoFormHeuristics.js'
 import { runKommoSalesbot } from './kommoSalesbot.js'
 import { findLeadByPhone, listLeadNotes } from './kommoClient.js'
@@ -42,7 +44,7 @@ async function getClienteRow(env, telefone) {
   return fetchDadosClienteByTelefone(
     env,
     telefone,
-    `${FORM_STATUS_FIELD},id_lead,inscricao_form_recebido_at`,
+    `${FORM_STATUS_FIELD},id_lead,inscricao_form_recebido_at,captacao_contrato_link_at,captacao_candidato_id,captacao_contrato_link`,
   )
 }
 
@@ -64,7 +66,7 @@ async function claimMatriculaPosFormExclusive(env, telefone) {
   ].join(',')
   try {
     const res = await fetch(
-      `${url}/rest/v1/${encodeURIComponent(table)}?${telFilter}&${FORM_STATUS_FIELD}=in.(${waiting})`,
+      `${url}/rest/v1/${encodeURIComponent(table)}?${telFilter}&${FORM_STATUS_FIELD}=in.(${waiting})&inscricao_form_recebido_at=is.null`,
       {
         method: 'PATCH',
         headers: {
@@ -97,6 +99,9 @@ async function claimMatriculaPosFormExclusive(env, telefone) {
       return { claimed: true, reason: 'claimed_waiting_status' }
     }
     const row = await getClienteRow(env, telefone)
+    if (matriculaPosFormAlreadyProcessed(row)) {
+      return { claimed: false, reason: 'matricula_already_processed', status: row?.[FORM_STATUS_FIELD] }
+    }
     const st = row?.[FORM_STATUS_FIELD] ?? null
     if (st === INSCRICAO_FORM_STATUS_CONCLUIDO) {
       return { claimed: false, reason: 'already_completed', status: st }
@@ -341,8 +346,16 @@ export async function tryProcessInscricaoPostFormPipeline(env, input) {
   const row = await getClienteRow(env, telefone)
   const status = row?.[FORM_STATUS_FIELD] ?? null
 
+  if (matriculaPosFormAlreadyProcessed(row)) {
+    console.log(
+      `[inscricaoPostForm] skip telefone=${telefone} matricula_ja_processada status=${status || 'n/a'} recebido_at=${row?.inscricao_form_recebido_at || 'n/a'}`,
+    )
+    return null
+  }
+
   if (status === INSCRICAO_FORM_STATUS_CONCLUIDO) return null
   if (status === INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE) return null
+  if (status === INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO) return null
 
   const idLead = await resolveLeadId(env, telefone, leadIdHint)
 

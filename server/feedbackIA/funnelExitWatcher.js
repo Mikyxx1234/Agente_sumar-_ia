@@ -49,11 +49,15 @@ function getCap(env) {
  * tabela tem unique conversation_key).
  */
 export function notifyFunnelSnapshot(env, currentLeadIds) {
-  if (!isEnabled(env)) {
-    previousFunnelIds = new Set(currentLeadIds.map(Number).filter((n) => Number.isFinite(n)))
-    return { enabled: false, exited: 0 }
-  }
   const current = new Set(currentLeadIds.map(Number).filter((n) => Number.isFinite(n)))
+  const entered = []
+  for (const id of current) {
+    if (!previousFunnelIds.has(id)) entered.push(id)
+  }
+  if (!isEnabled(env)) {
+    previousFunnelIds = current
+    return { enabled: false, exited: 0, entered }
+  }
   const exited = []
   for (const id of previousFunnelIds) {
     if (!current.has(id)) exited.push(id)
@@ -66,7 +70,12 @@ export function notifyFunnelSnapshot(env, currentLeadIds) {
     // dispara dreno mas não aguarda
     drainQueue(env).catch((e) => console.error('[feedbackIA] drain error:', e.message))
   }
-  return { enabled: true, exited: exited.length, queued: pendingQueue.size }
+  if (entered.length > 0) {
+    console.log(
+      `[scheduler] funnel-reentry: ${entered.length} lead(s) [${entered.slice(0, 10).join(', ')}${entered.length > 10 ? '…' : ''}]`,
+    )
+  }
+  return { enabled: true, exited: exited.length, entered, queued: pendingQueue.size }
 }
 
 async function drainQueue(env) {
