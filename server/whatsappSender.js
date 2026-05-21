@@ -22,6 +22,7 @@
 import { createLeadNote } from './kommoClient.js'
 import { generateExecutionId } from './ai/executionTelemetry.js'
 import { sendTextViaEvolution } from './evolution/evolutionSendText.js'
+import { shouldSkipDuplicateOutbound } from './outboundDedupe.js'
 
 /**
  * Marca a mensagem do cliente como "lida" e mostra o "digitando..." pro
@@ -213,6 +214,21 @@ export async function sendMessageWithNote(env, { telefone, text, leadId, executi
   const parts = splitMessage(text, cfg.maxChars)
   if (!parts.length) {
     return { ok: false, code: 'EMPTY_BODY', error: 'texto vazio', total: 0, sent: 0, steps: [] }
+  }
+  const dedupe = await shouldSkipDuplicateOutbound(env, telefone, text)
+  if (dedupe.skip) {
+    console.log(
+      `[WhatsApp] outbound dedupe skip to=${String(telefone || '').slice(0, 20)} reason=${dedupe.reason}`,
+    )
+    return {
+      ok: true,
+      skipped: true,
+      deduped: true,
+      reason: dedupe.reason,
+      total: parts.length,
+      sent: 0,
+      steps: [{ step: 'dedupe', skipped: true, reason: dedupe.reason }],
+    }
   }
   const execId = executionId || generateExecutionId()
   const steps = []

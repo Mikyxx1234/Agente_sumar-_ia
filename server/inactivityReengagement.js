@@ -4,7 +4,7 @@
  *   2) Ping enviado e ainda sem resposta → move para fila configurada no Kommo
  *
  * Env (defaults = funil Agente-Sumaré):
- *   INATIVIDADE_ENABLED=true
+ *   INATIVIDADE_ENABLED=false   (default off — evita ping durante testes de matrícula)
  *   INATIVIDADE_IDLE_MIN=20
  *   INATIVIDADE_AFTER_PING_MIN=20
  *   INATIVIDADE_PIPELINE_ID=13756724
@@ -15,7 +15,18 @@
 import { fetchRecentChatRows } from './historyStore.js'
 import { sendMessageWithNote } from './whatsappSender.js'
 import { saveConversation } from './historyStore.js'
-import { updateDadosCliente, normalizeTelefone, fetchDadosClienteByTelefone } from './dadosClienteStore.js'
+import {
+  updateDadosCliente,
+  normalizeTelefone,
+  fetchDadosClienteByTelefone,
+  dadosClienteTelefoneOrFilter,
+} from './dadosClienteStore.js'
+import {
+  INSCRICAO_FORM_STATUS_AGUARDANDO,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
+  INSCRICAO_FORM_STATUS_CONCLUIDO,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
+} from '../libShared/inscricaoFormHeuristics.js'
 import { updateLeadPipelineStatus } from './kommoClient.js'
 import { generateExecutionId } from './ai/executionTelemetry.js'
 import { createLeadNote } from './kommoClient.js'
@@ -31,12 +42,21 @@ const PING_MESSAGES = [
 
 const FIELD_PING_AT = 'reativacao_ping_at'
 const FIELD_MOVED_AT = 'reativacao_moved_at'
+const FORM_STATUS_FIELD = 'inscricao_form_status'
+
+const SKIP_INSCRICAO_STATUSES = new Set([
+  INSCRICAO_FORM_STATUS_AGUARDANDO,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
+  INSCRICAO_FORM_STATUS_CONCLUIDO,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
+])
+
 /** Dedupe em memória se colunas Supabase ainda não existirem. */
 const _pingMemory = new Map()
 const PING_MEMORY_TTL_MS = 6 * 60 * 60 * 1000
 
 function isEnabled(env) {
-  const flag = String(env.INATIVIDADE_ENABLED ?? 'true').trim().toLowerCase()
+  const flag = String(env.INATIVIDADE_ENABLED ?? 'false').trim().toLowerCase()
   return !['false', '0', 'no', 'off'].includes(flag)
 }
 
@@ -132,9 +152,44 @@ async function getClienteReativacao(env, telefone) {
   const row = await fetchDadosClienteByTelefone(
     env,
     telefone,
-    `atendimento_ia,${FIELD_PING_AT},${FIELD_MOVED_AT}`,
+    `atendimento_ia,${FIELD_PING_AT},${FIELD_MOVED_AT},${FORM_STATUS_FIELD}`,
   )
   return row || {}
+}
+
+/**
+ * Só uma réplica envia o ping: PATCH com reativacao_ping_at=null.
+ */
+async function claimReativacaoPingExclusive(env, telefone) {
+  const { url, key, table } = getDadosClienteCfg(env)
+  const telFilter = dadosClienteTelefoneOrFilter(telefone)
+  if (!url || !key || !telFilter) return false
+  const nowIso = new Date().toISOString()
+  try {
+    const res = await fetch(
+      `${url}/rest/v1/${encodeURIComponent(table)}?${telFilter}&${FIELD_PING_AT}=is.null`,
+      {
+        method: 'PATCH',
+        headers: {
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          'Content-Type': 'application/json',
+          Prefer: 'return=representation',
+        },
+        body: JSON.stringify({ [FIELD_PING_AT]: nowIso }),
+      },
+    )
+    const text = await res.text()
+    let data = null
+    try {
+      data = text ? JSON.parse(text) : null
+    } catch {
+      data = null
+    }
+    return res.ok && Array.isArray(data) && data.length > 0
+  } catch {
+    return false
+  }
 }
 
 async function setReativacaoFields(env, telefone, fields) {
@@ -178,6 +233,10 @@ export async function tryInactivityReengagement(env, ctx) {
   const cliente = await getClienteReativacao(env, telefone)
   if (String(cliente?.atendimento_ia || '').toLowerCase() === 'pause') {
     return { action: 'skip', reason: 'ia_paused' }
+  }
+  const formStatus = String(cliente?.[FORM_STATUS_FIELD] || '').trim()
+  if (formStatus && SKIP_INSCRICAO_STATUSES.has(formStatus)) {
+    return { action: 'skip', reason: 'inscricao_flow_active', formStatus }
   }
   if (cliente?.[FIELD_MOVED_AT]) {
     return { action: 'skip', reason: 'already_moved' }
@@ -235,6 +294,11 @@ export async function tryInactivityReengagement(env, ctx) {
     return { action: 'skip', reason: 'not_idle_yet', msIdle }
   }
 
+  const claimed = await claimReativacaoPingExclusive(env, telefone)
+  if (!claimed) {
+    return { action: 'skip', reason: 'ping_claim_failed_or_already_sent' }
+  }
+
   const text = pickPingMessage(leadId)
   const executionId = generateExecutionId()
   const sendRes = await sendMessageWithNote(env, {
@@ -244,13 +308,16 @@ export async function tryInactivityReengagement(env, ctx) {
     executionId,
   })
   if (!sendRes?.ok) {
+    await setReativacaoFields(env, telefone, { [FIELD_PING_AT]: null }).catch(() => {})
     console.warn(`[inactivity] lead=${leadId} falha enviar ping: ${sendRes?.error || sendRes?.code}`)
     return { action: 'ping_failed', error: sendRes?.error }
+  }
+  if (sendRes.deduped) {
+    return { action: 'skip', reason: 'ping_deduped_outbound' }
   }
 
   const nowIso = new Date().toISOString()
   _pingMemory.set(fone, Date.now())
-  await setReativacaoFields(env, telefone, { [FIELD_PING_AT]: nowIso })
   await saveConversation(env, {
     telefone,
     userMessage: '',

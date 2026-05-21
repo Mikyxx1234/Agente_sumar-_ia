@@ -663,7 +663,8 @@ async function flushSessionInner(env, sessionId, opts = {}) {
   }).catch((err) => console.error(`[${executionId}] saveExecution exception:`, err.message))
 
   const sentOk = Boolean(
-    sendResult?.ok && (sendResult.sent || 0) > 0,
+    sendResult?.ok &&
+      ((sendResult.sent || 0) > 0 || sendResult.deduped),
   )
   const shouldClearBuffer =
     out?.ok &&

@@ -20,7 +20,15 @@
  * (`clearMessages`), então esse módulo não repete esse passo.
  */
 
-import { normalizeTelefone } from './dadosClienteStore.js'
+import { normalizeTelefone, telefoneToWhatsAppJid } from './dadosClienteStore.js'
+
+/** `phone` no Supabase pode ser só dígitos ou JID completo. */
+function chatMessagesPhoneOrFilter(telefone) {
+  const digits = normalizeTelefone(telefone)
+  if (!digits) return null
+  const jid = telefoneToWhatsAppJid(digits)
+  return `or=(phone.eq.${encodeURIComponent(digits)},phone.eq.${encodeURIComponent(jid)})`
+}
 
 const FACE_INSTA_TRIGGERS = new Set([
   'Quero mais informações',
@@ -186,13 +194,12 @@ export async function insertChatMessage(env, {
 export async function fetchRecentChatRows(env, telefone, limit = 30) {
   const cfg = getConfig(env)
   if (!cfg.url || !cfg.key) return []
-  const fone = normalizeTelefone(telefone)
-  if (!fone) return []
-  const enc = encodeURIComponent(fone)
+  const phoneFilter = chatMessagesPhoneOrFilter(telefone)
+  if (!phoneFilter) return []
   const lim = Math.max(1, Math.min(100, Number(limit) || 30))
   const path =
     `${encodeURIComponent(cfg.messagesTable)}` +
-    `?phone=eq.${enc}&select=user_message,bot_message,created_at` +
+    `?${phoneFilter}&select=user_message,bot_message,created_at` +
     `&order=created_at.desc&limit=${lim}`
   const r = await sbRequest(cfg.url, cfg.key, 'GET', path)
   if (!r.ok || !Array.isArray(r.data)) return []
@@ -202,12 +209,11 @@ export async function fetchRecentChatRows(env, telefone, limit = 30) {
 export async function readChatMessages(env, telefone, limit = 8) {
   const cfg = getConfig(env)
   if (!cfg.url || !cfg.key) return []
-  const fone = normalizeTelefone(telefone)
-  if (!fone) return []
-  const enc = encodeURIComponent(fone)
+  const phoneFilter = chatMessagesPhoneOrFilter(telefone)
+  if (!phoneFilter) return []
   const path =
     `${encodeURIComponent(cfg.messagesTable)}` +
-    `?phone=eq.${enc}&select=user_message,bot_message,created_at` +
+    `?${phoneFilter}&select=user_message,bot_message,created_at` +
     `&order=created_at.desc&limit=${Math.max(1, Math.min(50, Number(limit) || 8))}`
   const r = await sbRequest(cfg.url, cfg.key, 'GET', path)
   if (!r.ok || !Array.isArray(r.data) || r.data.length === 0) return []
