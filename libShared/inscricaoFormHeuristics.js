@@ -1,6 +1,8 @@
 /** Heurísticas do fluxo Form Sumar (template WhatsApp → salesbot pós-formulário). */
 
 import { normalizeMessageForScope, messageLooksLikeOperationalChat } from './scopeHeuristics.js'
+import { conversationHasActiveTopic } from './conversationContextHeuristics.js'
+import { conversationHasActiveTopic } from './conversationContextHeuristics.js'
 
 export const INSCRICAO_FORM_STATUS_AGUARDANDO = 'aguardando_form_sumar'
 /** Formulário recebido — salesbot de distribuição em andamento. */
@@ -107,6 +109,14 @@ export function messageConfirmsProceedToInscricaoForm(text, historyMessages = []
   if (messageIsCourseCatalogRequest(text)) return false
 
   if (
+    /^\s*(inscri[cç][aã]o|matr[ií]cula|me\s+inscrever|quero\s+me\s+inscrever)\s*[.!?]*\s*$/i.test(t) &&
+    (assistantInEnrollmentStep(lastAssistantText(historyMessages)) ||
+      conversationHasActiveTopic(historyMessages))
+  ) {
+    return true
+  }
+
+  if (
     /\b(valor|valores|pre[cç]o|mensalidade|dura[cç][aã]o|quanto\s+custa|grade)\b/i.test(t) &&
     !/\b(fazer|matricul|inscri|me\s+inscrever)\b/i.test(t)
   ) {
@@ -114,6 +124,13 @@ export function messageConfirmsProceedToInscricaoForm(text, historyMessages = []
   }
 
   if (userConfirmsEnrollmentAfterAssistant(text, historyMessages)) return true
+
+  if (
+    conversationHasActiveTopic(historyMessages) &&
+    /^\s*(inscri[cç][aã]o|matr[ií]cula|quero\s+me\s+inscrever|quero\s+matricular)\s*[.!?]*\s*$/i.test(t)
+  ) {
+    return true
+  }
 
   if (
     /\b(realizar|efetuar|concluir|continuar|prosseguir|seguir|avan[cç]ar|iniciar|come[cç]ar)\b[\s\S]{0,45}\b(inscri[cç][aã]o|cadastro|matr[ií]cula)\b/i.test(

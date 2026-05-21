@@ -33,7 +33,11 @@ import {
   tryHandleInscricaoFormStart,
   tryEnsureInscricaoFormSent,
 } from '../inscricaoFormFlow.js'
-import { messageExpressesCourseInterestOnly } from '../../libShared/inscricaoFormHeuristics.js'
+import {
+  messageExpressesCourseInterestOnly,
+  messageLooksLikeFormSumarResponse,
+  messageLooksLikeFormFollowUp,
+} from '../../libShared/inscricaoFormHeuristics.js'
 import {
   conversationHasActiveTopic,
   extractDiscussedCourseFromHistory,
@@ -237,7 +241,13 @@ export async function runAgent(env, input) {
   }
 
   if (telefone) {
-    const formDone = await tryHandleInscricaoFormComplete(env, formFlowCtx)
+    // Pós-form só quando a mensagem indica formulário respondido — evita pular
+    // direto para "cadastro validado" em "sim"/"oi" com notas antigas no Kommo.
+    const looksPostFormInbound =
+      messageLooksLikeFormSumarResponse(userMessage) || messageLooksLikeFormFollowUp(userMessage)
+    const formDone = looksPostFormInbound
+      ? await tryHandleInscricaoFormComplete(env, formFlowCtx)
+      : null
     if (formDone?.handled) {
       const step = formDone.result?.ctxSnapshot?.inscricaoForm ?? 'post_form'
       console.log(

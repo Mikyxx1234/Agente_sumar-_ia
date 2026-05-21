@@ -56,7 +56,7 @@ export async function fetchDadosClienteByTelefone(env, telefone, select = '*') {
 function getConfig(env) {
   const url = env.SUPABASE_URL || env.VITE_SUPABASE_URL || ''
   const key = env.SUPABASE_KEY || env.VITE_SUPABASE_KEY || ''
-  const table = env.SUPABASE_DADOS_CLIENTE_TABLE || 'dados_cliente'
+  const table = env.SUPABASE_DADOS_CLIENTE_TABLE || 'dados_cliente_sum'
   return { url: url.replace(/\/$/, ''), key, table }
 }
 

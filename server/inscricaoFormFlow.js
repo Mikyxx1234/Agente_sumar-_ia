@@ -15,12 +15,20 @@ import {
   messageLooksLikeFormSumarResponse,
   messageLooksLikeFormFollowUp,
   buildInscricaoFormSentReply,
+  lastAssistantText,
+  assistantInEnrollmentStep,
 } from '../libShared/inscricaoFormHeuristics.js'
 import { messageLooksLikeOperationalChat } from '../libShared/scopeHeuristics.js'
 import { sendFormSumarTemplate } from './whatsappTemplateSender.js'
 import { runKommoSalesbot } from './kommoSalesbot.js'
 import { findLeadByPhone } from './kommoClient.js'
-import { updateDadosCliente, getLeadIdByTelefone, normalizeTelefone } from './dadosClienteStore.js'
+import {
+  updateDadosCliente,
+  getLeadIdByTelefone,
+  normalizeTelefone,
+  fetchDadosClienteByTelefone,
+  dadosClienteTelefoneOrFilter,
+} from './dadosClienteStore.js'
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
 
@@ -30,28 +38,15 @@ function useWhatsappTemplateDelivery(env) {
 }
 
 async function getFormStatus(env, telefone) {
-  const { url, key, table } = getSupabaseCfg(env)
-  if (!url || !key) return null
-  const fone = normalizeTelefone(telefone)
-  if (!fone) return null
-  try {
-    const enc = encodeURIComponent(fone)
-    const res = await fetch(`${url}/rest/v1/${encodeURIComponent(table)}?telefone=eq.${enc}&select=${FORM_STATUS_FIELD}&limit=1`, {
-      headers: { apikey: key, Authorization: `Bearer ${key}` },
-    })
-    if (!res.ok) return null
-    const rows = await res.json()
-    return rows?.[0]?.[FORM_STATUS_FIELD] ?? null
-  } catch {
-    return null
-  }
+  const row = await fetchDadosClienteByTelefone(env, telefone, FORM_STATUS_FIELD)
+  return row?.[FORM_STATUS_FIELD] ?? null
 }
 
 function getSupabaseCfg(env) {
   return {
     url: (env.SUPABASE_URL || env.VITE_SUPABASE_URL || '').replace(/\/$/, ''),
     key: env.SUPABASE_KEY || env.VITE_SUPABASE_KEY || '',
-    table: env.SUPABASE_DADOS_CLIENTE_TABLE || 'dados_cliente',
+    table: env.SUPABASE_DADOS_CLIENTE_TABLE || 'dados_cliente_sum',
   }
 }
 
@@ -76,12 +71,11 @@ async function releaseInscricaoFormStartClaim(env, telefone) {
 async function claimInscricaoFormStartExclusive(env, telefone) {
   const { url, key, table } = getSupabaseCfg(env)
   if (!url || !key) return { claimed: true, reason: 'no_supabase' }
-  const fone = normalizeTelefone(telefone)
-  if (!fone) return { claimed: false, reason: 'invalid_phone' }
+  const telFilter = dadosClienteTelefoneOrFilter(telefone)
+  if (!telFilter) return { claimed: false, reason: 'invalid_phone' }
   try {
-    const enc = encodeURIComponent(fone)
     const res = await fetch(
-      `${url}/rest/v1/${encodeURIComponent(table)}?telefone=eq.${enc}&${FORM_STATUS_FIELD}=is.null`,
+      `${url}/rest/v1/${encodeURIComponent(table)}?${telFilter}&${FORM_STATUS_FIELD}=is.null`,
       {
         method: 'PATCH',
         headers: {
@@ -336,11 +330,12 @@ export async function tryEnsureInscricaoFormSent(env, input) {
   if (messageIsCourseCatalogRequest(userMessage)) return null
 
   const userConfirmed = messageConfirmsProceedToInscricaoForm(userMessage, historyMessages)
+  const lastAssist = lastAssistantText(historyMessages)
   const llmPromisedForm =
-    userConfirmed &&
     llmReply &&
     /\bformul[aá]rio\b/i.test(llmReply) &&
-    /\b(enviad|enviar|mandar|whatsapp|instantes|ativar|preencher)\b/i.test(llmReply)
+    /\b(enviad|enviar|mandar|enviando|whatsapp|instantes|ativar|preencher)\b/i.test(llmReply) &&
+    (userConfirmed || assistantInEnrollmentStep(lastAssist))
   const should = userConfirmed || messageAsksForFormResend(userMessage) || llmPromisedForm
   if (!should) return null
 

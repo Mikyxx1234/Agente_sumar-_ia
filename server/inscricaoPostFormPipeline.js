@@ -34,7 +34,7 @@ function getSupabaseCfg(env) {
   return {
     url: (env.SUPABASE_URL || env.VITE_SUPABASE_URL || '').replace(/\/$/, ''),
     key: env.SUPABASE_KEY || env.VITE_SUPABASE_KEY || '',
-    table: env.SUPABASE_DADOS_CLIENTE_TABLE || 'dados_cliente',
+    table: env.SUPABASE_DADOS_CLIENTE_TABLE || 'dados_cliente_sum',
   }
 }
 
@@ -369,12 +369,15 @@ export async function tryProcessInscricaoPostFormPipeline(env, input) {
     }
   }
 
+  const waitingForForm = [
+    INSCRICAO_FORM_STATUS_AGUARDANDO,
+    INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
+  ].includes(status)
+
   const trigger =
     shouldTriggerMatriculaPosForm(userMessage, status) ||
-    (schedulerTick &&
-      kommoFormDone &&
-      status !== INSCRICAO_FORM_STATUS_CONCLUIDO) ||
-    (schedulerTick && status === INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO)
+    (schedulerTick && status === INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO) ||
+    (schedulerTick && kommoFormDone && waitingForForm)
 
   if (!trigger) return null
 
