@@ -11,12 +11,13 @@
  *   - O front passa pelo proxy /api/supabase; aqui a gente fala direto com
  *     o Supabase REST usando SUPABASE_URL / SUPABASE_KEY.
  */
+import crypto from 'crypto'
+
 let counter = 0
 
 /**
- * Gera um id de execução legível. Formato: "EX-YYMMDD-HHMM-NNN".
- * Exemplo: EX-260423-1545-001.
- * Bom para grep/logs, e é o mesmo formato usado pelo Playground.
+ * Gera um id de execução legível. Formato: "EX-YYMMDD-HHMM-NNN-RRRR".
+ * O sufixo RRRR evita colisão entre réplicas no mesmo minuto.
  */
 export function generateExecutionId() {
   const now = new Date()
@@ -24,7 +25,8 @@ export function generateExecutionId() {
   const time = now.toISOString().slice(11, 16).replace(':', '')
   counter = (counter + 1) % 1000
   const seq = String(counter).padStart(3, '0')
-  return `EX-${date}-${time}-${seq}`
+  const rand = crypto.randomBytes(2).toString('hex')
+  return `EX-${date}-${time}-${seq}-${rand}`
 }
 
 function getSupabaseConfig(env) {

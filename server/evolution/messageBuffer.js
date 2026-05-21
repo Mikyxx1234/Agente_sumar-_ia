@@ -146,6 +146,15 @@ function makeRedisBackend(env) {
      * @param {number} limit
      * @returns {Promise<string[]>}
      */
+    flushClaimKey(sid) {
+      return `${prefix}flush:claim:${sid}`
+    },
+    getRedisClient() {
+      return client
+    },
+    getKeyPrefix() {
+      return prefix
+    },
     async listPendingSessionIds(limit) {
       const cap = Math.max(1, Math.min(200, Number(limit) || 50))
       const pattern = `${prefix}*`
@@ -477,4 +486,13 @@ export async function listSessionsWithPendingMessages(env, limit = 30) {
   const backend = await getBackend(env)
   if (typeof backend.listPendingSessionIds !== 'function') return []
   return backend.listPendingSessionIds(limit)
+}
+
+/** Expõe cliente Redis do buffer (claim de flush multi-réplica). */
+export async function getMessageBufferRedis(env) {
+  const backend = await getBackend(env)
+  if (backend.label !== 'redis' || typeof backend.getRedisClient !== 'function') {
+    return { client: null, keyPrefix: env.REDIS_KEY_PREFIX || DEFAULT_KEY_PREFIX }
+  }
+  return { client: backend.getRedisClient(), keyPrefix: backend.getKeyPrefix() }
 }

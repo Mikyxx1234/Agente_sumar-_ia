@@ -23,7 +23,8 @@
  * o fluxo direto sem passar pelo scheduler.
  */
 
-import { pushMessage, getMessages, clearMessages } from './messageBuffer.js'
+import { pushMessage, getMessages, clearMessages, getMessageBufferRedis } from './messageBuffer.js'
+import { tryClaimAgentFlush } from '../flushClaim.js'
 import { transcribeAudioBase64, analyzeImageBase64 } from './openaiMedia.js'
 import { fetchEvolutionMediaBase64, resolveInstanceName, describeMediaPayloadShape } from './evolutionMedia.js'
 import { runAgent } from '../ai/agentRunner.js'
@@ -468,6 +469,22 @@ async function flushSessionInner(env, sessionId, opts = {}) {
 
   const mensagemCompleta = itens.join(', ')
   const telefone = normalizeTelefone(sessionId)
+
+  const { client: redisClient, keyPrefix: redisKeyPrefix } = await getMessageBufferRedis(env).catch(
+    () => ({ client: null, keyPrefix: null }),
+  )
+  const flushClaim = await tryClaimAgentFlush(env, {
+    sessionId,
+    telefone,
+    redisClient,
+    redisKeyPrefix,
+  })
+  if (!flushClaim.claimed) {
+    console.log(
+      `[Evolution][flush] ${sessionId} BLOQUEADO — outra réplica já processa (${flushClaim.reason || 'claim_busy'}).`,
+    )
+    return { skipped: 'flush_claim_busy', reason: flushClaim.reason, pending: itens.length }
+  }
 
   if (telefone && (await isAtendimentoIaPaused(env, telefone))) {
     await clearMessages(env, sessionId)

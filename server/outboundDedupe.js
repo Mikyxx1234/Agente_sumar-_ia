@@ -15,6 +15,34 @@ function resolveDedupeSec(env) {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 180
 }
 
+function resolveCooldownSec(env) {
+  const n = Number(env.AGENT_OUTBOUND_COOLDOWN_SEC)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 45
+}
+
+function tokenOverlapRatio(a, b) {
+  const ta = new Set(
+    String(a || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9áàâãéêíóôõúç\s]/gi, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length >= 4),
+  )
+  const tb = new Set(
+    String(b || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9áàâãéêíóôõúç\s]/gi, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length >= 4),
+  )
+  if (!ta.size || !tb.size) return 0
+  let inter = 0
+  for (const w of ta) {
+    if (tb.has(w)) inter += 1
+  }
+  return inter / Math.min(ta.size, tb.size)
+}
+
 /**
  * @returns {{ skip: boolean, reason?: string }}
  */
@@ -22,21 +50,40 @@ export async function shouldSkipDuplicateOutbound(env, telefone, text) {
   const body = normalizeOutboundText(text)
   if (!body || body.length < 12) return { skip: false }
 
-  const rows = await fetchRecentChatRows(env, telefone, 8)
+  const rows = await fetchRecentChatRows(env, telefone, 10)
   if (!rows.length) return { skip: false }
 
-  const cutoff = Date.now() - resolveDedupeSec(env) * 1000
+  const dedupeCutoff = Date.now() - resolveDedupeSec(env) * 1000
+  const cooldownCutoff = Date.now() - resolveCooldownSec(env) * 1000
+  let botsInCooldownWindow = 0
+
   for (const row of rows) {
     const bot = normalizeOutboundText(row?.bot_message)
     if (!bot) continue
     const at = Date.parse(row?.created_at)
-    if (Number.isNaN(at) || at < cutoff) continue
+    if (Number.isNaN(at)) continue
+
+    if (at >= cooldownCutoff) botsInCooldownWindow += 1
+
+    if (at < dedupeCutoff) continue
+
     if (bot === body) {
       return { skip: true, reason: 'identical_recent_bot_message' }
     }
     if (body.length >= 40 && bot.length >= 40 && bot.slice(0, 40) === body.slice(0, 40)) {
       return { skip: true, reason: 'prefix_match_recent_bot_message' }
     }
+    if (body.length >= 80 && bot.length >= 80 && tokenOverlapRatio(body, bot) >= 0.55) {
+      return { skip: true, reason: 'similar_recent_bot_message' }
+    }
+    if (at >= cooldownCutoff && body.length >= 60 && tokenOverlapRatio(body, bot) >= 0.42) {
+      return { skip: true, reason: 'similar_outbound_cooldown' }
+    }
   }
+
+  if (botsInCooldownWindow >= 2) {
+    return { skip: true, reason: 'multiple_recent_bot_replies' }
+  }
+
   return { skip: false }
 }
