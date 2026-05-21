@@ -87,7 +87,7 @@ async function claimMatriculaPosFormExclusive(env, telefone) {
           return { claimed: true, reason: 'fallback_update_after_patch_400' }
         }
         console.warn(
-          `[inscricaoPostForm] claim patch_400 telefone=${fone} — confira coluna ${FORM_STATUS_FIELD} em ${table}. ${errBody.slice(0, 200)}`,
+          `[inscricaoPostForm] claim patch_400 — confira coluna ${FORM_STATUS_FIELD} em ${table}. ${errBody.slice(0, 200)}`,
         )
       }
       return { claimed: false, reason: `patch_${res.status}`, detail: errBody.slice(0, 200) }
@@ -95,25 +95,6 @@ async function claimMatriculaPosFormExclusive(env, telefone) {
     const rows = await res.json()
     if (Array.isArray(rows) && rows.length > 0) {
       return { claimed: true, reason: 'claimed_waiting_status' }
-    }
-    const resNull = await fetch(
-      `${url}/rest/v1/${encodeURIComponent(table)}?${telFilter}&${FORM_STATUS_FIELD}=is.null`,
-      {
-        method: 'PATCH',
-        headers: {
-          apikey: key,
-          Authorization: `Bearer ${key}`,
-          'Content-Type': 'application/json',
-          Prefer: 'return=representation',
-        },
-        body: JSON.stringify({ [FORM_STATUS_FIELD]: INSCRICAO_FORM_STATUS_CONCLUIDO }),
-      },
-    )
-    if (resNull.ok) {
-      const rowsNull = await resNull.json()
-      if (Array.isArray(rowsNull) && rowsNull.length > 0) {
-        return { claimed: true, reason: 'claimed_null_status' }
-      }
     }
     const row = await getClienteRow(env, telefone)
     const st = row?.[FORM_STATUS_FIELD] ?? null
@@ -223,21 +204,10 @@ async function stepMatriculaPosForm(env, ctx) {
 
   const claim = await claimMatriculaPosFormExclusive(env, telefone)
   if (!claim.claimed) {
-    if (claim.reason === 'already_completed') {
-      return { handled: false, reason: 'matricula_already_claimed' }
-    }
-    const proceedWithoutClaim =
-      kommoFormDetected &&
-      (claim.reason === 'no_waiting_row' || String(claim.reason || '').startsWith('patch_'))
-    if (!proceedWithoutClaim) {
-      console.log(
-        `[inscricaoPostForm] lead=${idLead} matricula_pos_form skip claim=${claim.reason} status=${claim.status || 'n/a'}`,
-      )
-      return { handled: false, reason: 'matricula_already_claimed' }
-    }
-    console.warn(
-      `[inscricaoPostForm] lead=${idLead} matricula_pos_form sem claim Supabase (${claim.reason}) — form detectado no Kommo, disparando salesbot`,
+    console.log(
+      `[inscricaoPostForm] lead=${idLead} matricula_pos_form skip claim=${claim.reason} status=${claim.status || 'n/a'}`,
     )
+    return { handled: false, reason: claim.reason || 'matricula_claim_failed' }
   }
 
   const pauseRes = await pauseAtendimentoIa(env, telefone)
@@ -246,6 +216,7 @@ async function stepMatriculaPosForm(env, ctx) {
   let reply = buildInscricaoFormCompleteReply({ pushName, ok: false })
   let matriculaOk = false
   let ctxForm = 'completed'
+  let skipSchedulerWhatsapp = false
 
   if (isSumareCaptacaoEnabled(env)) {
     const cap = await runMatriculaCaptacaoAfterForm(env, {
@@ -267,6 +238,7 @@ async function stepMatriculaPosForm(env, ctx) {
       matriculaOk = true
       ctxForm = INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE
       reply = cap.reply || reply
+      if (cap.whatsappOk) skipSchedulerWhatsapp = true
       toolCalls.push({
         tool: 'sumare_captacao_contrato',
         args: { telefone, id_lead: idLead, candidato: cap.candidatoId },
@@ -291,6 +263,7 @@ async function stepMatriculaPosForm(env, ctx) {
       executionId,
       note: `Form Sumar recebido — salesbot matrícula ${MATRICULA_BOT_ID_DEFAULT} (agente IA) — ${executionId || ''}`.trim(),
     })
+    if (salesbotRes.ok) skipSchedulerWhatsapp = true
     matriculaOk = Boolean(salesbotRes.ok && !salesbotRes.skipped)
     steps.push({
       type: 'inscricao_form_complete',
@@ -314,6 +287,11 @@ async function stepMatriculaPosForm(env, ctx) {
     reply = buildInscricaoFormCompleteReply({ pushName, ok: false })
   }
 
+  if (ctxForm !== INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE) {
+    await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_CONCLUIDO).catch(() => {})
+    ctxForm = INSCRICAO_FORM_STATUS_CONCLUIDO
+  }
+
   await updateDadosCliente(env, {
     telefone,
     fields: { inscricao_form_recebido_at: new Date().toISOString() },
@@ -333,6 +311,7 @@ async function stepMatriculaPosForm(env, ctx) {
         iaPaused: true,
         sumareCaptacao: isSumareCaptacaoEnabled(env),
         contratoLinkSent: matriculaOk && isSumareCaptacaoEnabled(env),
+        skipSchedulerWhatsapp,
       },
     }),
   }
