@@ -85,9 +85,13 @@ out.captacao = {
 
 if (supUrl && supKey) {
   const tel = String(out.kommo.phones || '').replace(/\D/g, '')
-  const qLead = `${supUrl}/rest/v1/${encodeURIComponent(table)}?id_lead=eq.${leadId}&select=*&limit=1`
-  const r1 = await fetch(qLead, { headers: { apikey: supKey, Authorization: `Bearer ${supKey}` } })
-  out.dadosCliente = r1.ok ? (await r1.json())?.[0] || null : { error: r1.status }
+  if (tel) {
+    const qTel = `${supUrl}/rest/v1/${encodeURIComponent(table)}?or=(telefone.eq.${encodeURIComponent(tel)},telefone.eq.${encodeURIComponent(tel + '@s.whatsapp.net')})&select=telefone,inscricao_form_status,inscricao_form_recebido_at,atendimento_ia&limit=1`
+    const r1 = await fetch(qTel, { headers: { apikey: supKey, Authorization: `Bearer ${supKey}` } })
+    out.dadosCliente = r1.ok ? (await r1.json())?.[0] || null : { error: r1.status }
+  } else {
+    out.dadosCliente = { error: 'no_phone_on_lead' }
+  }
 
   if (tel) {
     const qChat = `${supUrl}/rest/v1/${encodeURIComponent(chatTable)}?telefone=eq.${tel}&order=created_at.desc&limit=15&select=role,content,created_at`

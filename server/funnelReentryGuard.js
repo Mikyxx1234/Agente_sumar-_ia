@@ -7,17 +7,14 @@
 import { clearMessages } from './evolution/messageBuffer.js'
 import { fetchDadosClienteByTelefone } from './dadosClienteStore.js'
 import { matriculaPosFormAlreadyProcessed } from '../libShared/inscricaoFormHeuristics.js'
+import { DADOS_CLIENTE_INSCRICAO_SELECT } from './dadosClienteInscricaoFields.js'
 
 /**
  * @returns {Promise<{ cleared: boolean, reason?: string }>}
  */
 export async function clearStaleBufferIfMatriculaDone(env, { telefone, sessionId }) {
   if (!telefone || !sessionId) return { cleared: false, reason: 'missing_session' }
-  const row = await fetchDadosClienteByTelefone(
-    env,
-    telefone,
-    'inscricao_form_status,inscricao_form_recebido_at,captacao_contrato_link_at,captacao_candidato_id,captacao_contrato_link',
-  )
+  const row = await fetchDadosClienteByTelefone(env, telefone, DADOS_CLIENTE_INSCRICAO_SELECT)
   if (!matriculaPosFormAlreadyProcessed(row)) {
     return { cleared: false, reason: 'matricula_not_done' }
   }

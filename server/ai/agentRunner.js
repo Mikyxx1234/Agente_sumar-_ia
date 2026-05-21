@@ -41,6 +41,7 @@ import {
   matriculaPosFormAlreadyProcessed,
 } from '../../libShared/inscricaoFormHeuristics.js'
 import { fetchDadosClienteByTelefone } from '../dadosClienteStore.js'
+import { DADOS_CLIENTE_INSCRICAO_SELECT } from '../dadosClienteInscricaoFields.js'
 import {
   conversationHasActiveTopic,
   extractDiscussedCourseFromHistory,
@@ -283,11 +284,7 @@ export async function runAgent(env, input) {
     // direto para "cadastro validado" em "sim"/"oi" com notas antigas no Kommo.
     let matriculaJaProcessada = false
     try {
-      const inscRow = await fetchDadosClienteByTelefone(
-        env,
-        telefone,
-        'inscricao_form_status,inscricao_form_recebido_at,captacao_contrato_link_at,captacao_candidato_id,captacao_contrato_link',
-      )
+      const inscRow = await fetchDadosClienteByTelefone(env, telefone, DADOS_CLIENTE_INSCRICAO_SELECT)
       matriculaJaProcessada = matriculaPosFormAlreadyProcessed(inscRow)
     } catch {
       /* segue sem bloquear */

@@ -238,7 +238,10 @@ function isOutboundNoteType(noteType) {
 const AGENT_OUTBOUND_SUFFIX = /\s-\sEX-\d{6}-\d{4}-\d{3}\s*$/
 
 function isAgentOutboundEcho(text) {
-  return AGENT_OUTBOUND_SUFFIX.test(String(text || ''))
+  const raw = String(text || '')
+  if (AGENT_OUTBOUND_SUFFIX.test(raw)) return true
+  const stripped = stripExecutionSuffix(raw).toLowerCase()
+  return stripped.startsWith('obrigado! registramos o formulário. um consultor da faculdade sumaré')
 }
 
 /**
@@ -311,7 +314,7 @@ function classifyInboundNote(n, env, contactDigits, types) {
   if (!rawText) {
     return { kind: 'skip', reason: 'empty', advance: true, nid }
   }
-  if (String(n.note_type || '').toLowerCase() === 'common' && isAgentOutboundEcho(rawText)) {
+  if (isAgentOutboundEcho(rawText)) {
     return { kind: 'skip', reason: 'echo', advance: true, nid }
   }
   if (noteTypeMayCarryIntegrationSummary(n.note_type) && isLikelyCrmSummaryCommonNote(rawText, env)) {

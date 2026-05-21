@@ -4,6 +4,7 @@
 
 import { fetchRecentChatRows } from './historyStore.js'
 import { normalizeTelefone } from './dadosClienteStore.js'
+import { isPostFormRegistradoBoilerplate } from './dadosClienteInscricaoFields.js'
 
 /** Evita dois sendMessageWithNote simultâneos no mesmo processo. */
 const inflightOutbound = new Map()
@@ -100,6 +101,14 @@ export async function shouldSkipDuplicateOutbound(env, telefone, text) {
     if (at >= cooldownCutoff) botsInCooldownWindow += 1
 
     if (at < dedupeCutoff) continue
+
+    if (
+      isPostFormRegistradoBoilerplate(body) &&
+      isPostFormRegistradoBoilerplate(bot) &&
+      at >= dedupeCutoff
+    ) {
+      return releaseIfSkip({ skip: true, reason: 'post_form_boilerplate_recent' })
+    }
 
     if (bot === body) {
       return releaseIfSkip({ skip: true, reason: 'identical_recent_bot_message' })

@@ -64,8 +64,18 @@ async function persistCaptacaoResult(env, telefone, { candidatoId, contractUrl }
     captacao_contrato_link: contractUrl,
     captacao_contrato_link_at: new Date().toISOString(),
     inscricao_form_status: INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
+    inscricao_form_recebido_at: new Date().toISOString(),
   }
-  const upd = await updateDadosCliente(env, { telefone, fields })
+  let upd = await updateDadosCliente(env, { telefone, fields })
+  if (!upd.ok && upd.status === 400) {
+    upd = await updateDadosCliente(env, {
+      telefone,
+      fields: {
+        inscricao_form_status: INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
+        inscricao_form_recebido_at: new Date().toISOString(),
+      },
+    })
+  }
   const fone = normalizeTelefone(telefone)
   if (fone) _linkSentMemory.set(fone, Date.now())
   return upd

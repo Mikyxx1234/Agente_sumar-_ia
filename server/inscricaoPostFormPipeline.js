@@ -23,6 +23,8 @@ import {
   fetchDadosClienteByTelefone,
   dadosClienteTelefoneOrFilter,
 } from './dadosClienteStore.js'
+import { DADOS_CLIENTE_INSCRICAO_SELECT } from './dadosClienteInscricaoFields.js'
+import { tryClaimPostFormSend, releasePostFormSendClaim } from './postFormSendGuard.js'
 import { isSumareCaptacaoEnabled } from './sumareCaptacaoClient.js'
 import {
   runMatriculaCaptacaoAfterForm,
@@ -41,11 +43,7 @@ function getSupabaseCfg(env) {
 }
 
 async function getClienteRow(env, telefone) {
-  return fetchDadosClienteByTelefone(
-    env,
-    telefone,
-    `${FORM_STATUS_FIELD},id_lead,inscricao_form_recebido_at,captacao_contrato_link_at,captacao_candidato_id,captacao_contrato_link`,
-  )
+  return fetchDadosClienteByTelefone(env, telefone, DADOS_CLIENTE_INSCRICAO_SELECT)
 }
 
 async function setFormStatus(env, telefone, status) {
@@ -64,7 +62,17 @@ async function claimMatriculaPosFormExclusive(env, telefone) {
     INSCRICAO_FORM_STATUS_AGUARDANDO,
     INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
   ].join(',')
+  const recebidoAt = new Date().toISOString()
   try {
+    const existing = await getClienteRow(env, telefone)
+    if (matriculaPosFormAlreadyProcessed(existing)) {
+      return {
+        claimed: false,
+        reason: 'matricula_already_processed',
+        status: existing?.[FORM_STATUS_FIELD],
+      }
+    }
+
     const res = await fetch(
       `${url}/rest/v1/${encodeURIComponent(table)}?${telFilter}&${FORM_STATUS_FIELD}=in.(${waiting})&inscricao_form_recebido_at=is.null`,
       {
@@ -75,7 +83,10 @@ async function claimMatriculaPosFormExclusive(env, telefone) {
           'Content-Type': 'application/json',
           Prefer: 'return=representation',
         },
-        body: JSON.stringify({ [FORM_STATUS_FIELD]: INSCRICAO_FORM_STATUS_CONCLUIDO }),
+        body: JSON.stringify({
+          [FORM_STATUS_FIELD]: INSCRICAO_FORM_STATUS_CONCLUIDO,
+          inscricao_form_recebido_at: recebidoAt,
+        }),
       },
     )
     if (!res.ok) {
@@ -83,7 +94,10 @@ async function claimMatriculaPosFormExclusive(env, telefone) {
       if (res.status === 400) {
         const fallback = await updateDadosCliente(env, {
           telefone,
-          fields: { [FORM_STATUS_FIELD]: INSCRICAO_FORM_STATUS_CONCLUIDO },
+          fields: {
+            [FORM_STATUS_FIELD]: INSCRICAO_FORM_STATUS_CONCLUIDO,
+            inscricao_form_recebido_at: recebidoAt,
+          },
         })
         if (fallback.ok && fallback.matched) {
           return { claimed: true, reason: 'fallback_update_after_patch_400' }
@@ -207,8 +221,14 @@ export async function detectFormSumarRecebidoNoKommo(env, leadId, options = {}) 
 async function stepMatriculaPosForm(env, ctx) {
   const { telefone, idLead, executionId, model, pushName, t0, kommoFormDetected } = ctx
 
+  if (!tryClaimPostFormSend(telefone, env)) {
+    console.log(`[inscricaoPostForm] lead=${idLead} skip post_form_send_guard (memoria)`)
+    return { handled: false, reason: 'post_form_send_guard' }
+  }
+
   const claim = await claimMatriculaPosFormExclusive(env, telefone)
   if (!claim.claimed) {
+    releasePostFormSendClaim(telefone)
     console.log(
       `[inscricaoPostForm] lead=${idLead} matricula_pos_form skip claim=${claim.reason} status=${claim.status || 'n/a'}`,
     )
@@ -309,10 +329,7 @@ async function stepMatriculaPosForm(env, ctx) {
 
   await updateDadosCliente(env, {
     telefone,
-    fields: {
-      inscricao_form_recebido_at: new Date().toISOString(),
-      id_lead: idLead,
-    },
+    fields: { inscricao_form_recebido_at: new Date().toISOString() },
   }).catch(() => {})
 
   return {
