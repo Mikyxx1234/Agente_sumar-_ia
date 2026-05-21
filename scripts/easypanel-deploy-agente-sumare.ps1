@@ -49,6 +49,8 @@ $envPairs = @(
   @('AGENT_OUTBOUND_COOLDOWN_SEC', '45'),
   @('AGENT_REPLY_COOLDOWN_SEC', '60'),
   @('KOMMO_SCHEDULER_DEBOUNCE_SEC', '8'),
+  @('POST_FORM_SEND_REQUIRE_REDIS', 'true'),
+  @('POST_FORM_SEND_GUARD_SEC', '300'),
   @('SUMARE_CAPTACAO_ENABLED', 'true'),
   @('SUMARE_CAPTACAO_BASE_URL', 'https://api-captacao.sumare.edu.br'),
   @('SUMARE_CONTRATO_PORTAL_URL', 'https://sumare.edu.br/vem-pra-sumare/vestibular/contrato'),

@@ -42,6 +42,7 @@ import {
 } from '../../libShared/inscricaoFormHeuristics.js'
 import { fetchDadosClienteByTelefone } from '../dadosClienteStore.js'
 import { DADOS_CLIENTE_INSCRICAO_SELECT } from '../dadosClienteInscricaoFields.js'
+import { leadHasPostFormRegistradoNote } from '../postFormSendGuard.js'
 import {
   conversationHasActiveTopic,
   extractDiscussedCourseFromHistory,
@@ -284,8 +285,13 @@ export async function runAgent(env, input) {
     // direto para "cadastro validado" em "sim"/"oi" com notas antigas no Kommo.
     let matriculaJaProcessada = false
     try {
-      const inscRow = await fetchDadosClienteByTelefone(env, telefone, DADOS_CLIENTE_INSCRICAO_SELECT)
-      matriculaJaProcessada = matriculaPosFormAlreadyProcessed(inscRow)
+      if (leadId != null && (await leadHasPostFormRegistradoNote(env, leadId))) {
+        matriculaJaProcessada = true
+      }
+      if (!matriculaJaProcessada) {
+        const inscRow = await fetchDadosClienteByTelefone(env, telefone, DADOS_CLIENTE_INSCRICAO_SELECT)
+        matriculaJaProcessada = matriculaPosFormAlreadyProcessed(inscRow)
+      }
     } catch {
       /* segue sem bloquear */
     }

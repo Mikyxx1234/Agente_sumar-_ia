@@ -82,6 +82,7 @@ import {
   clearStaleBufferIfMatriculaDone,
   isMatriculaPosFormDoneForTelefone,
 } from './funnelReentryGuard.js'
+import { leadHasPostFormRegistradoNote } from './postFormSendGuard.js'
 import { clearMessages } from './evolution/messageBuffer.js'
 
 // Defaults agressivos pra reduzir latência ponta-a-ponta.
@@ -424,7 +425,10 @@ export async function runSchedulerTick(env) {
       }
 
       try {
-        if (await isMatriculaPosFormDoneForTelefone(env, phone)) {
+        const matriculaDone =
+          (await isMatriculaPosFormDoneForTelefone(env, phone)) ||
+          (await leadHasPostFormRegistradoNote(env, Number(lead.id)))
+        if (matriculaDone) {
           const cleared = await clearMessages(env, sessionId)
           if (cleared > 0 || (messages && messages.length > 0)) {
             console.log(

@@ -1,10 +1,10 @@
 /**
- * Evita reenviar "Obrigado! Registramos o formulário..." — lock Redis + claim
- * atômico por id da linha (evita 2 PATCHs em linhas duplicadas no Supabase).
+ * Evita reenviar "Obrigado! Registramos o formulário..." — Supabase + Redis + notas Kommo.
  */
 
 import { fetchDadosClienteByTelefone, normalizeTelefone } from './dadosClienteStore.js'
 import { getMessageBufferRedis } from './evolution/messageBuffer.js'
+import { listLeadNotes } from './kommoClient.js'
 import { isPostFormRegistradoBoilerplate } from './dadosClienteInscricaoFields.js'
 import {
   INSCRICAO_FORM_STATUS_CONCLUIDO,
@@ -14,7 +14,6 @@ import {
 const FORM_STATUS_FIELD = 'inscricao_form_status'
 const CLIENTE_POST_FORM_SELECT = 'id,telefone,inscricao_form_status,inscricao_form_recebido_at'
 
-/** Lock síncrono no processo (antes do primeiro await). */
 const syncInflight = new Map()
 
 function getSupabaseCfg(env) {
@@ -30,7 +29,12 @@ function guardTtlSec(env) {
   return Number.isFinite(sec) && sec > 0 ? Math.floor(sec) : 300
 }
 
-function tryReservePostFormSendSync(telefone) {
+function requireRedisLock(env) {
+  const raw = String(env.POST_FORM_SEND_REQUIRE_REDIS ?? 'true').trim().toLowerCase()
+  return !['false', '0', 'no', 'off'].includes(raw)
+}
+
+export function tryReservePostFormSendSync(telefone) {
   const key = normalizeTelefone(telefone)
   if (!key) return false
   const now = Date.now()
@@ -40,9 +44,31 @@ function tryReservePostFormSendSync(telefone) {
   return true
 }
 
-function releasePostFormSendSync(telefone) {
+export function releasePostFormSendSync(telefone) {
   const key = normalizeTelefone(telefone)
   if (key) syncInflight.delete(key)
+}
+
+function noteText(n) {
+  return [n?.params?.text, n?.params?.message, n?.text].filter(Boolean).join(' ').trim()
+}
+
+/**
+ * Já existe nota no Kommo com o texto padrão (independente do Supabase).
+ */
+export async function leadHasPostFormRegistradoNote(env, leadId) {
+  const id = Number(leadId)
+  if (!Number.isFinite(id) || id <= 0) return false
+  try {
+    const notesRes = await listLeadNotes(env, id, { limit: 50, order: 'desc' })
+    if (!notesRes.ok || !Array.isArray(notesRes.notes)) return false
+    for (const n of notesRes.notes) {
+      if (isPostFormRegistradoBoilerplate(noteText(n))) return true
+    }
+  } catch (err) {
+    console.warn(`[postFormSendGuard] leadHasPostFormRegistradoNote lead=${id}:`, err.message)
+  }
+  return false
 }
 
 async function tryRedisPostFormLock(env, telefone) {
@@ -50,29 +76,36 @@ async function tryRedisPostFormLock(env, telefone) {
   if (!digits) return { ok: false, reason: 'invalid_phone' }
   try {
     const { client, keyPrefix } = await getMessageBufferRedis(env)
-    if (!client) return { ok: true, reason: 'no_redis' }
-    const key = `${keyPrefix || 'wa:msg:'}postform:send:${digits}`
+    if (!client) {
+      return requireRedisLock(env)
+        ? { ok: false, reason: 'redis_required_missing' }
+        : { ok: true, reason: 'no_redis' }
+    }
+    const key = `${keyPrefix || 'wa:msg:'}postform:send:v2:${digits}`
     const ttl = guardTtlSec(env)
     const res = await client.set(key, String(Date.now()), 'EX', ttl, 'NX')
     if (res === 'OK') return { ok: true, reason: 'redis_nx' }
     return { ok: false, reason: 'redis_busy' }
   } catch (err) {
     console.warn('[postFormSendGuard] redis lock falhou:', err.message)
-    return { ok: true, reason: 'redis_error_allow' }
+    return requireRedisLock(env)
+      ? { ok: false, reason: 'redis_error' }
+      : { ok: true, reason: 'redis_error_allow' }
   }
 }
 
 /**
- * Claim distribuído: só quem grava `inscricao_form_recebido_at` (ainda null) na linha do cliente pode enviar.
- * @returns {Promise<{ allow: boolean, reason: string }>}
+ * @param {{ holdSyncLock?: boolean }} [opts] — caller libera sync após envio com holdSyncLock=true
  */
-export async function tryClaimPostFormWhatsappSend(env, telefone) {
+export async function tryClaimPostFormWhatsappSend(env, telefone, opts = {}) {
   const digits = normalizeTelefone(telefone)
   if (!digits) return { allow: false, reason: 'invalid_phone' }
 
   if (!tryReservePostFormSendSync(telefone)) {
     return { allow: false, reason: 'sync_inflight_busy' }
   }
+
+  const holdSync = Boolean(opts.holdSyncLock)
 
   try {
     const row = await fetchDadosClienteByTelefone(env, telefone, CLIENTE_POST_FORM_SELECT)
@@ -122,18 +155,16 @@ export async function tryClaimPostFormWhatsappSend(env, telefone) {
     if (Array.isArray(rows) && rows.length === 1) {
       return { allow: true, reason: 'claimed_send_slot' }
     }
-    if (Array.isArray(rows) && rows.length === 0) {
-      const again = await fetchDadosClienteByTelefone(env, telefone, CLIENTE_POST_FORM_SELECT)
-      if (matriculaPosFormAlreadyProcessed(again)) {
-        return { allow: false, reason: 'send_slot_taken_after_race' }
-      }
+    const again = await fetchDadosClienteByTelefone(env, telefone, CLIENTE_POST_FORM_SELECT)
+    if (matriculaPosFormAlreadyProcessed(again)) {
+      return { allow: false, reason: 'send_slot_taken_after_race' }
     }
     return { allow: false, reason: 'send_slot_taken' }
   } catch (err) {
     console.warn(`[postFormSendGuard] claim_send error telefone=${digits}:`, err.message)
     return { allow: false, reason: 'claim_error' }
   } finally {
-    releasePostFormSendSync(telefone)
+    if (!holdSync) releasePostFormSendSync(telefone)
   }
 }
 

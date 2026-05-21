@@ -26,6 +26,8 @@ import { shouldSkipDuplicateOutbound, releaseOutboundSync } from './outboundDedu
 import {
   isPostFormOutboundText,
   tryClaimPostFormWhatsappSend,
+  leadHasPostFormRegistradoNote,
+  releasePostFormSendSync,
 } from './postFormSendGuard.js'
 
 /**
@@ -219,9 +221,24 @@ export async function sendMessageWithNote(env, { telefone, text, leadId, executi
   if (!parts.length) {
     return { ok: false, code: 'EMPTY_BODY', error: 'texto vazio', total: 0, sent: 0, steps: [] }
   }
+  let holdPostFormSync = false
   try {
     if (isPostFormOutboundText(text)) {
-      const postGate = await tryClaimPostFormWhatsappSend(env, telefone)
+      if (leadId != null && leadId !== '' && (await leadHasPostFormRegistradoNote(env, leadId))) {
+        console.log(
+          `[WhatsApp] post_form_reply_blocked to=${String(telefone || '').slice(0, 20)} lead=${leadId} reason=kommo_note_already_exists`,
+        )
+        return {
+          ok: true,
+          skipped: true,
+          deduped: true,
+          reason: 'kommo_note_already_exists',
+          total: parts.length,
+          sent: 0,
+          steps: [{ step: 'post_form_guard', skipped: true, reason: 'kommo_note_already_exists' }],
+        }
+      }
+      const postGate = await tryClaimPostFormWhatsappSend(env, telefone, { holdSyncLock: true })
       if (!postGate.allow) {
         console.log(
           `[WhatsApp] post_form_reply_blocked to=${String(telefone || '').slice(0, 20)} reason=${postGate.reason}`,
@@ -236,6 +253,7 @@ export async function sendMessageWithNote(env, { telefone, text, leadId, executi
           steps: [{ step: 'post_form_guard', skipped: true, reason: postGate.reason }],
         }
       }
+      holdPostFormSync = true
     }
 
     const dedupe = await shouldSkipDuplicateOutbound(env, telefone, text)
@@ -288,6 +306,7 @@ export async function sendMessageWithNote(env, { telefone, text, leadId, executi
 
     return { ok: true, executionId: execId, total: parts.length, sent: parts.length, steps }
   } finally {
+    if (holdPostFormSync) releasePostFormSendSync(telefone)
     releaseOutboundSync(telefone)
   }
 }

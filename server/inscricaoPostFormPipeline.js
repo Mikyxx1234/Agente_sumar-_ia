@@ -24,6 +24,7 @@ import {
 } from './dadosClienteStore.js'
 import { DADOS_CLIENTE_INSCRICAO_SELECT } from './dadosClienteInscricaoFields.js'
 import { isSumareCaptacaoEnabled } from './sumareCaptacaoClient.js'
+import { leadHasPostFormRegistradoNote } from './postFormSendGuard.js'
 import {
   runMatriculaCaptacaoAfterForm,
   shouldRunSalesbot49813,
@@ -202,6 +203,11 @@ export async function detectFormSumarRecebidoNoKommo(env, leadId, options = {}) 
 async function stepMatriculaPosForm(env, ctx) {
   const { telefone, idLead, executionId, model, pushName, t0, kommoFormDetected } = ctx
 
+  if (idLead != null && (await leadHasPostFormRegistradoNote(env, idLead))) {
+    console.log(`[inscricaoPostForm] lead=${idLead} skip matricula_pos_form (nota Kommo já existe)`)
+    return { handled: false, reason: 'kommo_post_form_note_exists' }
+  }
+
   const claim = await claimMatriculaPosFormExclusive(env, telefone)
   if (!claim.claimed) {
     console.log(
@@ -350,6 +356,11 @@ export async function tryProcessInscricaoPostFormPipeline(env, input) {
   if (status === INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO) return null
 
   const idLead = await resolveLeadId(env, telefone, leadIdHint)
+
+  if (idLead != null && (await leadHasPostFormRegistradoNote(env, idLead))) {
+    console.log(`[inscricaoPostForm] lead=${idLead} skip pipeline (nota pós-form já no Kommo)`)
+    return null
+  }
 
   let kommoFormDone = false
   let detectSource = ''
