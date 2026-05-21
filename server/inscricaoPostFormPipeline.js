@@ -210,8 +210,7 @@ async function stepMatriculaPosForm(env, ctx) {
     return { handled: false, reason: claim.reason || 'matricula_claim_failed' }
   }
 
-  const pauseRes = await pauseAtendimentoIa(env, telefone)
-  const steps = [{ type: 'ia_paused', ok: pauseRes.ok }]
+  const steps = []
   const toolCalls = []
   let reply = buildInscricaoFormCompleteReply({ pushName, ok: false })
   let matriculaOk = false
@@ -287,14 +286,28 @@ async function stepMatriculaPosForm(env, ctx) {
     reply = buildInscricaoFormCompleteReply({ pushName, ok: false })
   }
 
-  if (ctxForm !== INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE) {
-    await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_CONCLUIDO).catch(() => {})
-    ctxForm = INSCRICAO_FORM_STATUS_CONCLUIDO
+  if (ctxForm === INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE) {
+    steps.push({
+      type: 'ia_paused',
+      ok: false,
+      skipped: true,
+      reason: 'aguardando_aceite_contrato_ia_ativa',
+    })
+  } else {
+    const pauseRes = await pauseAtendimentoIa(env, telefone)
+    steps.unshift({ type: 'ia_paused', ok: pauseRes.ok })
+    if (ctxForm !== INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE) {
+      await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_CONCLUIDO).catch(() => {})
+      ctxForm = INSCRICAO_FORM_STATUS_CONCLUIDO
+    }
   }
 
   await updateDadosCliente(env, {
     telefone,
-    fields: { inscricao_form_recebido_at: new Date().toISOString() },
+    fields: {
+      inscricao_form_recebido_at: new Date().toISOString(),
+      id_lead: idLead,
+    },
   }).catch(() => {})
 
   return {
@@ -308,7 +321,7 @@ async function stepMatriculaPosForm(env, ctx) {
       toolCalls,
       ctxSnapshot: {
         inscricaoForm: ctxForm,
-        iaPaused: true,
+        iaPaused: ctxForm !== INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
         sumareCaptacao: isSumareCaptacaoEnabled(env),
         contratoLinkSent: matriculaOk && isSumareCaptacaoEnabled(env),
         skipSchedulerWhatsapp,

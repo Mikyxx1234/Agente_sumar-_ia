@@ -7,8 +7,8 @@ import { listLeadCustomFields } from './kommoClient.js'
 const KOMMO_FIELD_NOME = 304628
 
 const FIELD_ALIASES = {
-  email: ['e-mail', 'email', 'e_mail'],
-  cpf: ['cpf', 'documento', 'cnpj/cpf'],
+  email: ['e-mail', 'email', 'e_mail', 'sum_email', 'sum e-mail', 'sum e mail'],
+  cpf: ['cpf', 'documento', 'cnpj/cpf', 'sum_cpf', 'sum cpf'],
   cursoInscricao: [
     'curso inscrição',
     'curso da inscrição',
@@ -21,7 +21,15 @@ const FIELD_ALIASES = {
   ],
   tipoInscricao: ['tipo inscrição', 'tipo de ingresso', 'tipo_inscricao', 'tipo de inscrição'],
   poloInscricao: ['polo inscrição', 'polo da inscrição', 'polo_inscricao'],
-  dataNasc: ['data nascimento', 'data de nascimento', 'data_nasc', 'nascimento', 'dt nasc'],
+  dataNasc: [
+    'data nascimento',
+    'data de nascimento',
+    'data_nasc',
+    'nascimento',
+    'dt nasc',
+    'sum_data nascimento',
+    'sum data nascimento',
+  ],
   sexo: ['sexo', 'gênero', 'genero'],
   unidade: ['unidade', 'polo', 'campus', 'unidade inscrição'],
   turno: ['turno', 'modalidade'],
@@ -95,7 +103,12 @@ export async function fetchLeadFormSnapshot(env, leadId) {
   const contact = lead._embedded?.contacts?.[0]
 
   const nomeLead = String(lead.name || '').trim()
-  const nomeField = pickCustomFieldValue(custom, KOMMO_FIELD_NOME) || pickCustomFieldValue(contact?.custom_fields_values, KOMMO_FIELD_NOME)
+  const nomeSum = pickByAliases(custom, fieldsByName, ['sum_nome', 'sum nome', 'nome completo'])
+  const nomeField =
+    (!isCampoAusente(nomeSum) ? nomeSum : '') ||
+    pickCustomFieldValue(custom, KOMMO_FIELD_NOME) ||
+    pickCustomFieldValue(contact?.custom_fields_values, KOMMO_FIELD_NOME) ||
+    pickByAliases(contact?.custom_fields_values, fieldsByName, ['sum_nome', 'sum nome'])
   const email =
     pickByAliases(custom, fieldsByName, FIELD_ALIASES.email) ||
     pickByAliases(contact?.custom_fields_values, fieldsByName, FIELD_ALIASES.email)

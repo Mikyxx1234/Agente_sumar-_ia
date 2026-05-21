@@ -9,6 +9,8 @@ export const INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO = 'aguardando_distrib
 export const INSCRICAO_FORM_STATUS_CONCLUIDO = 'form_sumar_concluido'
 /** Inscrição na API Sumaré feita; aguardando aceite do contrato no portal. */
 export const INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE = 'aguardando_aceite_contrato'
+/** Comprovante de pagamento recebido — consultor segue o atendimento. */
+export const INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO = 'comprovante_pagamento_recebido'
 
 /** Lead cobra o formulário que ainda não chegou. */
 export function messageAsksForFormResend(text) {
@@ -180,10 +182,16 @@ export function messageLooksLikeFormFollowUp(text, options = {}) {
   return false
 }
 
+/** Eco de mensagem enviada pelo agente (sufixo EX-… nas notas Kommo). */
+export function messageLooksLikeAgentOutboundEcho(text) {
+  return /\s-\s+EX-\d{6}-\d{4}-\d{3}/i.test(String(text || ''))
+}
+
 /** Resposta do WhatsApp Flow / formulário "Form Sumar" após preenchimento. */
 export function messageLooksLikeFormSumarResponse(text) {
   const raw = String(text || '').trim()
   if (!raw || raw.length < 4) return false
+  if (messageLooksLikeAgentOutboundEcho(raw)) return false
   const t = raw.toLowerCase()
 
   if (/\[formulario\s+sumar\]/i.test(raw)) return true
@@ -199,7 +207,12 @@ export function messageLooksLikeFormSumarResponse(text) {
   ) {
     return true
   }
-  if (/\bformul[aá]rio\b/i.test(t) && /\b(preenchido|enviado|respondido|conclu[ií]do)\b/i.test(t)) return true
+  if (/\bformul[aá]rio\b/i.test(t) && /\b(preenchido|enviado|respondido|conclu[ií]do)\b/i.test(t)) {
+    if (/\b(recebi|obrigad[oa]|registramos|validamos|cadastro)\b/i.test(t) && !/\b(flow|nfm_reply)\b/i.test(t)) {
+      return false
+    }
+    return true
+  }
   if (/^\s*preenchid[oa]?\s*[.!?]*\s*$/i.test(t)) return true
   return false
 }
@@ -243,6 +256,38 @@ export function buildInscricaoFormCompleteReply(opts = {}) {
   )
 }
 
+/** Lead pede reenvio do link do contrato / pagamento. */
+export function messageAsksContratoLinkResend(text) {
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (!t || t.length < 4) return false
+  return (
+    /\b(reenvi\w*|manda|envia|cad[eê]|cadê|perdi|sumiu|n[aã]o\s+(abre|abriu|consigo|achei))\b[\s\S]{0,50}\b(link|contrato|pagamento|boleto|pix)\b/i.test(
+      t,
+    ) ||
+    /\b(link|contrato)\b[\s\S]{0,35}\b(reenvi\w*|manda|envia|de\s+novo)\b/i.test(t) ||
+    /\bqual\s+(é|e)\s+o\s+link\b/i.test(t)
+  )
+}
+
+/** Imagem ou texto indicando comprovante / pagamento realizado. */
+export function messageLooksLikePaymentProof(text) {
+  const raw = String(text || '').trim()
+  if (!raw) return false
+  if (/^\[(IMAGEM RECEBIDA|ÁUDIO RECEBIDO)/i.test(raw)) return true
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (
+    /\b(comprovante|comprovativo|print\s+do\s+pagamento|print\s+de\s+pagamento|captura\s+de\s+tela)\b/i.test(
+      t,
+    )
+  ) {
+    return true
+  }
+  if (/\b(segue|envio|mandei|anexo)\b[\s\S]{0,40}\b(comprovante|pagamento|pix|boleto)\b/i.test(t)) return true
+  if (/\b(paguei|pagamento\s+feito|j[aá]\s+paguei|efetuei\s+o\s+pagamento|transferi)\b/i.test(t)) return true
+  if (/\b(pix|boleto|transfer[eê]ncia)\b/i.test(t) && /\b(pag|feito|confirmad|realizad)\b/i.test(t)) return true
+  return false
+}
+
 /** Mensagem após inscrição na API Sumaré — link do portal de aceite do contrato. */
 export function buildContratoAceiteLinkReply(opts = {}) {
   const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
@@ -250,9 +295,47 @@ export function buildContratoAceiteLinkReply(opts = {}) {
   if (!link) return buildInscricaoFormCompleteReply({ pushName: opts.pushName, ok: false })
   return (
     `Ótimo${nameBit}! Sua inscrição foi registrada na Faculdade Sumaré.\n\n` +
-    `Para concluir a matrícula, acesse o link abaixo, leia o contrato, marque que concorda com os termos e clique em *ASSINAR CONTRATO*. ` +
-    `Na mesma página você poderá seguir com o pagamento da matrícula:\n\n` +
+    `Para concluir a matrícula, acesse o link abaixo:\n\n` +
     `${link}\n\n` +
-    `Se tiver qualquer dúvida sobre o contrato ou o pagamento, responda aqui que te ajudamos.`
+    `Nesse link você deve *aceitar o contrato* (ler os termos, marcar a concordância e clicar em *ASSINAR CONTRATO*) ` +
+    `e, em seguida, realizar o *pagamento da matrícula* na mesma página.\n\n` +
+    `Depois que o pagamento for confirmado, envie aqui no WhatsApp um *print ou foto do comprovante* ` +
+    `para darmos continuidade aos próximos passos da sua matrícula.\n\n` +
+    `Qualquer dúvida sobre o contrato ou o pagamento, é só responder por aqui.`
+  )
+}
+
+export function buildContratoLinkResendReply(opts = {}) {
+  const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
+  const link = String(opts.contractUrl || '').trim()
+  if (!link) {
+    return (
+      `Claro${nameBit}! Um consultor da Faculdade Sumaré vai te enviar o link do contrato em instantes por aqui, tudo bem?`
+    )
+  }
+  return (
+    `Sem problema${nameBit}! Segue novamente o link para *aceitar o contrato* e fazer o *pagamento*:\n\n` +
+    `${link}\n\n` +
+    `Após pagar, envie o *print do comprovante* aqui no WhatsApp para seguirmos com sua matrícula.`
+  )
+}
+
+export function buildPagamentoSemComprovanteReply(opts = {}) {
+  const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
+  const link = String(opts.contractUrl || '').trim()
+  const linkBit = link
+    ? `\n\nSe ainda não concluiu, use o link: ${link}`
+    : ''
+  return (
+    `Obrigado${nameBit}! Para seguirmos, preciso que você envie aqui uma *foto ou print do comprovante de pagamento* ` +
+    `(PIX, boleto ou cartão — o que utilizou).${linkBit}`
+  )
+}
+
+export function buildComprovantePagamentoRecebidoReply(opts = {}) {
+  const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
+  return (
+    `Perfeito${nameBit}! Recebemos seu comprovante de pagamento. ` +
+    `Nossa equipe vai conferir e em breve um consultor da Faculdade Sumaré entra em contato por aqui para os próximos passos da sua matrícula, tudo bem?`
   )
 }

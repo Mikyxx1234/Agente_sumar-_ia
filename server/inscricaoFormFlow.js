@@ -323,6 +323,7 @@ export async function tryHandleInscricaoFormStart(env, input) {
 }
 
 export { tryHandleInscricaoFormComplete } from './inscricaoPostFormPipeline.js'
+export { tryHandleMatriculaAceitePagamentoFlow } from './inscricaoAceitePagamentoFlow.js'
 
 export async function tryEnsureInscricaoFormSent(env, input) {
   const { telefone, userMessage, historyMessages, llmReply } = input

@@ -26,6 +26,7 @@ import {
   INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
   INSCRICAO_FORM_STATUS_CONCLUIDO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
+  INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO,
 } from '../libShared/inscricaoFormHeuristics.js'
 import { updateLeadPipelineStatus } from './kommoClient.js'
 import { generateExecutionId } from './ai/executionTelemetry.js'
@@ -49,6 +50,7 @@ const SKIP_INSCRICAO_STATUSES = new Set([
   INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
   INSCRICAO_FORM_STATUS_CONCLUIDO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
+  INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO,
 ])
 
 /** Dedupe em memória se colunas Supabase ainda não existirem. */

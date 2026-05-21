@@ -39,7 +39,8 @@ if (-not $svc) {
 }
 
 $envText = $svc.env
-foreach ($pair in @(
+$captacaoToken = $env:SUMARE_CAPTACAO_TOKEN
+$envPairs = @(
   @('INATIVIDADE_ENABLED', 'false'),
   @('INSCRICAO_POST_FORM_SCHEDULER_ENABLED', 'false'),
   @('AGENT_FLUSH_CLAIM_ENABLED', 'true'),
@@ -47,10 +48,25 @@ foreach ($pair in @(
   @('WHATSAPP_OUTBOUND_DEDUPE_SEC', '180'),
   @('AGENT_OUTBOUND_COOLDOWN_SEC', '45'),
   @('AGENT_REPLY_COOLDOWN_SEC', '60'),
-  @('KOMMO_SCHEDULER_DEBOUNCE_SEC', '8')
-)) {
+  @('KOMMO_SCHEDULER_DEBOUNCE_SEC', '8'),
+  @('SUMARE_CAPTACAO_ENABLED', 'true'),
+  @('SUMARE_CAPTACAO_BASE_URL', 'https://api-captacao.sumare.edu.br'),
+  @('SUMARE_CONTRATO_PORTAL_URL', 'https://sumare.edu.br/vem-pra-sumare/vestibular/contrato'),
+  @('SUMARE_CAPTACAO_TEST_ALLOW', 'true')
+)
+if ($env:SUMARE_CAPTACAO_CURSO_MAP) {
+  $envPairs += ,@('SUMARE_CAPTACAO_CURSO_MAP', $env:SUMARE_CAPTACAO_CURSO_MAP)
+}
+if ($captacaoToken) {
+  $envPairs += ,@('SUMARE_CAPTACAO_TOKEN', $captacaoToken)
+  Write-Host 'env SUMARE_CAPTACAO_TOKEN=*** (definido via env)'
+} else {
+  Write-Warning 'SUMARE_CAPTACAO_TOKEN nao definido — defina `$env:SUMARE_CAPTACAO_TOKEN` antes do deploy para matricula API.'
+}
+foreach ($pair in $envPairs) {
   $envText = Set-EnvKey $envText $pair[0] $pair[1]
-  Write-Host "env $($pair[0])=$($pair[1])"
+  $logVal = if ($pair[0] -match 'TOKEN|KEY|PASSWORD|SECRET') { '***' } else { $pair[1] }
+  Write-Host "env $($pair[0])=$logVal"
 }
 
 $updateBody = @{ json = @{ projectName = $Project; serviceName = $Service; env = $envText } } | ConvertTo-Json -Depth 5 -Compress
@@ -79,7 +95,19 @@ foreach ($item in $list2.result.data.json) {
 }
 $sha = $svc2.commit.sha
 Write-Host "commit implantado: $($sha.Substring(0, 12))"
-$checks = @('INATIVIDADE_ENABLED','AGENT_FLUSH_CLAIM_ENABLED','WHATSAPP_OUTBOUND_DEDUPE_SEC')
+$checks = @(
+  'INATIVIDADE_ENABLED',
+  'AGENT_FLUSH_CLAIM_ENABLED',
+  'WHATSAPP_OUTBOUND_DEDUPE_SEC',
+  'SUMARE_CAPTACAO_ENABLED',
+  'SUMARE_CAPTACAO_TOKEN'
+)
 foreach ($k in $checks) {
-  if ($svc2.env -match "(?m)^$k=(.*)$") { Write-Host "verificado $k=$($Matches[1].Trim())" }
+  if ($svc2.env -match "(?m)^$k=(.*)$") {
+    $val = $Matches[1].Trim()
+    if ($k -match 'TOKEN|KEY|PASSWORD|SECRET') { $val = if ($val) { '***' } else { '(vazio)' } }
+    Write-Host "verificado $k=$val"
+  } else {
+    Write-Host "AVISO: $k ausente no env do servico"
+  }
 }

@@ -1,0 +1,59 @@
+{
+  "name": "SUMARE API'S - Gerar contrato - aceite - pagamento",
+  "description": "Referência do fluxo implementado em server/sumareCaptacaoClient.js (sem credenciais). Ordem: gerar candidato → status → aceite → link portal + WhatsApp.",
+  "nodes": [
+    {
+      "name": "gerar_candidato",
+      "type": "n8n-nodes-base.httpRequest",
+      "parameters": {
+        "method": "GET",
+        "url": "https://api-captacao.sumare.edu.br/api-ingresso/candidato/gerar",
+        "sendQuery": true,
+        "queryParameters": {
+          "cpf": "={{$json.cpf}}",
+          "celular": "={{$json.celular}}",
+          "nomeCompl": "={{$json.nome}}",
+          "email": "={{$json.email}}",
+          "dataNasc": "={{$json.dataNasc}}",
+          "sexo": "={{$json.sexo}}",
+          "curso": "={{$json.curso}}",
+          "turno": "={{$json.turno}}",
+          "unidade": "={{$json.unidade}}",
+          "tipoIngresso": "={{$json.tipoIngresso}}"
+        },
+        "headerParameters": {
+          "Authorization": "Bearer {{SUMARE_CAPTACAO_TOKEN}}"
+        }
+      }
+    },
+    {
+      "name": "consultar_status",
+      "type": "n8n-nodes-base.httpRequest",
+      "parameters": {
+        "method": "GET",
+        "url": "https://api-captacao.sumare.edu.br/api-status-candidato/candidato/status?candidato={{$json.candidato}}"
+      }
+    },
+    {
+      "name": "aceite_contrato",
+      "type": "n8n-nodes-base.httpRequest",
+      "parameters": {
+        "method": "GET",
+        "url": "https://api-captacao.sumare.edu.br/api-contrato-ingresso/contrato/ingresso/aceite?candidato={{$json.candidato}}"
+      }
+    },
+    {
+      "name": "link_portal_whatsapp",
+      "type": "note",
+      "parameters": {
+        "text": "Enviar ao candidato: {SUMARE_CONTRATO_PORTAL_URL}?id={candidato}. Orientar aceite + pagamento no link e solicitar print do comprovante no WhatsApp."
+      }
+    }
+  ],
+  "connections": {
+    "gerar_candidato": { "main": [[{ "node": "consultar_status" }]] },
+    "consultar_status": { "main": [[{ "node": "aceite_contrato" }]] },
+    "aceite_contrato": { "main": [[{ "node": "link_portal_whatsapp" }]] }
+  },
+  "active": false
+}

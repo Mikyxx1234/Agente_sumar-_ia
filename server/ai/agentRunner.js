@@ -32,6 +32,7 @@ import {
   tryHandleInscricaoFormComplete,
   tryHandleInscricaoFormStart,
   tryEnsureInscricaoFormSent,
+  tryHandleMatriculaAceitePagamentoFlow,
 } from '../inscricaoFormFlow.js'
 import {
   messageExpressesCourseInterestOnly,
@@ -191,6 +192,22 @@ export async function runAgent(env, input) {
   const ctx = createExecutionContext()
   if (!userMessage) return { ok: false, error: 'Mensagem vazia', executionId, model, aiMeta: ctx.toAiMeta() }
 
+  const formFlowCtx = { telefone, userMessage, historyMessages: [], executionId, model, leadId, pushName: input?.pushName, t0 }
+
+  if (telefone) {
+    const aceiteFlow = await tryHandleMatriculaAceitePagamentoFlow(env, formFlowCtx)
+    if (aceiteFlow?.handled) {
+      console.log(
+        `[${executionId}] MATRICULA_ACEITE_PAGAMENTO step=${aceiteFlow.result?.ctxSnapshot?.inscricaoForm ?? 'n/a'}`,
+      )
+      return {
+        ...aceiteFlow.result,
+        historyLoaded: 0,
+        aiMeta: ctx.toAiMeta(),
+      }
+    }
+  }
+
   if (telefone && (await isAtendimentoIaPaused(env, telefone))) {
     console.log(`[${executionId}] IA pausada (atendimento_ia=pause) telefone=${telefone}`)
     return {
@@ -240,7 +257,7 @@ export async function runAgent(env, input) {
     preview: historyPreview,
   })
 
-  const formFlowCtx = { telefone, userMessage, historyMessages, executionId, model, leadId, pushName: input?.pushName, t0 }
+  formFlowCtx.historyMessages = historyMessages
 
   // Pré-preenchimento sum_Curso: assim que o lead confirma interesse num
   // curso (mesmo antes de pedir inscrição), gravamos no Kommo. Função

@@ -92,12 +92,75 @@ export function formatCelularBrasil(digits) {
   return `(${ddd}) ${rest}`
 }
 
-/** Código curso API (ex. ECON_EAD) — aceita valor já codificado ou default env. */
+function normalizeCursoNomeKey(name) {
+  return String(name || '')
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+}
+
+function parseCursoMapEnv(env) {
+  const raw = String(env.SUMARE_CAPTACAO_CURSO_MAP || '').trim()
+  if (!raw) return null
+  try {
+    const obj = JSON.parse(raw)
+    if (!obj || typeof obj !== 'object') return null
+    const map = new Map()
+    for (const [k, v] of Object.entries(obj)) {
+      const code = String(v || '').trim().toUpperCase()
+      if (code) map.set(normalizeCursoNomeKey(k), code)
+    }
+    return map.size ? map : null
+  } catch {
+    return null
+  }
+}
+
+/** Nomes exibidos (sum_Curso) → código API Captação. Override via SUMARE_CAPTACAO_CURSO_MAP (JSON). */
+const CURSO_NOME_TO_CODIGO = new Map(
+  Object.entries({
+    'administracao': 'ADM_EAD',
+    'analise e desenvolvimento de sistemas': 'ADS_EAD',
+    'ciencia da computacao': 'CCOMP_EAD',
+    'ciencias contabeis': 'CCONT_EAD',
+    'ciencias economicas': 'CECON_EAD',
+    'engenharia civil': 'ECIV_EAD',
+    'fisioterapia': 'FISIO_EAD',
+    'gestao financeira': 'GFIN_EAD',
+    'jogos digitais': 'JOGOS_EAD',
+    'marketing': 'MKT_EAD',
+    'pedagogia': 'PED_EAD',
+    'psicologia': 'PSI_EAD',
+    'economia': 'ECON_EAD',
+  }),
+)
+
+/** Código curso API (ex. ECON_EAD) — aceita valor já codificado, mapa por nome ou default env. */
 export function resolveCursoCodigo(cursoInscricao, env = process.env) {
   const raw = String(cursoInscricao || '').trim()
   if (/^[A-Z0-9_]{4,32}$/i.test(raw)) return raw.toUpperCase()
+  const key = normalizeCursoNomeKey(raw)
+  const fromEnv = parseCursoMapEnv(env)
+  if (fromEnv?.has(key)) return fromEnv.get(key)
+  if (CURSO_NOME_TO_CODIGO.has(key)) return CURSO_NOME_TO_CODIGO.get(key)
   const def = String(env.SUMARE_CAPTACAO_CURSO_DEFAULT || '').trim()
   return def ? def.toUpperCase() : ''
+}
+
+/** Parâmetros que a API exige na query mesmo vazios (espelha workflow n8n). */
+export const GERAR_CANDIDATO_QUERY_DEFAULTS = {
+  utmSource: '',
+  utmCampaign: '',
+  utmMedium: '',
+  planoPgto: '',
+  quemIndicou: '',
+  localInscricao: '',
+  dispositivo: '',
+  raAntigo: '',
+  cursoAntigo: '',
+  instituicaoAntiga: '',
 }
 
 export function normalizeDataNasc(input) {
@@ -188,6 +251,7 @@ export function buildGerarCandidatoQuery(snapshot, telefone, env = process.env) 
   ).trim()
 
   return {
+    ...GERAR_CANDIDATO_QUERY_DEFAULTS,
     cpf,
     celular: fone,
     nomeCompl: String(snapshot?.nome || '').trim(),
@@ -219,9 +283,11 @@ export function validateGerarCandidatoParams(params) {
  * GET /api-ingresso/candidato/gerar?...
  */
 export async function gerarCandidatoIngresso(env, params) {
+  const merged = { ...GERAR_CANDIDATO_QUERY_DEFAULTS, ...params }
   const qs = new URLSearchParams()
-  for (const [key, val] of Object.entries(params)) {
-    if (val != null && String(val).trim() !== '') qs.set(key, String(val).trim())
+  for (const [key, val] of Object.entries(merged)) {
+    if (val == null) continue
+    qs.set(key, String(val).trim())
   }
   return captacaoFetch(env, `/api-ingresso/candidato/gerar?${qs.toString()}`)
 }
