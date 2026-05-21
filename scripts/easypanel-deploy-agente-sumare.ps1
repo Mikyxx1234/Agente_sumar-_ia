@@ -45,7 +45,9 @@ foreach ($pair in @(
   @('AGENT_FLUSH_CLAIM_ENABLED', 'true'),
   @('AGENT_FLUSH_CLAIM_SEC', '90'),
   @('WHATSAPP_OUTBOUND_DEDUPE_SEC', '180'),
-  @('AGENT_OUTBOUND_COOLDOWN_SEC', '45')
+  @('AGENT_OUTBOUND_COOLDOWN_SEC', '45'),
+  @('AGENT_REPLY_COOLDOWN_SEC', '60'),
+  @('KOMMO_SCHEDULER_DEBOUNCE_SEC', '8')
 )) {
   $envText = Set-EnvKey $envText $pair[0] $pair[1]
   Write-Host "env $($pair[0])=$($pair[1])"

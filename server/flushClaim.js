@@ -1,6 +1,6 @@
 /**
- * Garante que só uma réplica/processo execute flush+IA para a mesma sessão.
- * Sem isso, N instâncias no EasyPanel geram N respostas (mesmo EX-…-001 por réplica).
+ * Garante que só um flush+IA processe a mesma sessão por vez.
+ * Ordem: lock síncrono (processo) → Redis NX → Supabase PATCH → memória.
  */
 
 import {
@@ -10,7 +10,10 @@ import {
 
 const FIELD_FLUSH_CLAIM = 'agent_flush_claim_at'
 
-/** @type {Map<string, number>} sessionId -> expireAt ms (backend memory) */
+/** Lock imediato no processo — evita corrida antes do primeiro await. */
+const syncFlushLocks = new Map()
+
+/** @type {Map<string, number>} sessionId -> expireAt ms (fallback async) */
 const memoryClaims = new Map()
 
 function flushClaimEnabled(env) {
@@ -27,6 +30,26 @@ function pruneMemoryClaims(now = Date.now()) {
   for (const [k, ex] of memoryClaims) {
     if (ex <= now) memoryClaims.delete(k)
   }
+}
+
+/**
+ * Reserva flush no processo atual (síncrono). Chamar antes de qualquer await.
+ */
+export function tryReserveFlushSync(sessionId, env) {
+  if (!flushClaimEnabled(env)) return true
+  const key = String(sessionId || '').trim()
+  if (!key) return false
+  const now = Date.now()
+  const ttlMs = flushClaimTtlSec(env) * 1000
+  const ex = syncFlushLocks.get(key)
+  if (ex && ex > now) return false
+  syncFlushLocks.set(key, now + ttlMs)
+  return true
+}
+
+export function releaseFlushSync(sessionId) {
+  const key = String(sessionId || '').trim()
+  if (key) syncFlushLocks.delete(key)
 }
 
 function tryMemoryClaim(sessionId, ttlSec) {
@@ -82,9 +105,7 @@ async function tryDadosClienteFlushClaim(env, telefone, ttlSec) {
 }
 
 /**
- * @param {Record<string,string>} env
- * @param {{ sessionId: string, telefone?: string, redisClient?: import('ioredis').default | null, redisKeyPrefix?: string }} params
- * @returns {Promise<{ claimed: boolean, reason?: string }>}
+ * Claim distribuído (Redis / Supabase). Chamar após tryReserveFlushSync.
  */
 export async function tryClaimAgentFlush(env, { sessionId, telefone, redisClient, redisKeyPrefix }) {
   if (!flushClaimEnabled(env)) return { claimed: true }
@@ -100,6 +121,7 @@ export async function tryClaimAgentFlush(env, { sessionId, telefone, redisClient
     try {
       const ok = await redisClient.set(claimKey, String(Date.now()), 'EX', ttlSec, 'NX')
       if (ok === 'OK') return { claimed: true }
+      return { claimed: false, reason: 'redis_claim_busy' }
     } catch (err) {
       console.warn('[flushClaim] redis claim falhou:', err.message)
     }

@@ -22,7 +22,7 @@
 import { createLeadNote } from './kommoClient.js'
 import { generateExecutionId } from './ai/executionTelemetry.js'
 import { sendTextViaEvolution } from './evolution/evolutionSendText.js'
-import { shouldSkipDuplicateOutbound } from './outboundDedupe.js'
+import { shouldSkipDuplicateOutbound, releaseOutboundSync } from './outboundDedupe.js'
 
 /**
  * Marca a mensagem do cliente como "lida" e mostra o "digitando..." pro
@@ -215,53 +215,57 @@ export async function sendMessageWithNote(env, { telefone, text, leadId, executi
   if (!parts.length) {
     return { ok: false, code: 'EMPTY_BODY', error: 'texto vazio', total: 0, sent: 0, steps: [] }
   }
-  const dedupe = await shouldSkipDuplicateOutbound(env, telefone, text)
-  if (dedupe.skip) {
-    console.log(
-      `[WhatsApp] outbound dedupe skip to=${String(telefone || '').slice(0, 20)} reason=${dedupe.reason}`,
-    )
-    return {
-      ok: true,
-      skipped: true,
-      deduped: true,
-      reason: dedupe.reason,
-      total: parts.length,
-      sent: 0,
-      steps: [{ step: 'dedupe', skipped: true, reason: dedupe.reason }],
-    }
-  }
-  const execId = executionId || generateExecutionId()
-  const steps = []
-
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i]
-    const sent = await sendText(env, { to: telefone, text: part })
-    steps.push({ step: 'send', index: i + 1, total: parts.length, ...sent })
-    if (!sent.ok) {
+  try {
+    const dedupe = await shouldSkipDuplicateOutbound(env, telefone, text)
+    if (dedupe.skip) {
+      console.log(
+        `[WhatsApp] outbound dedupe skip to=${String(telefone || '').slice(0, 20)} reason=${dedupe.reason}`,
+      )
       return {
-        ok: false,
-        executionId: execId,
-        sent: i,
+        ok: true,
+        skipped: true,
+        deduped: true,
+        reason: dedupe.reason,
         total: parts.length,
-        steps,
-        error: sent.error || sent.code,
+        sent: 0,
+        steps: [{ step: 'dedupe', skipped: true, reason: dedupe.reason }],
+      }
+    }
+    const execId = executionId || generateExecutionId()
+    const steps = []
+
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i]
+      const sent = await sendText(env, { to: telefone, text: part })
+      steps.push({ step: 'send', index: i + 1, total: parts.length, ...sent })
+      if (!sent.ok) {
+        return {
+          ok: false,
+          executionId: execId,
+          sent: i,
+          total: parts.length,
+          steps,
+          error: sent.error || sent.code,
+        }
+      }
+
+      if (leadId != null && leadId !== '') {
+        const note = await createLeadNote(env, leadId, `${part} - ${execId}`)
+        steps.push({ step: 'note', index: i + 1, total: parts.length, ...note })
+        if (!note.ok) {
+          console.warn(`[WhatsApp][kommo-note] falha parte ${i + 1}: ${note.error || note.status}`)
+        }
+      } else {
+        steps.push({ step: 'note', index: i + 1, skipped: true, reason: 'no_lead_id' })
+      }
+
+      if (i < parts.length - 1 && cfg.chunkDelayMs > 0) {
+        await sleep(cfg.chunkDelayMs)
       }
     }
 
-    if (leadId != null && leadId !== '') {
-      const note = await createLeadNote(env, leadId, `${part} - ${execId}`)
-      steps.push({ step: 'note', index: i + 1, total: parts.length, ...note })
-      if (!note.ok) {
-        console.warn(`[WhatsApp][kommo-note] falha parte ${i + 1}: ${note.error || note.status}`)
-      }
-    } else {
-      steps.push({ step: 'note', index: i + 1, skipped: true, reason: 'no_lead_id' })
-    }
-
-    if (i < parts.length - 1 && cfg.chunkDelayMs > 0) {
-      await sleep(cfg.chunkDelayMs)
-    }
+    return { ok: true, executionId: execId, total: parts.length, sent: parts.length, steps }
+  } finally {
+    releaseOutboundSync(telefone)
   }
-
-  return { ok: true, executionId: execId, total: parts.length, sent: parts.length, steps }
 }

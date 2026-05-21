@@ -34,6 +34,7 @@ import {
   recordIngestDedupe,
 } from '../ingestDedupe.js'
 import { getStateSync as getAiControlStateSync } from '../aiControlState.js'
+import { canonicalWhatsAppSessionId } from '../phoneWhatsApp.js'
 
 const DEFAULT_KEY_PREFIX = 'wa:msg:'
 const DEFAULT_LAST_TS_PREFIX = 'wa:msgts:'
@@ -137,6 +138,18 @@ function makeRedisBackend(env) {
       pipe.del(tsKeyFor(sid))
       const res = await pipe.exec()
       return Array.isArray(res) ? (res[0]?.[1] || 0) : 0
+    },
+    /** LRANGE + DEL atômico — só um flush consome a fila. */
+    async drain(sid) {
+      const key = keyFor(sid)
+      const res = await client
+        .multi()
+        .lrange(key, 0, -1)
+        .del(key)
+        .del(tsKeyFor(sid))
+        .exec()
+      const items = res?.[0]?.[1]
+      return Array.isArray(items) ? items.map(String) : []
     },
     async ping() {
       return client.ping()
@@ -244,6 +257,14 @@ function makeSupabaseBackend(env) {
       await request('DELETE', q, { prefer: 'return=minimal' })
       return 1
     },
+    async drain(sid) {
+      const enc = encodeURIComponent(String(sid))
+      const q = `?session_id=eq.${enc}&order=id.asc&select=content`
+      const rows = await request('GET', q)
+      if (!Array.isArray(rows) || !rows.length) return []
+      await request('DELETE', `?session_id=eq.${enc}`, { prefer: 'return=minimal' })
+      return rows.map((r) => String(r.content || '')).filter(Boolean)
+    },
     async ping() {
       await request('GET', `?select=id&limit=1`)
       return 'PONG'
@@ -316,6 +337,13 @@ function makeMemoryBackend(env) {
       store.delete(sid)
       tsStore.delete(sid)
       return 1
+    },
+    async drain(sid) {
+      pruneIfExpired(sid)
+      const list = (store.get(sid) || []).slice()
+      store.delete(sid)
+      tsStore.delete(sid)
+      return list.map(String)
     },
     async ping() {
       return 'PONG'
@@ -418,8 +446,13 @@ async function getBackend(env) {
  * @param {string} text
  * @param {{ skipDedupe?: boolean }} [opts] — Playground / testes: skipDedupe=true
  */
+function resolveBufferSessionId(sessionId) {
+  return canonicalWhatsAppSessionId(sessionId) || String(sessionId || '').trim() || null
+}
+
 export async function pushMessage(env, sessionId, text, opts = {}) {
-  if (!sessionId || !text) return
+  const sid = resolveBufferSessionId(sessionId)
+  if (!sid || !text) return
   // Kill switch: IA desligada → DESCARTA na entrada. Mensagem nem
   // chega no buffer, então ao religar não há backlog pra processar
   // (comportamento "responde só novas após religar"). O playground/teste
@@ -433,26 +466,43 @@ export async function pushMessage(env, sessionId, text, opts = {}) {
   const skipDedupe = opts.skipDedupe === true
   if (!skipDedupe && ingestDedupeEnabled(env)) {
     const ttlMs = ingestDedupeTtlMs(env)
-    if (ttlMs > 0 && shouldSkipDuplicateIngest(sessionId, text, ttlMs)) return
+    if (ttlMs > 0 && shouldSkipDuplicateIngest(sid, text)) return
   }
   const backend = await getBackend(env)
-  await backend.push(sessionId, text)
+  await backend.push(sid, text)
   if (!skipDedupe && ingestDedupeEnabled(env)) {
     const ttlMs = ingestDedupeTtlMs(env)
-    if (ttlMs > 0) recordIngestDedupe(sessionId, text, ttlMs)
+    if (ttlMs > 0) recordIngestDedupe(sid, text, ttlMs)
   }
 }
 
 export async function getMessages(env, sessionId) {
-  if (!sessionId) return []
+  const sid = resolveBufferSessionId(sessionId)
+  if (!sid) return []
   const backend = await getBackend(env)
-  return backend.get(sessionId)
+  return backend.get(sid)
+}
+
+/**
+ * Remove e devolve todas as mensagens pendentes (consumo único no flush).
+ */
+export async function drainMessages(env, sessionId) {
+  const sid = resolveBufferSessionId(sessionId)
+  if (!sid) return []
+  const backend = await getBackend(env)
+  if (typeof backend.drain === 'function') {
+    return backend.drain(sid)
+  }
+  const items = await backend.get(sid)
+  await backend.clear(sid)
+  return items
 }
 
 export async function clearMessages(env, sessionId) {
-  if (!sessionId) return 0
+  const sid = resolveBufferSessionId(sessionId)
+  if (!sid) return 0
   const backend = await getBackend(env)
-  return backend.clear(sessionId)
+  return backend.clear(sid)
 }
 
 /**
@@ -463,10 +513,11 @@ export async function clearMessages(env, sessionId) {
  * @returns {Promise<Date|null>}
  */
 export async function getLastTouchedAt(env, sessionId) {
-  if (!sessionId) return null
+  const sid = resolveBufferSessionId(sessionId)
+  if (!sid) return null
   const backend = await getBackend(env)
   if (typeof backend.lastTouchedAt !== 'function') return null
-  return backend.lastTouchedAt(sessionId)
+  return backend.lastTouchedAt(sid)
 }
 
 export async function pingBackend(env) {

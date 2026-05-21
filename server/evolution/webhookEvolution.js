@@ -23,8 +23,9 @@
  * o fluxo direto sem passar pelo scheduler.
  */
 
-import { pushMessage, getMessages, clearMessages, getMessageBufferRedis } from './messageBuffer.js'
-import { tryClaimAgentFlush } from '../flushClaim.js'
+import { pushMessage, drainMessages, clearMessages, getMessageBufferRedis } from './messageBuffer.js'
+import { tryClaimAgentFlush, tryReserveFlushSync, releaseFlushSync } from '../flushClaim.js'
+import { shouldSkipReplyCooldown, markReplyCooldown } from '../replyCooldown.js'
 import { transcribeAudioBase64, analyzeImageBase64 } from './openaiMedia.js'
 import { fetchEvolutionMediaBase64, resolveInstanceName, describeMediaPayloadShape } from './evolutionMedia.js'
 import { runAgent } from '../ai/agentRunner.js'
@@ -447,60 +448,70 @@ async function extractMessageText(env, payload, messageType) {
 }
 
 async function flushSessionInner(env, sessionId, opts = {}) {
-  const itens = await getMessages(env, sessionId)
-  if (!itens.length) {
-    console.log(`[Evolution][flush] ${sessionId} sem mensagens pendentes`)
-    return null
+  if (!tryReserveFlushSync(sessionId, env)) {
+    console.log(`[Evolution][flush] ${sessionId} BLOQUEADO — flush_sync_busy (mesmo processo).`)
+    return { skipped: 'flush_sync_busy' }
   }
 
-  // ── Kill switch: IA desligada? DESCARTA o que estiver no buffer e
-  // sai. Política: ao religar, IA responde só mensagens novas (sem
-  // backlog). Race-condition rara: se algo passou pelo pushMessage antes
-  // do estado mudar, esse clear aqui limpa.
-  const aiState = getAiControlStateSync()
-  if (aiState.enabled === false) {
-    await clearMessages(env, sessionId)
-    console.log(
-      `[Evolution][flush] ${sessionId} BLOQUEADO — IA desligada${aiState.reason ? ` (${aiState.reason})` : ''}. ` +
-        `${itens.length} msg(s) descartada(s) do buffer.`,
+  try {
+    const telefone = normalizeTelefone(sessionId)
+
+    const { client: redisClient, keyPrefix: redisKeyPrefix } = await getMessageBufferRedis(env).catch(
+      () => ({ client: null, keyPrefix: null }),
     )
-    return { skipped: 'ai_disabled', reason: aiState.reason || null, discarded: itens.length }
-  }
+    const flushClaim = await tryClaimAgentFlush(env, {
+      sessionId,
+      telefone,
+      redisClient,
+      redisKeyPrefix,
+    })
+    if (!flushClaim.claimed) {
+      console.log(
+        `[Evolution][flush] ${sessionId} BLOQUEADO — claim distribuído (${flushClaim.reason || 'claim_busy'}).`,
+      )
+      return { skipped: 'flush_claim_busy', reason: flushClaim.reason }
+    }
 
-  const mensagemCompleta = itens.join(', ')
-  const telefone = normalizeTelefone(sessionId)
+    const itens = await drainMessages(env, sessionId)
+    if (!itens.length) {
+      console.log(`[Evolution][flush] ${sessionId} sem mensagens pendentes (drain vazio)`)
+      return null
+    }
 
-  const { client: redisClient, keyPrefix: redisKeyPrefix } = await getMessageBufferRedis(env).catch(
-    () => ({ client: null, keyPrefix: null }),
-  )
-  const flushClaim = await tryClaimAgentFlush(env, {
-    sessionId,
-    telefone,
-    redisClient,
-    redisKeyPrefix,
-  })
-  if (!flushClaim.claimed) {
+    // ── Kill switch: IA desligada? DESCARTA o que estiver no buffer e
+    // sai. Política: ao religar, IA responde só mensagens novas (sem
+    // backlog).
+    const aiState = getAiControlStateSync()
+    if (aiState.enabled === false) {
+      console.log(
+        `[Evolution][flush] ${sessionId} BLOQUEADO — IA desligada${aiState.reason ? ` (${aiState.reason})` : ''}. ` +
+          `${itens.length} msg(s) descartada(s) do buffer.`,
+      )
+      return { skipped: 'ai_disabled', reason: aiState.reason || null, discarded: itens.length }
+    }
+
+    const mensagemCompleta = itens.join(', ')
+
+    if (telefone && shouldSkipReplyCooldown(env, telefone)) {
+      console.log(`[Evolution][flush] ${sessionId} BLOQUEADO — reply_cooldown (${telefone}).`)
+      return { skipped: 'reply_cooldown', telefone, discarded: itens.length }
+    }
+
+    if (telefone && (await isAtendimentoIaPaused(env, telefone))) {
+      console.log(
+        `[Evolution][flush] ${sessionId} BLOQUEADO — atendimento_ia=pause (matrícula/consultor ativo). ` +
+          `${itens.length} msg(s) descartada(s) do buffer.`,
+      )
+      return { skipped: 'ia_paused', discarded: itens.length }
+    }
+
+    const executionId = opts.executionId || generateExecutionId()
+    const startedAt = new Date().toISOString()
+    const leadIdHint = opts.leadIdHint != null ? Number(opts.leadIdHint) : null
+    console.log(`[${executionId}] flush ${sessionId} → "${mensagemCompleta}"`)
     console.log(
-      `[Evolution][flush] ${sessionId} BLOQUEADO — outra réplica já processa (${flushClaim.reason || 'claim_busy'}).`,
+      `[${executionId}] RECEBEU_MENSAGEM session=${sessionId} telefone=${telefone} leadIdHint=${leadIdHint ?? 'n/a'} itens=${itens.length} chars=${mensagemCompleta.length}`,
     )
-    return { skipped: 'flush_claim_busy', reason: flushClaim.reason, pending: itens.length }
-  }
-
-  if (telefone && (await isAtendimentoIaPaused(env, telefone))) {
-    await clearMessages(env, sessionId)
-    console.log(
-      `[Evolution][flush] ${sessionId} BLOQUEADO — atendimento_ia=pause (matrícula/consultor ativo). ` +
-        `${itens.length} msg(s) descartada(s) do buffer.`,
-    )
-    return { skipped: 'ia_paused', discarded: itens.length }
-  }
-  const executionId = opts.executionId || generateExecutionId()
-  const startedAt = new Date().toISOString()
-  const leadIdHint = opts.leadIdHint != null ? Number(opts.leadIdHint) : null
-  console.log(`[${executionId}] flush ${sessionId} → "${mensagemCompleta}"`)
-  console.log(
-    `[${executionId}] RECEBEU_MENSAGEM session=${sessionId} telefone=${telefone} leadIdHint=${leadIdHint ?? 'n/a'} itens=${itens.length} chars=${mensagemCompleta.length}`,
-  )
 
   // "Digitando..." começa AQUI, depois do debounce. Caminho único:
   // Cloud API Meta (read receipt + typing_indicator) com heartbeat —
@@ -679,24 +690,23 @@ async function flushSessionInner(env, sessionId, opts = {}) {
     if (!r.ok) console.warn(`[${executionId}] saveExecution falhou: ${r.error}`)
   }).catch((err) => console.error(`[${executionId}] saveExecution exception:`, err.message))
 
-  const sentOk = Boolean(
-    sendResult?.ok &&
-      ((sendResult.sent || 0) > 0 || sendResult.deduped),
-  )
-  const shouldClearBuffer =
-    out?.ok &&
-    !out?.iaPaused &&
-    (!out.reply || sentOk || out.inscricaoFormHandled || out.distribuirHumanoHandled)
-  if (shouldClearBuffer) {
-    await clearMessages(env, sessionId)
-  } else if (itens.length > 0) {
-    console.warn(
-      `[${executionId}] buffer mantido session=${sessionId} (${itens.length} msg) — ` +
-        `agentOk=${Boolean(out?.ok)} reply=${Boolean(out?.reply)} sendOk=${sentOk}`,
+    const sentOk = Boolean(
+      sendResult?.ok &&
+        ((sendResult.sent || 0) > 0 || sendResult.deduped),
     )
-  }
+    if (telefone && sentOk && !sendResult?.deduped) {
+      markReplyCooldown(env, telefone)
+    }
+    if (out?.reply && !sentOk && !out?.iaPaused && !out.inscricaoFormHandled && !out.distribuirHumanoHandled) {
+      console.warn(
+        `[${executionId}] envio não confirmado após drain — mensagens não reenfileiradas (${itens.length} turno(s))`,
+      )
+    }
 
-  return out
+    return out
+  } finally {
+    releaseFlushSync(sessionId)
+  }
 }
 
 /**
@@ -741,7 +751,9 @@ function buildSteps({ sendResult, histResult, idLead, agentOut }) {
 }
 
 export function flushSession(env, sessionId, opts = {}) {
-  return withSessionLock(sessionId, () => flushSessionInner(env, sessionId, opts))
+  const canonical = canonicalWhatsAppSessionId(sessionId) || String(sessionId || '').trim()
+  if (!canonical) return Promise.resolve(null)
+  return withSessionLock(canonical, () => flushSessionInner(env, canonical, opts))
 }
 
 export function makeEvolutionWebhookHandler(env) {

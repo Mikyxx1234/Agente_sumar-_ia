@@ -3,6 +3,10 @@
  */
 
 import { fetchRecentChatRows } from './historyStore.js'
+import { normalizeTelefone } from './dadosClienteStore.js'
+
+/** Evita dois sendMessageWithNote simultâneos no mesmo processo. */
+const inflightOutbound = new Map()
 
 function normalizeOutboundText(text) {
   return String(text || '')
@@ -44,11 +48,37 @@ function tokenOverlapRatio(a, b) {
 }
 
 /**
+ * Reserva envio síncrono (antes de awaits). Liberar em finally do sender.
+ */
+export function tryReserveOutboundSync(telefone) {
+  const key = normalizeTelefone(telefone)
+  if (!key) return true
+  const now = Date.now()
+  const cur = inflightOutbound.get(key)
+  if (cur && cur > now) return false
+  inflightOutbound.set(key, now + 120_000)
+  return true
+}
+
+export function releaseOutboundSync(telefone) {
+  const key = normalizeTelefone(telefone)
+  if (key) inflightOutbound.delete(key)
+}
+
+/**
  * @returns {{ skip: boolean, reason?: string }}
  */
 export async function shouldSkipDuplicateOutbound(env, telefone, text) {
+  if (!tryReserveOutboundSync(telefone)) {
+    return { skip: true, reason: 'outbound_inflight_sync' }
+  }
   const body = normalizeOutboundText(text)
   if (!body || body.length < 12) return { skip: false }
+
+  const releaseIfSkip = (result) => {
+    if (result.skip) releaseOutboundSync(telefone)
+    return result
+  }
 
   const rows = await fetchRecentChatRows(env, telefone, 10)
   if (!rows.length) return { skip: false }
@@ -68,21 +98,21 @@ export async function shouldSkipDuplicateOutbound(env, telefone, text) {
     if (at < dedupeCutoff) continue
 
     if (bot === body) {
-      return { skip: true, reason: 'identical_recent_bot_message' }
+      return releaseIfSkip({ skip: true, reason: 'identical_recent_bot_message' })
     }
     if (body.length >= 40 && bot.length >= 40 && bot.slice(0, 40) === body.slice(0, 40)) {
-      return { skip: true, reason: 'prefix_match_recent_bot_message' }
+      return releaseIfSkip({ skip: true, reason: 'prefix_match_recent_bot_message' })
     }
     if (body.length >= 80 && bot.length >= 80 && tokenOverlapRatio(body, bot) >= 0.55) {
-      return { skip: true, reason: 'similar_recent_bot_message' }
+      return releaseIfSkip({ skip: true, reason: 'similar_recent_bot_message' })
     }
     if (at >= cooldownCutoff && body.length >= 60 && tokenOverlapRatio(body, bot) >= 0.42) {
-      return { skip: true, reason: 'similar_outbound_cooldown' }
+      return releaseIfSkip({ skip: true, reason: 'similar_outbound_cooldown' })
     }
   }
 
   if (botsInCooldownWindow >= 2) {
-    return { skip: true, reason: 'multiple_recent_bot_replies' }
+    return releaseIfSkip({ skip: true, reason: 'multiple_recent_bot_replies' })
   }
 
   return { skip: false }

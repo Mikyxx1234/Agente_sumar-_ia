@@ -108,7 +108,7 @@ export function normalizeMessageForScope(text) {
 function compactForGreetingMatch(text) {
   return normalizeMessageForScope(text)
     .toLowerCase()
-    .replace(/[!?.…,;:]+/g, ' ')
+    .replace(/[!?.…,;:\[\](){}]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
 }
