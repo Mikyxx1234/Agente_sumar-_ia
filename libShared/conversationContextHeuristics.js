@@ -7,7 +7,7 @@ function recentTranscript(historyMessages, max = 8) {
   return (historyMessages || []).slice(-max)
 }
 
-function lastAssistantText(historyMessages) {
+export function lastAssistantText(historyMessages) {
   const assistants = (historyMessages || []).filter((m) => m.role === 'assistant' || m.role === 'assistente')
   if (!assistants.length) return ''
   return String(assistants[assistants.length - 1].content || '')

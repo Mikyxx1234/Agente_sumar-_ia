@@ -55,7 +55,7 @@ $envPairs = @(
   @('AGENT_QUEUE_SESSION_CLEAR_MEMORY', 'true'),
   @('AGENT_QUEUE_SESSION_REENTRY_GRACE_SEC', '120'),
   @('KOMMO_AGENT_STATUS_IDS', '106140284,106377088'),
-  @('SCOPE_BLOCK_REQUIRE_NO_CONTEXT', 'false'),
+  @('SCOPE_BLOCK_REQUIRE_NO_CONTEXT', 'true'),
   @('SUMARE_CAPTACAO_ENABLED', 'true'),
   @('SUMARE_CAPTACAO_BASE_URL', 'https://api-captacao.sumare.edu.br'),
   @('SUMARE_CONTRATO_PORTAL_URL', 'https://sumare.edu.br/vem-pra-sumare/vestibular/contrato'),

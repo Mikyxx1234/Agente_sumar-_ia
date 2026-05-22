@@ -2,6 +2,7 @@
 
 import { normalizeMessageForScope, messageLooksLikeOperationalChat } from './scopeHeuristics.js'
 import { conversationHasActiveTopic } from './conversationContextHeuristics.js'
+import { extractCursoAreaFromText, messageIsBareCourseSelection } from './cursoConfirmation.js'
 
 export const INSCRICAO_FORM_STATUS_AGUARDANDO = 'aguardando_form_sumar'
 /** Formulário recebido — salesbot de distribuição em andamento. */
@@ -111,6 +112,10 @@ function userConfirmsEnrollmentAfterAssistant(text, historyMessages) {
 export function messageExpressesCourseInterestOnly(text, historyMessages = []) {
   const t = normalizeMessageForScope(text).toLowerCase()
   if (!t || t.length < 4) return false
+  if (messageIsBareCourseSelection(text, historyMessages)) return true
+  if (extractCursoAreaFromText(text) && t.length <= 80 && !/\b(inscri|matricul|formul)/i.test(t)) {
+    return true
+  }
   if (messageConfirmsProceedToInscricaoForm(text, historyMessages)) return false
   if (messageAsksForFormResend(text)) return false
   if (messageLooksLikeOperationalChat(text)) return false

@@ -25,7 +25,11 @@ import {
   shouldBypassScopeBlock,
 } from '../../libShared/scopeHeuristics.js'
 import { buildContextualGreetingReply } from '../../libShared/conversationContextHeuristics.js'
-import { detectCursoConfirmadoPeloLead } from '../../libShared/cursoConfirmation.js'
+import {
+  detectCursoConfirmadoPeloLead,
+  extractCursoAreaFromText,
+  messageIsBareCourseSelection,
+} from '../../libShared/cursoConfirmation.js'
 import { setSumCursoOnLead } from '../sumareLeadFields.js'
 import { tryHandleUnsupportedCourseLevelInquiry } from '../courseLevelInquiry.js'
 import { runDistribuirHumano, formatDistribuirHumanoReply } from '../distribuirHumanoTool.js'
@@ -74,19 +78,32 @@ function resolveHistoryLimit(env) {
  *
  * Retorna { messages, source } pra dar visibilidade no debug.
  */
+function sanitizeHistoryMessages(messages) {
+  return (messages || []).filter((m) => {
+    const c = String(m?.content || '').trim()
+    if (!c || c.length < 2) return false
+    if (m.role === 'system') return false
+    if (/^\[(scheduler|system|legenda|áudio|audio|imagem|mensagem)\]/i.test(c)) return false
+    if (/\[scheduler\]/i.test(c)) return false
+    return true
+  })
+}
+
 async function loadRecentHistoryMessages(env, telefone) {
   if (!telefone) return { messages: [], source: 'none' }
   const limit = resolveHistoryLimit(env)
   try {
     const out = await runBuscarHistorico(env, { telefone, limit })
     if (out.ok && Array.isArray(out.mensagens) && out.mensagens.length > 0) {
-      const messages = out.mensagens
-        .map((m) => {
-          if (m.role === 'lead') return { role: 'user', content: m.content }
-          if (m.role === 'assistente') return { role: 'assistant', content: m.content }
-          return null
-        })
-        .filter(Boolean)
+      const messages = sanitizeHistoryMessages(
+        out.mensagens
+          .map((m) => {
+            if (m.role === 'lead') return { role: 'user', content: m.content }
+            if (m.role === 'assistente') return { role: 'assistant', content: m.content }
+            return null
+          })
+          .filter(Boolean),
+      )
       if (messages.length > 0) return { messages, source: 'n8n_chat_histories' }
     }
   } catch (err) {
@@ -94,7 +111,7 @@ async function loadRecentHistoryMessages(env, telefone) {
   }
 
   try {
-    const fallback = await readChatMessages(env, telefone, limit)
+    const fallback = sanitizeHistoryMessages(await readChatMessages(env, telefone, limit))
     if (fallback.length > 0) {
       return { messages: fallback, source: 'chat_messages_fallback' }
     }
@@ -427,7 +444,10 @@ export async function runAgent(env, input) {
     }
   }
 
-  const skipScopeCheck = historyMessages.length === 0 && isAmbiguousShortReply(userMessage)
+  let skipScopeCheck =
+    (historyMessages.length === 0 && isAmbiguousShortReply(userMessage)) ||
+    Boolean(extractCursoAreaFromText(userMessage)) ||
+    messageIsBareCourseSelection(userMessage, historyMessages)
   let scopeClassification = null
   if (!skipScopeCheck) {
     const scope = await classifyMessageScope(env, { userMessage, historyMessages })

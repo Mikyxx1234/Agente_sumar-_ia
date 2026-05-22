@@ -5,7 +5,10 @@
  */
 
 import { normalizeMessageForScope } from './scopeHeuristics.js'
-import { extractDiscussedCourseFromHistory } from './conversationContextHeuristics.js'
+import {
+  extractDiscussedCourseFromHistory,
+  lastAssistantText,
+} from './conversationContextHeuristics.js'
 
 const STOP_WORDS = new Set([
   'esse', 'essa', 'isso', 'sim', 'nao', 'não', 'ok', 'okay', 'matricula',
@@ -122,18 +125,61 @@ function userConfirmsShortReply(text) {
   return /^\s*(sim|s|quero|pode|bora|vamos|ok|gostei|isso|esse\s+curso|fazer)\b/i.test(t)
 }
 
+/** Assistente listou opções de curso ou pediu escolha entre elas. */
+export function assistantOfferedCourseOptions(historyMessages) {
+  const content = lastAssistantText(historyMessages).toLowerCase()
+  if (!content) return false
+  return (
+    /\b\d{1,2}[\.\)]\s+/.test(content) ||
+    /\b(oferecemos|nessa\s+[aá]rea|desses\s+cursos|algum\s+desses|mais\s+detalhes)\b/i.test(content) ||
+    (/\b(gest[aã]o|ci[eê]ncias|contab|marketing|administra)/i.test(content) &&
+      /\b(quer\s+saber|mensalidade|valor|curso[s]?)\b/i.test(content))
+  )
+}
+
 function lastAssistantMentionedCurso(historyMessages) {
-  const list = historyMessages || []
-  for (let i = list.length - 1; i >= 0; i--) {
-    const m = list[i]
-    if (m.role !== 'assistant' && m.role !== 'assistente') continue
-    const content = String(m.content || '').toLowerCase()
-    if (/\bcurso\s+de\s+/i.test(content) || /\b(matricul|inscri|ingressar|vestibular)\b/i.test(content)) {
-      return true
-    }
-    break
+  if (assistantOfferedCourseOptions(historyMessages)) return true
+  const content = lastAssistantText(historyMessages).toLowerCase()
+  if (!content) return false
+  return (
+    /\bcurso\s+de\s+/i.test(content) ||
+    /\b(matricul|inscri|ingressar|vestibular)\b/i.test(content)
+  )
+}
+
+/** Lead respondeu "1", "2"… após lista numerada do assistente. */
+export function matchCursoFromNumberedAssistantList(userMessage, historyMessages) {
+  const t = normalizeMessageForScope(userMessage).trim()
+  const numMatch = t.match(/^\s*([1-9])\s*$/) || t.match(/^\s*op[cç][aã]o\s*([1-9])\s*$/i)
+  if (!numMatch) return ''
+  const idx = Number(numMatch[1]) - 1
+  const assist = lastAssistantText(historyMessages)
+  if (!assist) return ''
+  const courses = []
+  const re = /(?:^|\n)\s*(\d{1,2})[\.\)]\s*[*_]*([^*\n(]+?)[*_]*(?:\s*\(|$|\n)/gi
+  let m
+  while ((m = re.exec(assist)) !== null) {
+    const name = sanitizeCursoName(m[2].trim())
+    if (name) courses.push(name)
   }
-  return false
+  return courses[idx] || ''
+}
+
+/**
+ * Mensagem é só nome de curso ou escolha na lista — continuação do atendimento.
+ */
+export function messageIsBareCourseSelection(userMessage, historyMessages = []) {
+  if (!userMessage) return false
+  const t = normalizeMessageForScope(userMessage)
+  if (!t || t.length > 80) return false
+  if (matchCursoFromNumberedAssistantList(userMessage, historyMessages)) return true
+  const area = extractCursoAreaFromText(t)
+  if (!area) return false
+  if (assistantOfferedCourseOptions(historyMessages)) return true
+  if (/\b(area|área)\s+(financeira|sa[uú]de|tecnolog)/i.test(t)) return false
+  const tokens = t.split(/\s+/).filter(Boolean)
+  if (tokens.length <= 6) return true
+  return userExpressesInterest(userMessage)
 }
 
 /**
@@ -146,9 +192,15 @@ function lastAssistantMentionedCurso(historyMessages) {
  */
 export function detectCursoConfirmadoPeloLead(userMessage, historyMessages) {
   if (!userMessage) return ''
+  const fromList = matchCursoFromNumberedAssistantList(userMessage, historyMessages)
+  if (fromList) return fromList
+
   const direct = extractCursoFromText(userMessage)
   if (direct && userExpressesInterest(userMessage)) return sanitizeCursoName(direct)
   if (direct && lastAssistantMentionedCurso(historyMessages)) return sanitizeCursoName(direct)
+  if (direct && messageIsBareCourseSelection(userMessage, historyMessages)) {
+    return sanitizeCursoName(direct)
+  }
 
   if (userExpressesInterest(userMessage) || userConfirmsShortReply(userMessage)) {
     const fromHist = extractDiscussedCourseFromHistory(historyMessages)

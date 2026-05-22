@@ -16,6 +16,7 @@ import {
   messageIsInboundMediaPlaceholder,
 } from '../../libShared/scopeHeuristics.js'
 import { messageAsksUnsupportedCourseLevel } from '../../libShared/courseLevelHeuristics.js'
+import { extractCursoAreaFromText, messageIsBareCourseSelection } from '../../libShared/cursoConfirmation.js'
 
 const URL_CHAT = 'https://api.openai.com/v1/chat/completions'
 const TIMEOUT_MS = 5000
@@ -30,6 +31,7 @@ REGRA ABSOLUTA (prioridade sobre qualquer outro texto):
 - Exemplos SEMPRE dentro do escopo: "quero ganhar dinheiro no mundo digital", "como melhorar minha carreira", "qual curso me dá mais emprego", "bom dia", "oi".
 - Também é dentro_escopo se o lead pergunta sobre cursos, preços, matrícula, inscrição, modalidade EAD, grade ou atendimento educacional da Faculdade Sumaré.
 - Se o histórico mostra que o assistente já falou de cursos (ex.: Administração, Marketing, Recursos Humanos) e o lead pergunta "quero saber sobre recursos humanos" ou "mais informações" → dentro_escopo: true (continuação do atendimento).
+- Se o assistente listou cursos (ex.: "1. Gestão Financeira…") e o lead responde só com o nome do curso ("gestão financeira", "RH") ou com o número ("1", "2") → dentro_escopo: true, categoria: curso.
 - Pergunta por CURSO TÉCNICO ou profissionalizante → dentro_escopo: true (a Sumaré não oferece técnico; o agente explica e sugere graduação EAD na mesma área). NUNCA classifique como fora_escopo.`
 
 function isEnabled(env) {
@@ -162,6 +164,25 @@ export async function classifyMessageScope(env, input = {}) {
   }
 
   const historyMessages = input.historyMessages || []
+
+  const cursoNome = extractCursoAreaFromText(userMessage)
+  if (cursoNome || messageIsBareCourseSelection(userMessage, historyMessages)) {
+    return {
+      blocked: false,
+      reply: null,
+      classification: {
+        dentro_escopo: true,
+        categoria: 'curso',
+        nivel: 'graduacao',
+        motivo: cursoNome ? `nome de curso: ${cursoNome}` : 'escolha de curso na conversa',
+      },
+      source: 'heuristic',
+      reason: 'course_selection',
+      model,
+      usage: null,
+      elapsedMs: Date.now() - t0,
+    }
+  }
 
   if (shouldBypassScopeBlock(userMessage, historyMessages)) {
     return {
