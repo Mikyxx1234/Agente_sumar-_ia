@@ -6,6 +6,33 @@ complexas devem ser registradas aqui após aprovação do usuário.
 
 ---
 
+### 2026-05-22 — Polo EAD pós Form Sumar antes da API Captação
+
+**Decisão.** Após detectar o Form Sumar preenchido, o agente pergunta em
+qual dos 5 polos EAD o candidato deseja estudar (com endereço), salvo se
+`polo_inscricao` ou código `unidade` já constarem no card Kommo (prioridade
+Kommo). Após confirmação do polo, dispara `runCaptacaoContratoWorkflow`
+(gerar → status → aceite → link contrato no WhatsApp).
+
+**Contexto.** Requisito do usuário: dados do Kommo primeiro; escolha de polo
+obrigatória antes da inscrição no sistema Sumaré; polos fixos SP (São Miguel,
+Barra Funda, Tatuapé, Santana, Pinheiros).
+
+**Alternativas descartadas.**
+- *Captação imediata após form (sem polo).* Não atende regra de negócio.
+- *Polo só via LLM/tool.* Resposta estruturada (1–5 ou nome) é mais confiável
+  e barata que classificação livre.
+
+**Impacto.**
+- `libShared/sumarePoloCatalog.js` — catálogo, match, mensagens WhatsApp.
+- `libShared/inscricaoFormHeuristics.js` — status `aguardando_escolha_polo`.
+- `server/inscricaoPostFormPipeline.js` — pergunta polo; `executeCaptacaoAfterFormResolved`.
+- `server/inscricaoPoloFlow.js` — `tryHandlePoloEscolhaFlow` no `agentRunner`.
+- `SUMARE_CAPTACAO_POLO_UNIDADE_MAP` em `.env.example` — códigos `ED_SP_P1`…`P5`
+  são **placeholders** até validação com a Sumaré.
+
+---
+
 ### 2026-05-20 — Aba "Feedback IA" com avaliador automático contra Regras 1-22
 
 **Decisão.** Adicionar nova aba `feedback-ia` no painel para avaliar

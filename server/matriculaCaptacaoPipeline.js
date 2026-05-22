@@ -109,8 +109,13 @@ export async function runMatriculaCaptacaoAfterForm(env, ctx) {
     }
   }
 
+  const snapshot = {
+    ...snapRes.snapshot,
+    ...(ctx.snapshotOverride && typeof ctx.snapshotOverride === 'object' ? ctx.snapshotOverride : {}),
+  }
+
   const workflow = await runCaptacaoContratoWorkflow(env, {
-    snapshot: snapRes.snapshot,
+    snapshot,
     telefone,
   })
 

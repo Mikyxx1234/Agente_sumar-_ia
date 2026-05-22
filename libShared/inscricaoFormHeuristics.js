@@ -7,6 +7,8 @@ export const INSCRICAO_FORM_STATUS_AGUARDANDO = 'aguardando_form_sumar'
 /** Formulário recebido — salesbot de distribuição em andamento. */
 export const INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO = 'aguardando_distribuicao_form'
 export const INSCRICAO_FORM_STATUS_CONCLUIDO = 'form_sumar_concluido'
+/** Formulário recebido — aguardando o lead escolher o polo (antes da API Captação). */
+export const INSCRICAO_FORM_STATUS_AGUARDANDO_POLO = 'aguardando_escolha_polo'
 /** Inscrição na API Sumaré feita; aguardando aceite do contrato no portal. */
 export const INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE = 'aguardando_aceite_contrato'
 /** Comprovante de pagamento recebido — consultor segue o atendimento. */
@@ -18,6 +20,12 @@ const MATRICULA_POS_FORM_TERMINAL_STATUSES = new Set([
   INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO,
 ])
 
+/** Em andamento — não reprocessar pós-form nem salesbot 49813. */
+const MATRICULA_POS_FORM_IN_PROGRESS_STATUSES = new Set([
+  INSCRICAO_FORM_STATUS_AGUARDANDO_POLO,
+  ...MATRICULA_POS_FORM_TERMINAL_STATUSES,
+])
+
 /**
  * Matrícula pós-formulário já foi tratada — não reenviar mensagem ao reentrar no funil.
  * Usa status Supabase e timestamps/captação (evita reprocessar com status stale em aguardando).
@@ -25,7 +33,7 @@ const MATRICULA_POS_FORM_TERMINAL_STATUSES = new Set([
 export function matriculaPosFormAlreadyProcessed(row) {
   if (!row || typeof row !== 'object') return false
   const status = String(row.inscricao_form_status || '').trim()
-  if (MATRICULA_POS_FORM_TERMINAL_STATUSES.has(status)) return true
+  if (MATRICULA_POS_FORM_IN_PROGRESS_STATUSES.has(status)) return true
   if (row.inscricao_form_recebido_at) return true
   if (row.captacao_contrato_link_at) return true
   if (row.captacao_candidato_id != null && String(row.captacao_candidato_id).trim() !== '') return true

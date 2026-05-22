@@ -35,6 +35,7 @@ import {
   tryEnsureInscricaoFormSent,
   tryHandleMatriculaAceitePagamentoFlow,
 } from '../inscricaoFormFlow.js'
+import { tryHandlePoloEscolhaFlow } from '../inscricaoPoloFlow.js'
 import {
   messageExpressesCourseInterestOnly,
   messageLooksLikeFormSumarResponse,
@@ -207,6 +208,18 @@ export async function runAgent(env, input) {
       )
       return {
         ...aceiteFlow.result,
+        historyLoaded: 0,
+        aiMeta: ctx.toAiMeta(),
+      }
+    }
+
+    const poloFlow = await tryHandlePoloEscolhaFlow(env, formFlowCtx)
+    if (poloFlow?.handled) {
+      console.log(
+        `[${executionId}] POLO_ESCOLHA polo=${poloFlow.result?.ctxSnapshot?.poloId ?? 'n/a'} unidade=${poloFlow.result?.ctxSnapshot?.unidade ?? 'n/a'}`,
+      )
+      return {
+        ...poloFlow.result,
         historyLoaded: 0,
         aiMeta: ctx.toAiMeta(),
       }

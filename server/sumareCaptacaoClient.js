@@ -10,6 +10,7 @@
  */
 
 import { getDefaultTipoIngresso } from './inscricaoConfig.js'
+import { matchPoloFromUserMessage, resolvePoloUnidadeCode } from '../libShared/sumarePoloCatalog.js'
 
 export function isSumareCaptacaoEnabled(env = process.env) {
   if (String(env.SUMARE_CAPTACAO_ENABLED || '').trim().toLowerCase() === 'false') {
@@ -238,8 +239,14 @@ export function buildGerarCandidatoQuery(snapshot, telefone, env = process.env) 
   const fone = formatCelularBrasil(telefone)
   const cpf = normalizeCpf(snapshot?.cpf)
   const curso = resolveCursoCodigo(snapshot?.curso_inscricao, env)
-  const unidade =
-    String(snapshot?.unidade || snapshot?.polo_inscricao || env.SUMARE_CAPTACAO_UNIDADE_DEFAULT || 'ED_SP_P5').trim()
+  let unidade = String(snapshot?.unidade || '').trim().toUpperCase()
+  if (!/^ED_SP_/i.test(unidade) && snapshot?.polo_inscricao) {
+    const matched = matchPoloFromUserMessage(snapshot.polo_inscricao)
+    if (matched) unidade = resolvePoloUnidadeCode(matched.id, env)
+  }
+  if (!unidade) {
+    unidade = String(env.SUMARE_CAPTACAO_UNIDADE_DEFAULT || 'ED_SP_P5').trim()
+  }
   const turno = String(snapshot?.turno || env.SUMARE_CAPTACAO_TURNO_DEFAULT || 'EAD').trim()
   const dataNasc =
     normalizeDataNasc(snapshot?.data_nasc) ||
