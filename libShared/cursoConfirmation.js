@@ -92,13 +92,18 @@ function sanitizeCursoName(rawName) {
   return titleCase(limited)
 }
 
-function extractCursoFromText(text) {
+/** Nome de área/curso citado no texto (ex.: "recursos humanos", "marketing"). */
+export function extractCursoAreaFromText(text) {
   const raw = String(text || '')
   for (const re of CURSO_PATTERNS) {
     const m = raw.match(re)
     if (m?.[1]) return titleCase(m[1])
   }
   return ''
+}
+
+function extractCursoFromText(text) {
+  return extractCursoAreaFromText(text)
 }
 
 function userExpressesInterest(text) {

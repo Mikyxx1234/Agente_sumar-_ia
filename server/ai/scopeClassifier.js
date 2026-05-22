@@ -12,6 +12,7 @@ import {
   messageLooksEducational,
   messageLooksCareerIncomeOpportunity,
   isGreetingOnly,
+  shouldBypassScopeBlock,
 } from '../../libShared/scopeHeuristics.js'
 import { messageAsksUnsupportedCourseLevel } from '../../libShared/courseLevelHeuristics.js'
 
@@ -27,6 +28,7 @@ REGRA ABSOLUTA (prioridade sobre qualquer outro texto):
 - DENTRO DO ESCOPO (categoria: saudacao): cumprimentos simples sem outro assunto — "oi", "olá", "bom dia", "boa tarde", "boa noite", "tudo bem?". NUNCA classifique como fora_escopo.
 - Exemplos SEMPRE dentro do escopo: "quero ganhar dinheiro no mundo digital", "como melhorar minha carreira", "qual curso me dá mais emprego", "bom dia", "oi".
 - Também é dentro_escopo se o lead pergunta sobre cursos, preços, matrícula, inscrição, modalidade EAD, grade ou atendimento educacional da Faculdade Sumaré.
+- Se o histórico mostra que o assistente já falou de cursos (ex.: Administração, Marketing, Recursos Humanos) e o lead pergunta "quero saber sobre recursos humanos" ou "mais informações" → dentro_escopo: true (continuação do atendimento).
 - Pergunta por CURSO TÉCNICO ou profissionalizante → dentro_escopo: true (a Sumaré não oferece técnico; o agente explica e sugere graduação EAD na mesma área). NUNCA classifique como fora_escopo.`
 
 function isEnabled(env) {
@@ -136,6 +138,26 @@ export async function classifyMessageScope(env, input = {}) {
     }
   }
 
+  const historyMessages = input.historyMessages || []
+
+  if (shouldBypassScopeBlock(userMessage, historyMessages)) {
+    return {
+      blocked: false,
+      reply: null,
+      classification: {
+        dentro_escopo: true,
+        categoria: 'continuacao_atendimento',
+        nivel: 'indefinido',
+        motivo: 'conversa em andamento sobre curso ou follow-up educacional',
+      },
+      source: 'heuristic',
+      reason: 'conversation_context_bypass',
+      model,
+      usage: null,
+      elapsedMs: Date.now() - t0,
+    }
+  }
+
   const heuristic = matchScopeHeuristic(userMessage)
   if (heuristic) {
     return blockResult(env, heuristic, 'heuristic', 'heuristic_match', model, null, Date.now() - t0)
@@ -158,7 +180,7 @@ export async function classifyMessageScope(env, input = {}) {
   }
 
   const systemPrompt = (await loadClassifierSystemPrompt()) + CLASSIFIER_HARD_RULES
-  const historyBlock = formatHistoryForClassifier(input.historyMessages)
+  const historyBlock = formatHistoryForClassifier(historyMessages)
   const userPrompt = historyBlock
     ? `Histórico recente da conversa:\n${historyBlock}\n\nMensagem atual do lead:\n"${userMessage}"`
     : `Mensagem do lead:\n"${userMessage}"`
@@ -214,6 +236,23 @@ export async function classifyMessageScope(env, input = {}) {
           },
           source: 'llm',
           reason: 'commercial_redirect_override',
+          model,
+          usage,
+          elapsedMs,
+        }
+      }
+      if (shouldBypassScopeBlock(userMessage, historyMessages)) {
+        return {
+          blocked: false,
+          reply: null,
+          classification: {
+            dentro_escopo: true,
+            categoria: 'continuacao_atendimento',
+            nivel: classification.nivel,
+            motivo: 'LLM fora_escopo ignorado — histórico com curso em discussão',
+          },
+          source: 'llm',
+          reason: 'conversation_context_override',
           model,
           usage,
           elapsedMs,

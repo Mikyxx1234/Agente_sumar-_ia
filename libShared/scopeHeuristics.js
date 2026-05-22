@@ -4,7 +4,9 @@ import {
   conversationHasActiveTopic,
   userLikelyContinuingEnrollmentFlow,
   assistantAskedEnrollmentInLastReply,
+  userMessageContinuesCourseDiscussion,
 } from './conversationContextHeuristics.js'
+import { extractCursoAreaFromText } from './cursoConfirmation.js'
 
 export const DEFAULT_SCOPE_REFUSAL =
   'Olá! Sou o assistente da Faculdade Sumaré e posso te ajudar com cursos, valores, matrícula e informações sobre nossos programas de graduação e pós-graduação (EAD). ' +
@@ -14,7 +16,15 @@ export const DEFAULT_SCOPE_REFUSAL =
 export function messageLooksEducational(text) {
   const t = String(text || '').toLowerCase()
   if (messageLooksCareerIncomeOpportunity(text)) return true
+  if (extractCursoAreaFromText(text)) return true
   return /\b(curso|cursos|gradua[cç][aã]o|p[oó]s|mba|especializa|matr[ií]cula|inscri|mensalidade|faculdade|sumar[eé]|ead|bolsa|vestibular|enem|grade|modalidade|diploma|disciplina|aulas?|tcc|cr[eé]dito|tecn[oó]logo|licenciatura|bacharelado)\b/i.test(t)
+}
+
+/** Conversa em andamento — não aplicar recusa de fora do escopo. */
+export function shouldBypassScopeBlock(userMessage, historyMessages = []) {
+  if (conversationHasActiveTopic(historyMessages)) return true
+  if (userMessageContinuesCourseDiscussion(userMessage, historyMessages)) return true
+  return false
 }
 
 /**

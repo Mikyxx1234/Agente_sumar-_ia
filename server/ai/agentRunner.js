@@ -22,6 +22,7 @@ import {
   shouldHandoffToHuman,
   detectHandoffMotivo,
   buildHumanHandoffReply,
+  shouldBypassScopeBlock,
 } from '../../libShared/scopeHeuristics.js'
 import { buildContextualGreetingReply } from '../../libShared/conversationContextHeuristics.js'
 import { detectCursoConfirmadoPeloLead } from '../../libShared/cursoConfirmation.js'
@@ -420,6 +421,18 @@ export async function runAgent(env, input) {
       `[${executionId}] SCOPE_CLASSIFIER blocked=${scope.blocked} source=${scope.source} reason=${scope.reason}` +
         (scope.classification?.categoria ? ` categoria=${scope.classification.categoria}` : ''),
     )
+    if (
+      scope.blocked &&
+      scope.reply &&
+      shouldBypassScopeBlock(userMessage, historyMessages)
+    ) {
+      console.log(
+        `[${executionId}] SCOPE_CLASSIFIER override — continuacao de atendimento (nao bloquear)`,
+      )
+      scope.blocked = false
+      scope.reply = null
+    }
+
     if (scope.blocked && scope.reply) {
       const scopeUsage = scope.usage
         ? {

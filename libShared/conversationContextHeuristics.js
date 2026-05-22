@@ -1,6 +1,7 @@
 /** Contexto de conversa (saudação no meio do atendimento, curso em discussão). */
 
 import { normalizeMessageForScope } from './scopeHeuristics.js'
+import { extractCursoAreaFromText } from './cursoConfirmation.js'
 
 function recentTranscript(historyMessages, max = 8) {
   return (historyMessages || []).slice(-max)
@@ -42,8 +43,31 @@ export function extractDiscussedCourseFromHistory(historyMessages) {
       const name = hit[1].trim().replace(/\s+/g, ' ')
       if (name.length >= 3) return name
     }
+    const area = extractCursoAreaFromText(content)
+    if (area) return area
   }
   return ''
+}
+
+const COURSE_FOLLOW_UP_RE =
+  /\b(quero\s+saber|gostaria\s+de\s+saber|informa[cç][õo]es?\s+sobre|mais\s+sobre|novas?\s+informa[cç][õo]es|detalhes\s+sobre|falar\s+sobre|sobre\s+o\s+curso|esse\s+curso|o\s+curso\s+que|continuar|seguir)\b/i
+
+/**
+ * Lead continua o assunto de curso já aberto (ex.: "quero saber sobre recursos humanos"
+ * depois que a IA citou RH na mensagem anterior).
+ */
+export function userMessageContinuesCourseDiscussion(userMessage, historyMessages = []) {
+  const msg = normalizeMessageForScope(userMessage)
+  if (!msg || msg.length < 4) return false
+
+  const areaInMsg = extractCursoAreaFromText(msg)
+  if (areaInMsg) return true
+
+  const discussed = extractDiscussedCourseFromHistory(historyMessages)
+  if (discussed && COURSE_FOLLOW_UP_RE.test(msg)) return true
+
+  if (!conversationHasActiveTopic(historyMessages)) return false
+  return COURSE_FOLLOW_UP_RE.test(msg) || /\b(sobre|desse|deste|dessa)\b/i.test(msg)
 }
 
 /** Já existe atendimento em andamento (não resetar com boas-vindas completas). */
@@ -57,8 +81,10 @@ export function conversationHasActiveTopic(historyMessages) {
     .join('\n')
     .toLowerCase()
 
+  if (extractCursoAreaFromText(blob)) return true
+
   return (
-    /\b(fisioterapia|enfermagem|administra|pedagogia|direito|psicologia|engenharia|matr[ií]cula|inscri[cç][aã]o|formul[aá]rio|enem|vestibular|ingresso|mensalidade|gradua)\b/i.test(
+    /\b(fisioterapia|enfermagem|administra|pedagogia|direito|psicologia|engenharia|recursos\s+humanos|\brh\b|marketing|contabil|gest[aã]o|matr[ií]cula|inscri[cç][aã]o|formul[aá]rio|enem|vestibular|ingresso|mensalidade|gradua|ead)\b/i.test(
       blob,
     ) || /\bcurso\s+de\s+/i.test(blob)
   )
