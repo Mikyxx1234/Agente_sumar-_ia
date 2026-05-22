@@ -50,11 +50,11 @@
  */
 
 import {
-  listLeadsByStatus,
   bulkGetContactsByIds,
   extractContactPhone,
   extractLeadPhone,
 } from './kommoClient.js'
+import { listLeadsInAgentQueue, parseAgentStatusIds } from './kommoAgentFunnel.js'
 import { phoneToWhatsAppSessionId } from './phoneWhatsApp.js'
 import { getMessages, getLastTouchedAt, listSessionsWithPendingMessages } from './evolution/messageBuffer.js'
 import { flushSession } from './evolution/webhookEvolution.js'
@@ -83,9 +83,6 @@ import {
   endAgentQueueSessionsForLeads,
   isAgentQueueSessionEnabled,
 } from './agentQueueSession.js'
-import { isMatriculaPosFormDoneForTelefone } from './funnelReentryGuard.js'
-import { leadHasPostFormRegistradoNote } from './postFormSendGuard.js'
-import { clearMessages } from './evolution/messageBuffer.js'
 
 // Defaults agressivos pra reduzir latência ponta-a-ponta.
 // - Interval: a cada 10s o scheduler verifica se há leads c/ msgs prontas.
@@ -203,14 +200,14 @@ export async function runSchedulerTick(env) {
   if (!isEnabled(env)) return stats
 
   const pipelineId = Number(env.KOMMO_AGENT_PIPELINE_ID)
-  const statusId = Number(env.KOMMO_AGENT_STATUS_ID)
+  const statusIds = parseAgentStatusIds(env)
   const debounceMs = getDebounceMs(env)
   const whitelist = getTestLeadWhitelist(env)
 
-  // 1) Listar leads no funil/status
-  const listing = await listLeadsByStatus(env, { pipelineId, statusId })
-  if (!listing.ok) {
-    console.error('[scheduler] kommo list falhou:', listing.error || listing.status)
+  // 1) Listar leads no funil (um ou vários status — ver KOMMO_AGENT_STATUS_IDS)
+  const listing = await listLeadsInAgentQueue(env)
+  if (!listing.ok && !(listing.leads || []).length) {
+    console.error('[scheduler] kommo list falhou:', listing.error || 'unknown')
     return stats
   }
   const leadsAll = listing.leads || []
@@ -249,10 +246,10 @@ export async function runSchedulerTick(env) {
     if (now - lastEmptyFunnelWarnMs > 90_000) {
       lastEmptyFunnelWarnMs = now
       console.warn(
-        `[scheduler] nenhum lead em pipeline_id=${pipelineId} status_id=${statusId}. ` +
-          'O poll de notas/eventos NAO roda para leads fora dessa etapa. ' +
-          'Confira no Kommo se o lead esta exatamente neste status (automacoes "TI Movido para..." podem tirar o lead da etapa que a IA escuta). ' +
-          'Ajuste KOMMO_AGENT_PIPELINE_ID / KOMMO_AGENT_STATUS_ID ou realoque o lead.',
+        `[scheduler] nenhum lead em pipeline_id=${pipelineId} status_ids=[${statusIds.join(',')}]. ` +
+          'O poll de notas/eventos NAO roda para leads fora dessas etapas. ' +
+          'Inclua "Aguardando resposta" em KOMMO_AGENT_STATUS_IDS se o Kommo alterna entre etapas da fila. ' +
+          'Ajuste KOMMO_AGENT_PIPELINE_ID / KOMMO_AGENT_STATUS_ID(S) ou realoque o lead.',
       )
     }
     await tryFlushWebhookOrphanSessions(env, { debounceMs, stats })
@@ -438,23 +435,6 @@ export async function runSchedulerTick(env) {
       if (skipFlushAfterPostForm) {
         console.log(`[scheduler] lead=${lead.id} flush omitido neste tick (pós-form tratado)`)
         return
-      }
-
-      try {
-        const matriculaDone =
-          (await isMatriculaPosFormDoneForTelefone(env, phone)) ||
-          (await leadHasPostFormRegistradoNote(env, Number(lead.id)))
-        if (matriculaDone) {
-          const cleared = await clearMessages(env, sessionId)
-          if (cleared > 0 || (messages && messages.length > 0)) {
-            console.log(
-              `[scheduler] lead=${lead.id} flush omitido — matrícula pós-form já feita (buffer descartado=${cleared})`,
-            )
-          }
-          return
-        }
-      } catch (skipMatErr) {
-        console.warn(`[scheduler] checagem matricula_pos_form lead=${lead.id}:`, skipMatErr.message)
       }
 
       const ageMs = last ? Date.now() - last.getTime() : Infinity

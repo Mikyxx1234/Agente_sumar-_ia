@@ -8,7 +8,8 @@
  * Liga/desliga: AGENT_QUEUE_SESSION_ENABLED (default true).
  */
 
-import { clearMessages } from './evolution/messageBuffer.js'
+import { clearMessages, getMessages } from './evolution/messageBuffer.js'
+import { flushSession } from './evolution/webhookEvolution.js'
 import {
   updateDadosCliente,
   normalizeTelefone,
@@ -23,6 +24,14 @@ import { getLeadSummary } from './kommoClient.js'
 
 /** leadId → epoch ms — notas Kommo anteriores a este instante são ignoradas no pós-form. */
 const noteCutoffMsByLeadId = new Map()
+
+/** Evita end+begin em flips rápidos de status no Kommo (ex.: Atendimento ↔ Aguardando resposta). */
+const lastEndMsByLeadId = new Map()
+
+function reentryGraceMs(env) {
+  const sec = Number(env.AGENT_QUEUE_SESSION_REENTRY_GRACE_SEC)
+  return Number.isFinite(sec) && sec > 0 ? Math.floor(sec) * 1000 : 120_000
+}
 
 export function isAgentQueueSessionEnabled(env) {
   const raw = String(env.AGENT_QUEUE_SESSION_ENABLED ?? 'true').trim().toLowerCase()
@@ -88,6 +97,31 @@ export async function endAgentQueueSession(env, { leadId, telefone, sessionId, r
     fields.inscricao_form_recebido_at = null
   }
 
+  if (Number.isFinite(lid) && lid > 0) {
+    const grace = reentryGraceMs(env)
+    const lastEnd = lastEndMsByLeadId.get(lid)
+    if (lastEnd && Date.now() - lastEnd < grace) {
+      console.log(
+        `[agentQueueSession] end skip lead=${lid} (reentry grace ${Math.round((grace - (Date.now() - lastEnd)) / 1000)}s restantes)`,
+      )
+      return { ok: true, skipped: true, reason: 'reentry_grace', leadId: lid }
+    }
+  }
+
+  let flushedBeforeEnd = false
+  try {
+    const pending = await getMessages(env, sid)
+    if (pending?.length > 0) {
+      console.log(
+        `[agentQueueSession] end lead=${lid} flush antes de encerrar (${pending.length} msg(s) no buffer)`,
+      )
+      await flushSession(env, sid, { leadIdHint: lid > 0 ? lid : null })
+      flushedBeforeEnd = true
+    }
+  } catch (flushErr) {
+    console.warn(`[agentQueueSession] end flush lead=${lid}:`, flushErr.message)
+  }
+
   const bufferRemoved = await clearMessages(env, sid)
   let memoryRemoved = 0
   if (shouldClearMemory(env)) {
@@ -97,6 +131,7 @@ export async function endAgentQueueSession(env, { leadId, telefone, sessionId, r
   if (Number.isFinite(lid) && lid > 0) {
     resetKommoInboundPollStateForLead(lid)
     clearNoteCutoff(lid)
+    lastEndMsByLeadId.set(lid, Date.now())
   }
 
   const patch = await updateDadosCliente(env, { telefone: phone, fields }).catch((err) => ({
@@ -117,6 +152,7 @@ export async function endAgentQueueSession(env, { leadId, telefone, sessionId, r
     matriculaDone,
     bufferRemoved,
     memoryRemoved,
+    flushedBeforeEnd,
     dadosCliente: patch,
   }
 }
@@ -148,7 +184,18 @@ export async function beginAgentQueueSession(env, { leadId, telefone, sessionId,
     fields.inscricao_form_status = null
   }
 
-  const bufferRemoved = await clearMessages(env, sid)
+  if (Number.isFinite(lid) && lid > 0) {
+    const grace = reentryGraceMs(env)
+    const lastEnd = lastEndMsByLeadId.get(lid)
+    if (lastEnd && Date.now() - lastEnd < grace) {
+      console.log(`[agentQueueSession] begin skip lead=${lid} (mesmo ciclo — grace após end)`)
+      return { ok: true, skipped: true, reason: 'reentry_grace', leadId: lid }
+    }
+    lastEndMsByLeadId.delete(lid)
+  }
+
+  // Não limpa o buffer na reentrada — mensagens pendentes do lead devem ser processadas.
+  const bufferRemoved = 0
   let memoryRemoved = 0
   if (shouldClearMemory(env)) {
     const mem = await clearAgentConversationMemory(env, phone)
