@@ -109,20 +109,40 @@ export async function endAgentQueueSession(env, { leadId, telefone, sessionId, r
   }
 
   let flushedBeforeEnd = false
+  let flushSkippedReason = null
   try {
     const pending = await getMessages(env, sid)
     if (pending?.length > 0) {
       console.log(
         `[agentQueueSession] end lead=${lid} flush antes de encerrar (${pending.length} msg(s) no buffer)`,
       )
-      await flushSession(env, sid, { leadIdHint: lid > 0 ? lid : null })
-      flushedBeforeEnd = true
+      const flushRes = await flushSession(env, sid, { leadIdHint: lid > 0 ? lid : null })
+      // flushSession devolve:
+      //   - null            → drain rodou, nada havia (ou foi processado) → OK limpar
+      //   - { ok: true/... }→ rodou completo (sucesso ou erro de IA) → OK limpar
+      //   - { skipped: X }  → flush foi held (claim/cooldown/pause) — buffer NÃO foi consumido
+      if (flushRes && flushRes.skipped) {
+        flushSkippedReason = flushRes.skipped
+      } else {
+        flushedBeforeEnd = true
+      }
     }
   } catch (flushErr) {
     console.warn(`[agentQueueSession] end flush lead=${lid}:`, flushErr.message)
+    flushSkippedReason = flushSkippedReason || 'flush_exception'
   }
 
-  const bufferRemoved = await clearMessages(env, sid)
+  // Só limpa buffer se o flush realmente consumiu (ou nem precisava rodar).
+  // Quando o flush foi held (claim ocupado em outra réplica, cooldown, IA
+  // pausada), as mensagens devem permanecer pro próximo tick processar.
+  let bufferRemoved = 0
+  if (!flushSkippedReason) {
+    bufferRemoved = await clearMessages(env, sid)
+  } else {
+    console.log(
+      `[agentQueueSession] end lead=${lid} buffer PRESERVADO — flush_skipped=${flushSkippedReason}`,
+    )
+  }
   let memoryRemoved = 0
   if (shouldClearMemory(env)) {
     const mem = await clearAgentConversationMemory(env, phone)
@@ -140,7 +160,7 @@ export async function endAgentQueueSession(env, { leadId, telefone, sessionId, r
   }))
 
   console.log(
-    `[agentQueueSession] end lead=${lid} phone=${phone} reason=${reason} matriculaDone=${matriculaDone} buffer=${bufferRemoved} memory=${memoryRemoved}`,
+    `[agentQueueSession] end lead=${lid} phone=${phone} reason=${reason} matriculaDone=${matriculaDone} buffer=${bufferRemoved} memory=${memoryRemoved}${flushSkippedReason ? ` flush_skipped=${flushSkippedReason}` : ''}`,
   )
 
   return {
@@ -153,6 +173,7 @@ export async function endAgentQueueSession(env, { leadId, telefone, sessionId, r
     bufferRemoved,
     memoryRemoved,
     flushedBeforeEnd,
+    flushSkippedReason,
     dadosCliente: patch,
   }
 }

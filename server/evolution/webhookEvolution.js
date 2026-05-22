@@ -23,9 +23,9 @@
  * o fluxo direto sem passar pelo scheduler.
  */
 
-import { pushMessage, drainMessages, clearMessages, getMessageBufferRedis } from './messageBuffer.js'
+import { pushMessage, drainMessages, clearMessages, getMessageBufferRedis, getMessages } from './messageBuffer.js'
 import { tryClaimAgentFlush, tryReserveFlushSync, releaseFlushSync } from '../flushClaim.js'
-import { shouldSkipReplyCooldown, markReplyCooldown } from '../replyCooldown.js'
+import { shouldSkipReplyCooldown, markReplyCooldown, getReplyCooldownRemainingMs } from '../replyCooldown.js'
 import { transcribeAudioBase64, analyzeImageBase64 } from './openaiMedia.js'
 import { fetchEvolutionMediaBase64, resolveInstanceName, describeMediaPayloadShape } from './evolutionMedia.js'
 import { runAgent } from '../ai/agentRunner.js'
@@ -472,38 +472,53 @@ async function flushSessionInner(env, sessionId, opts = {}) {
       return { skipped: 'flush_claim_busy', reason: flushClaim.reason }
     }
 
+    // ── GATES PRIMEIRO — mensagens permanecem no buffer e são reprocessadas
+    // no próximo tick quando o gate liberar (cooldown expira, IA religada,
+    // pausa retirada). Política antiga (drenar antes) descartava
+    // mensagens válidas como efeito colateral dos gates.
+    const peekPending = async () => {
+      try {
+        const pending = await getMessages(env, sessionId)
+        return Array.isArray(pending) ? pending.length : 0
+      } catch {
+        return 0
+      }
+    }
+
+    const aiState = getAiControlStateSync()
+    if (aiState.enabled === false) {
+      const pending = await peekPending()
+      console.log(
+        `[Evolution][flush] ${sessionId} held — ai_disabled${aiState.reason ? ` (${aiState.reason})` : ''} | pending: ${pending}`,
+      )
+      return { skipped: 'ai_disabled', reason: aiState.reason || null, pending }
+    }
+
+    if (telefone && shouldSkipReplyCooldown(env, telefone)) {
+      const pending = await peekPending()
+      const remainingMs = getReplyCooldownRemainingMs(env, telefone)
+      const remainingSec = Math.ceil(remainingMs / 1000)
+      console.log(
+        `[Evolution][flush] ${sessionId} held — reply_cooldown (${telefone}, ${remainingSec}s restantes) | pending: ${pending}`,
+      )
+      return { skipped: 'reply_cooldown', telefone, pending, remainingMs }
+    }
+
+    if (telefone && (await isAtendimentoIaPaused(env, telefone))) {
+      const pending = await peekPending()
+      console.log(
+        `[Evolution][flush] ${sessionId} held — ia_paused (matrícula/consultor ativo) | pending: ${pending}`,
+      )
+      return { skipped: 'ia_paused', pending }
+    }
+
     const itens = await drainMessages(env, sessionId)
     if (!itens.length) {
       console.log(`[Evolution][flush] ${sessionId} sem mensagens pendentes (drain vazio)`)
       return null
     }
 
-    // ── Kill switch: IA desligada? DESCARTA o que estiver no buffer e
-    // sai. Política: ao religar, IA responde só mensagens novas (sem
-    // backlog).
-    const aiState = getAiControlStateSync()
-    if (aiState.enabled === false) {
-      console.log(
-        `[Evolution][flush] ${sessionId} BLOQUEADO — IA desligada${aiState.reason ? ` (${aiState.reason})` : ''}. ` +
-          `${itens.length} msg(s) descartada(s) do buffer.`,
-      )
-      return { skipped: 'ai_disabled', reason: aiState.reason || null, discarded: itens.length }
-    }
-
     const mensagemCompleta = itens.join(', ')
-
-    if (telefone && shouldSkipReplyCooldown(env, telefone)) {
-      console.log(`[Evolution][flush] ${sessionId} BLOQUEADO — reply_cooldown (${telefone}).`)
-      return { skipped: 'reply_cooldown', telefone, discarded: itens.length }
-    }
-
-    if (telefone && (await isAtendimentoIaPaused(env, telefone))) {
-      console.log(
-        `[Evolution][flush] ${sessionId} BLOQUEADO — atendimento_ia=pause (matrícula/consultor ativo). ` +
-          `${itens.length} msg(s) descartada(s) do buffer.`,
-      )
-      return { skipped: 'ia_paused', discarded: itens.length }
-    }
 
     const executionId = opts.executionId || generateExecutionId()
     const startedAt = new Date().toISOString()
@@ -551,6 +566,8 @@ async function flushSessionInner(env, sessionId, opts = {}) {
       userMessage: mensagemCompleta,
       executionId,
       leadId: Number.isFinite(leadIdHint) && leadIdHint > 0 ? leadIdHint : undefined,
+      // Gate ia_paused já checado acima (antes do drain) — economiza round-trip.
+      skipPauseCheck: true,
     })
     if (out.ok) {
       console.log(

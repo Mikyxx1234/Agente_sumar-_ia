@@ -145,3 +145,96 @@ já usa o texto novo.
 - Rollback é uma operação igual ao apply (cria nova versão a partir
   da versão alvo). Nunca perde linhas.
 - UI confirma antes de aplicar; mostra diff colorido.
+
+---
+
+### 2026-05-22 — Reordenação de gates no flush + bypass de scope para mídia/contexto
+
+**Decisão.** Corrigir 6 bugs comportamentais do fluxo do agente em 2 PRs
+pequenos. Não mexer em duplicação/refactor estrutural neste ciclo
+(reservado pra refactor futuro).
+
+**PR 1 — não perder mensagens válidas no flush.**
+
+1. `flushSessionInner` (`server/evolution/webhookEvolution.js`) agora
+   checa `ai_disabled`, `reply_cooldown` e `ia_paused` **antes** de
+   `drainMessages`. Mensagens permanecem no buffer; o próximo tick
+   reprocessa quando o gate liberar. Logs trocam `discarded:N` por
+   `held … | pending:N`.
+2. `endAgentQueueSession` (`server/agentQueueSession.js`) só chama
+   `clearMessages` se `flushSession` realmente consumiu o buffer.
+   Quando o flush é "held" (claim ocupado em outra réplica, cooldown,
+   pausa), o buffer é preservado pro próximo tick processar — e o log
+   imprime `flush_skipped=...`.
+3. `isAtendimentoIaPaused` permanece como rede de segurança em
+   `agentRunner.js`, mas o webhook passa `skipPauseCheck: true` (gate
+   já foi checado antes do drain), evitando round-trip extra.
+4. `AGENT_REPLY_COOLDOWN_SEC=0` agora **desliga** o cooldown
+   (`server/replyCooldown.js`). Default continua 45s. Log do flush
+   inclui segundos restantes.
+
+**PR 2 — scope classifier mais preciso.**
+
+5. `classifyMessageScope` (`server/ai/scopeClassifier.js`) ignora
+   mensagens `messageIsInboundMediaPlaceholder` (áudio/imagem) —
+   tratamento fica nos fluxos especializados (
+   `inscricaoAceitePagamentoFlow`, transcrição). Evita recusa indevida
+   quando o status de inscrição está stale.
+6. `runAgent` (`server/ai/agentRunner.js`) trata `isGreetingOnly` logo
+   após carregar histórico, **antes** das chamadas a Kommo (sum_curso),
+   pós-form, course level e auto-handoff. Saudação contextual continua
+   funcionando porque o histórico já está disponível.
+7. Reforço opcional `SCOPE_BLOCK_REQUIRE_NO_CONTEXT=true`: quando
+   ligado, recusa de fora_escopo é suprimida se houver contexto ativo
+   (curso em discussão, tópico ativo). Default false — ligar
+   gradualmente após monitorar logs.
+
+**Contexto.**
+- Logs anteriores mostravam mensagens descartadas pelo flush (gates
+  aplicados depois do drain).
+- `endAgentQueueSession` apagava buffer mesmo quando o flush não tinha
+  conseguido processar — perda definitiva.
+- Mídia inbound chegava ao scope classifier e disparava recusa quando
+  o fluxo de aceite/pagamento não pegava.
+- Saudações simples consumiam I/O caro (Kommo, inscrição) sem
+  necessidade.
+
+**Alternativas descartadas.**
+- *Refatorar a unificação de gates em uma camada só.* Mudança maior
+  (estado da IA, pausa, cooldown vêm de fontes diferentes); fica pra
+  futuro PR arquitetural.
+- *Remover totalmente o check de `isAtendimentoIaPaused` de
+  `agentRunner.js`.* Quebraria callers alternativos (playground em
+  `server.js POST /api/agent/run`). Solução: flag `skipPauseCheck`
+  opcional, default false.
+- *Ligar `SCOPE_BLOCK_REQUIRE_NO_CONTEXT` por default.* Pode suprimir
+  recusas legítimas em borderline; preferimos observabilidade primeiro
+  (default false).
+
+**Impacto.**
+- Arquivos modificados:
+  - `server/evolution/webhookEvolution.js` — reordenar gates, troca
+    log discarded→pending, importa `getMessages`,
+    `getReplyCooldownRemainingMs`.
+  - `server/agentQueueSession.js` — guard de `clearMessages` baseado
+    em retorno do `flushSession`.
+  - `server/replyCooldown.js` — `AGENT_REPLY_COOLDOWN_SEC=0` desliga,
+    nova fn `getReplyCooldownRemainingMs`, `isReplyCooldownDisabled`.
+  - `server/ai/agentRunner.js` — `skipPauseCheck`, isGreetingOnly
+    movido para antes dos flows de Kommo/inscrição,
+    `SCOPE_BLOCK_REQUIRE_NO_CONTEXT` opcional.
+  - `server/ai/scopeClassifier.js` — bypass para mídia inbound.
+  - `.env.example` — documenta novas envs.
+- Comportamento esperado: nenhum descarte silencioso. Toda mensagem
+  válida vai ou virar resposta ou permanecer no buffer pra próximo
+  tick. Logs ganham `held` + `pending:N` + `flush_skipped=...`.
+
+**Salvaguardas.**
+- `SCOPE_BLOCK_REQUIRE_NO_CONTEXT=false` por default (mudança
+  observável; ativar manualmente após monitorar).
+- `flushSession` retorna `{skipped:'reply_cooldown', remainingMs}` —
+  o caller (`agentQueueSession`) detecta e preserva o buffer.
+- Sintaxe de todos os arquivos validada com `node --check`.
+- Validação funcional manual (cooldown, pausa, mídia sem texto,
+  follow-up de curso, fora-de-escopo no início) precisa rodar com
+  lead de QA após o deploy — passos descritos no plano original.

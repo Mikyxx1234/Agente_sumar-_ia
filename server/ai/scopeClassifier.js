@@ -13,6 +13,7 @@ import {
   messageLooksCareerIncomeOpportunity,
   isGreetingOnly,
   shouldBypassScopeBlock,
+  messageIsInboundMediaPlaceholder,
 } from '../../libShared/scopeHeuristics.js'
 import { messageAsksUnsupportedCourseLevel } from '../../libShared/courseLevelHeuristics.js'
 
@@ -100,6 +101,28 @@ export async function classifyMessageScope(env, input = {}) {
   }
   if (!userMessage) {
     return { blocked: false, reply: null, classification: null, source: 'skipped', reason: 'empty', model, usage: null, elapsedMs: Date.now() - t0 }
+  }
+
+  // Mídia inbound (áudio/imagem/comprovante): nunca é "fora de escopo". O texto
+  // é só um marcador interno — fluxos especializados (inscricaoAceitePagamento,
+  // transcrição) tratam o conteúdo. Bloquear aqui pode gerar recusa indevida
+  // quando o status de inscrição estiver stale.
+  if (messageIsInboundMediaPlaceholder(input.userMessage)) {
+    return {
+      blocked: false,
+      reply: null,
+      classification: {
+        dentro_escopo: true,
+        categoria: 'mensagem_midia',
+        nivel: 'indefinido',
+        motivo: 'mídia inbound (áudio/imagem) — tratada por fluxos especializados',
+      },
+      source: 'heuristic',
+      reason: 'inbound_media_bypass',
+      model,
+      usage: null,
+      elapsedMs: Date.now() - t0,
+    }
   }
 
   if (isGreetingOnly(userMessage)) {

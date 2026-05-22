@@ -213,7 +213,12 @@ export async function runAgent(env, input) {
     }
   }
 
-  if (telefone && (await isAtendimentoIaPaused(env, telefone))) {
+  // Gate `ia_paused` é responsabilidade do caller (webhookEvolution faz o
+  // check antes do drain — ver flushSessionInner). Aqui mantemos a checagem
+  // apenas como rede de segurança para callers alternativos (playground/
+  // server.js POST /api/agent/run) que invocam runAgent direto. Quando o
+  // caller já checou (skipPauseCheck:true), evitamos round-trip a Supabase.
+  if (telefone && !input?.skipPauseCheck && (await isAtendimentoIaPaused(env, telefone))) {
     console.log(`[${executionId}] IA pausada (atendimento_ia=pause) telefone=${telefone}`)
     return {
       ok: true,
@@ -263,6 +268,47 @@ export async function runAgent(env, input) {
   })
 
   formFlowCtx.historyMessages = historyMessages
+
+  // ── Shortcut barato: saudação pura (com ou sem contexto). Adiantado
+  // pra rodar ANTES das chamadas Kommo (sum_curso), pós-form, course
+  // level e handoff — saudação não precisa de nenhuma dessas etapas e
+  // economiza I/O. Histórico já está carregado então o contexto continua
+  // funcionando (saudação contextual mantida).
+  if (isGreetingOnly(userMessage)) {
+    const hasContext =
+      conversationHasActiveTopic(historyMessages) ||
+      Boolean(extractDiscussedCourseFromHistory(historyMessages))
+    const greetingReply = hasContext
+      ? buildContextualGreetingReply({ userMessage, pushName: input?.pushName, historyMessages })
+      : buildGreetingReply({ userMessage, pushName: input?.pushName })
+    ctx.recordScopeClassification?.({
+      blocked: false,
+      source: 'heuristic',
+      reason: hasContext ? 'greeting_continuacao' : 'greeting',
+      classification: {
+        dentro_escopo: true,
+        categoria: hasContext ? 'saudacao_continuacao' : 'saudacao',
+        nivel: 'indefinido',
+        motivo: hasContext ? 'saudação com conversa em andamento' : 'saudação simples',
+      },
+    })
+    console.log(`[${executionId}] GREETING handled contexto=${hasContext} (sem orquestrador)`)
+    return {
+      ok: true,
+      reply: greetingReply,
+      scopeBlocked: false,
+      greetingHandled: true,
+      toolCalls: [],
+      orchestratorSteps: [{ type: 'greeting', durationMs: Date.now() - t0 }],
+      ctxSnapshot: { greeting: true },
+      usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      durationMs: Date.now() - t0,
+      historyLoaded: historyMessages.length,
+      executionId,
+      model,
+      aiMeta: ctx.toAiMeta(),
+    }
+  }
 
   // Pré-preenchimento sum_Curso: assim que o lead confirma interesse num
   // curso (mesmo antes de pedir inscrição), gravamos no Kommo. Função
@@ -368,42 +414,6 @@ export async function runAgent(env, input) {
     }
   }
 
-  if (isGreetingOnly(userMessage)) {
-    const hasContext =
-      conversationHasActiveTopic(historyMessages) ||
-      Boolean(extractDiscussedCourseFromHistory(historyMessages))
-    const greetingReply = hasContext
-      ? buildContextualGreetingReply({ userMessage, pushName: input?.pushName, historyMessages })
-      : buildGreetingReply({ userMessage, pushName: input?.pushName })
-    ctx.recordScopeClassification?.({
-      blocked: false,
-      source: 'heuristic',
-      reason: hasContext ? 'greeting_continuacao' : 'greeting',
-      classification: {
-        dentro_escopo: true,
-        categoria: hasContext ? 'saudacao_continuacao' : 'saudacao',
-        nivel: 'indefinido',
-        motivo: hasContext ? 'saudação com conversa em andamento' : 'saudação simples',
-      },
-    })
-    console.log(`[${executionId}] GREETING handled contexto=${hasContext} (sem orquestrador)`)
-    return {
-      ok: true,
-      reply: greetingReply,
-      scopeBlocked: false,
-      greetingHandled: true,
-      toolCalls: [],
-      orchestratorSteps: [{ type: 'greeting', durationMs: Date.now() - t0 }],
-      ctxSnapshot: { greeting: true },
-      usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-      durationMs: Date.now() - t0,
-      historyLoaded: historyMessages.length,
-      executionId,
-      model,
-      aiMeta: ctx.toAiMeta(),
-    }
-  }
-
   const skipScopeCheck = historyMessages.length === 0 && isAmbiguousShortReply(userMessage)
   let scopeClassification = null
   if (!skipScopeCheck) {
@@ -428,6 +438,28 @@ export async function runAgent(env, input) {
     ) {
       console.log(
         `[${executionId}] SCOPE_CLASSIFIER override — continuacao de atendimento (nao bloquear)`,
+      )
+      scope.blocked = false
+      scope.reply = null
+    }
+
+    // Reforço opcional (PR 2.3): SCOPE_BLOCK_REQUIRE_NO_CONTEXT=true exige
+    // ausência total de contexto ativo (curso em discussão recente) pra
+    // efetivar o bloqueio. Em produção começamos com o flag desligado e
+    // monitoramos via log; se houver falso-bloqueios escapando do bypass
+    // acima, ligamos o flag pra suprimir o envio da recusa sem perder a
+    // mensagem (que já não vai virar resposta — só log).
+    const requireNoContextForBlock =
+      String(env.SCOPE_BLOCK_REQUIRE_NO_CONTEXT || 'false').toLowerCase() === 'true'
+    if (
+      scope.blocked &&
+      scope.reply &&
+      requireNoContextForBlock &&
+      (conversationHasActiveTopic(historyMessages) ||
+        Boolean(extractDiscussedCourseFromHistory(historyMessages)))
+    ) {
+      console.log(
+        `[${executionId}] SCOPE_CLASSIFIER bloqueio suprimido — SCOPE_BLOCK_REQUIRE_NO_CONTEXT=true e contexto ativo na conversa (reply NÃO será enviado)`,
       )
       scope.blocked = false
       scope.reply = null
