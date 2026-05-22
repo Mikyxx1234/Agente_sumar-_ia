@@ -1829,3 +1829,17 @@ export async function syncKommoInboundToBuffer(env, { leadId, sessionId, phone, 
   await runNotes()
   return { pushed, byMode }
 }
+
+/**
+ * Lead saiu/voltou da fila do agente — força novo warmup no próximo poll
+ * (não reempurra notas/eventos já vistas no ciclo anterior).
+ */
+export function resetKommoInboundPollStateForLead(leadId) {
+  const lid = Number(leadId)
+  if (!Number.isFinite(lid) || lid <= 0) return false
+  noteState.delete(lid)
+  amojoState.delete(lid)
+  eventState.delete(lid)
+  dispatcherState.delete(lid)
+  return true
+}

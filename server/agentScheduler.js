@@ -79,9 +79,11 @@ import {
 } from './kommoInboundDiagnostics.js'
 import { notifyFunnelSnapshot } from './feedbackIA/funnelExitWatcher.js'
 import {
-  clearStaleBufferIfMatriculaDone,
-  isMatriculaPosFormDoneForTelefone,
-} from './funnelReentryGuard.js'
+  beginAgentQueueSession,
+  endAgentQueueSessionsForLeads,
+  isAgentQueueSessionEnabled,
+} from './agentQueueSession.js'
+import { isMatriculaPosFormDoneForTelefone } from './funnelReentryGuard.js'
 import { leadHasPostFormRegistradoNote } from './postFormSendGuard.js'
 import { clearMessages } from './evolution/messageBuffer.js'
 
@@ -214,11 +216,20 @@ export async function runSchedulerTick(env) {
   const leadsAll = listing.leads || []
   stats.leadsInFunnel = leadsAll.length
 
-  // Feedback IA — detecta leads que saíram/entraram no funil entre ticks.
+  // Feedback IA + ciclo de sessão (saída/reentrada na fila do agente).
   let funnelEnteredIds = new Set()
+  let funnelExitedIds = []
   try {
     const snap = notifyFunnelSnapshot(env, leadsAll.map((l) => Number(l.id)))
-    funnelEnteredIds = new Set((snap.entered || []).map(Number).filter((n) => Number.isFinite(n) && n > 0))
+    funnelEnteredIds = new Set((snap.enteredIds || snap.entered || []).map(Number).filter((n) => Number.isFinite(n) && n > 0))
+    funnelExitedIds = (snap.exitedIds || [])
+      .map(Number)
+      .filter((n) => Number.isFinite(n) && n > 0)
+    if (isAgentQueueSessionEnabled(env) && funnelExitedIds.length > 0) {
+      endAgentQueueSessionsForLeads(env, funnelExitedIds, { reason: 'funnel_exit' }).catch((err) => {
+        console.warn('[scheduler] agentQueueSession end:', err.message)
+      })
+    }
   } catch (err) {
     console.error('[scheduler] feedbackIA notify falhou:', err.message)
   }
@@ -299,10 +310,15 @@ export async function runSchedulerTick(env) {
 
       if (funnelEnteredIds.has(Number(lead.id))) {
         try {
-          const reentry = await clearStaleBufferIfMatriculaDone(env, { telefone: phone, sessionId })
-          if (reentry.cleared) {
+          const reentry = await beginAgentQueueSession(env, {
+            leadId: Number(lead.id),
+            telefone: phone,
+            sessionId,
+            reason: 'funnel_reentry',
+          })
+          if (reentry.ok && !reentry.skipped) {
             console.log(
-              `[scheduler] lead=${lead.id} buffer limpo na reentrada ao funil (${reentry.reason || 'ok'})`,
+              `[scheduler] lead=${lead.id} nova sessão na fila buffer=${reentry.bufferRemoved} memory=${reentry.memoryRemoved}`,
             )
           }
         } catch (reentryErr) {

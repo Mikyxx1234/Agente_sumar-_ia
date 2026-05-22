@@ -54,28 +54,35 @@ export function notifyFunnelSnapshot(env, currentLeadIds) {
   for (const id of current) {
     if (!previousFunnelIds.has(id)) entered.push(id)
   }
-  if (!isEnabled(env)) {
-    previousFunnelIds = current
-    return { enabled: false, exited: 0, entered }
-  }
   const exited = []
   for (const id of previousFunnelIds) {
     if (!current.has(id)) exited.push(id)
   }
-  for (const id of exited) pendingQueue.add(id)
   previousFunnelIds = current
 
-  if (exited.length > 0) {
-    console.log(`[feedbackIA] funnel-exit detectado: ${exited.length} lead(s) [${exited.slice(0, 10).join(', ')}${exited.length > 10 ? '…' : ''}]`)
-    // dispara dreno mas não aguarda
-    drainQueue(env).catch((e) => console.error('[feedbackIA] drain error:', e.message))
-  }
   if (entered.length > 0) {
     console.log(
       `[scheduler] funnel-reentry: ${entered.length} lead(s) [${entered.slice(0, 10).join(', ')}${entered.length > 10 ? '…' : ''}]`,
     )
   }
-  return { enabled: true, exited: exited.length, entered, queued: pendingQueue.size }
+
+  const feedbackOn = isEnabled(env)
+  if (feedbackOn) {
+    for (const id of exited) pendingQueue.add(id)
+    if (exited.length > 0) {
+      console.log(`[feedbackIA] funnel-exit detectado: ${exited.length} lead(s) [${exited.slice(0, 10).join(', ')}${exited.length > 10 ? '…' : ''}]`)
+      drainQueue(env).catch((e) => console.error('[feedbackIA] drain error:', e.message))
+    }
+  }
+
+  return {
+    enabled: feedbackOn,
+    exited: exited.length,
+    exitedIds: exited,
+    entered,
+    enteredIds: entered,
+    queued: pendingQueue.size,
+  }
 }
 
 async function drainQueue(env) {

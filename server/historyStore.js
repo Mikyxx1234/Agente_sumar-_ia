@@ -206,6 +206,31 @@ export async function fetchRecentChatRows(env, telefone, limit = 30) {
   return r.data
 }
 
+/**
+ * Remove memória LangChain (n8n_chat_histories) da sessão WhatsApp do lead.
+ * Usado ao encerrar/reiniciar sessão na fila do agente.
+ */
+export async function clearAgentConversationMemory(env, telefone) {
+  const cfg = getConfig(env)
+  if (!cfg.url || !cfg.key) {
+    return { ok: false, code: 'SUPABASE_NOT_CONFIGURED', removed: 0 }
+  }
+  const fone = normalizeTelefone(telefone)
+  if (!fone) return { ok: false, code: 'MISSING_TELEFONE', removed: 0 }
+  const sessionId = `${fone}@s.whatsapp.net`
+  const path =
+    `${encodeURIComponent(cfg.memoryTable)}?session_id=eq.${encodeURIComponent(sessionId)}`
+  const r = await sbRequest(cfg.url, cfg.key, 'DELETE', path)
+  const removed = Array.isArray(r.data) ? r.data.length : r.ok ? 0 : 0
+  return {
+    ok: r.ok,
+    session_id: sessionId,
+    removed,
+    status: r.status,
+    error: r.ok ? null : summarizeError(r),
+  }
+}
+
 export async function readChatMessages(env, telefone, limit = 8) {
   const cfg = getConfig(env)
   if (!cfg.url || !cfg.key) return []

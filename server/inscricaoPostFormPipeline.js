@@ -25,6 +25,7 @@ import {
 import { DADOS_CLIENTE_INSCRICAO_SELECT } from './dadosClienteInscricaoFields.js'
 import { isSumareCaptacaoEnabled } from './sumareCaptacaoClient.js'
 import { leadHasPostFormRegistradoNote } from './postFormSendGuard.js'
+import { getAgentQueueSessionCutoffIso } from './agentQueueSession.js'
 import {
   runMatriculaCaptacaoAfterForm,
   shouldRunSalesbot49813,
@@ -365,8 +366,16 @@ export async function tryProcessInscricaoPostFormPipeline(env, input) {
   let kommoFormDone = false
   let detectSource = ''
   if (schedulerTick && idLead) {
+    const sessionCutoff = getAgentQueueSessionCutoffIso(idLead)
+    const recebidoAt = row?.inscricao_form_recebido_at || null
+    const minNoteAfterIso =
+      recebidoAt && sessionCutoff
+        ? Date.parse(recebidoAt) >= Date.parse(sessionCutoff)
+          ? recebidoAt
+          : sessionCutoff
+        : recebidoAt || sessionCutoff || null
     const det = await detectFormSumarRecebidoNoKommo(env, idLead, {
-      minNoteAfterIso: row?.inscricao_form_recebido_at || null,
+      minNoteAfterIso,
     })
     kommoFormDone = Boolean(det.detected)
     detectSource = det.source || det.reason || ''

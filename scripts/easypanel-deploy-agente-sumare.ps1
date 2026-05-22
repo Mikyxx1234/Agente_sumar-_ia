@@ -51,6 +51,8 @@ $envPairs = @(
   @('KOMMO_SCHEDULER_DEBOUNCE_SEC', '8'),
   @('POST_FORM_SEND_REQUIRE_REDIS', 'true'),
   @('POST_FORM_SEND_GUARD_SEC', '300'),
+  @('AGENT_QUEUE_SESSION_ENABLED', 'true'),
+  @('AGENT_QUEUE_SESSION_CLEAR_MEMORY', 'true'),
   @('SUMARE_CAPTACAO_ENABLED', 'true'),
   @('SUMARE_CAPTACAO_BASE_URL', 'https://api-captacao.sumare.edu.br'),
   @('SUMARE_CONTRATO_PORTAL_URL', 'https://sumare.edu.br/vem-pra-sumare/vestibular/contrato'),
@@ -100,6 +102,8 @@ Write-Host "commit implantado: $($sha.Substring(0, 12))"
 $checks = @(
   'INATIVIDADE_ENABLED',
   'AGENT_FLUSH_CLAIM_ENABLED',
+  'AGENT_QUEUE_SESSION_ENABLED',
+  'AGENT_QUEUE_SESSION_CLEAR_MEMORY',
   'WHATSAPP_OUTBOUND_DEDUPE_SEC',
   'SUMARE_CAPTACAO_ENABLED',
   'SUMARE_CAPTACAO_TOKEN'
