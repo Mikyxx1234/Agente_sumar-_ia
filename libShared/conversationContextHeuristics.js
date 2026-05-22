@@ -18,9 +18,16 @@ export function assistantAskedEnrollmentInLastReply(historyMessages) {
   const a = lastAssistantText(historyMessages).toLowerCase()
   if (!a) return false
   return (
-    /\b(deseja|quer|gostaria|posso|continuar)\b[\s\S]{0,70}\b(seguir|inscri|matricul|prosseguir|matr[ií]cula)\b/i.test(a) ||
-    /\b(estávamos|estavamos)\s+vendo\s+o\s+curso\b/i.test(a) &&
-      /\b(matricul|inscri|continuar|dúvida)\b/i.test(a)
+    /\b(deseja|quer|gostaria|posso)\b[\s\S]{0,70}\b(seguir|inscri|matricul|prosseguir|enviar|mandar|ativar)\b/i.test(a) ||
+    /\b(seguir|prosseguir)\b[\s\S]{0,45}\b(com\s+a\s+)?(inscri|matricul)\b/i.test(a) ||
+    /\b(enviar|mandar|ativar)\b[\s\S]{0,40}\bformul[aá]rio\b/i.test(a) ||
+    /\bformul[aá]rio\b[\s\S]{0,50}\b(inscri|matricul|enviar)\b/i.test(a) ||
+    /\b(ajud(e|ar)|te\s+ajud)\b[\s\S]{0,45}\b(com\s+a\s+)?(inscri|matricul)/i.test(a) ||
+    /\binscri[cç][aã]o\s+nesse\s+curso\b/i.test(a) ||
+    /\bquer\s+que\s+eu\b[\s\S]{0,55}\b(inscri|matricul)/i.test(a) ||
+    /\b(posso|pode)\b[\s\S]{0,40}\b(seguir|continuar)\b[\s\S]{0,30}\b(inscri|matricul)/i.test(a) ||
+    (/\b(estávamos|estavamos)\s+vendo\s+o\s+curso\b/i.test(a) &&
+      /\b(matricul|inscri|continuar|dúvida)\b/i.test(a))
   )
 }
 
@@ -29,6 +36,12 @@ export function userLikelyContinuingEnrollmentFlow(userMessage, historyMessages)
   if (!assistantAskedEnrollmentInLastReply(historyMessages)) return false
   const t = normalizeMessageForScope(userMessage)
   return Boolean(t && t.length >= 1)
+}
+
+/** Lead reclama que já informou o curso/interesse ("eu já falei"). */
+export function messageExpressesFrustrationAlreadySaid(text) {
+  const t = normalizeMessageForScope(text).toLowerCase()
+  return /\b(j[aá]\s+falei|eu\s+disse|j[aá]\s+disse|repeti|de\s+novo|falei\s+isso)\b/i.test(t)
 }
 
 export function extractDiscussedCourseFromHistory(historyMessages) {

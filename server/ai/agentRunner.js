@@ -11,6 +11,8 @@ import { getToolDefinitions } from './toolDefinitions.js'
 import { buildToolExecutors } from './toolExecutorsServer.js'
 import { runBuscarHistorico } from '../memoryTool.js'
 import { readChatMessages } from '../historyStore.js'
+import { mergeHistoriesDedupe, trimHistoryTail } from '../../libShared/historyMerge.js'
+import { fetchLeadFormSnapshot } from '../inscricaoKommoFields.js'
 import { generateExecutionId } from './executionTelemetry.js'
 import { resolveModel } from './modelRegistry.js'
 import { createExecutionContext } from './executionContext.js'
@@ -45,6 +47,9 @@ import {
   messageLooksLikeFormSumarResponse,
   messageLooksLikeFormFollowUp,
   matriculaPosFormAlreadyProcessed,
+  messageConfirmsProceedToInscricaoForm,
+  isShortEnrollmentConfirmation,
+  assistantInEnrollmentStep,
 } from '../../libShared/inscricaoFormHeuristics.js'
 import { fetchDadosClienteByTelefone } from '../dadosClienteStore.js'
 import { DADOS_CLIENTE_INSCRICAO_SELECT } from '../dadosClienteInscricaoFields.js'
@@ -52,6 +57,10 @@ import { leadHasPostFormRegistradoNote } from '../postFormSendGuard.js'
 import {
   conversationHasActiveTopic,
   extractDiscussedCourseFromHistory,
+  assistantAskedEnrollmentInLastReply,
+  userLikelyContinuingEnrollmentFlow,
+  messageExpressesFrustrationAlreadySaid,
+  lastAssistantText,
 } from '../../libShared/conversationContextHeuristics.js'
 import { messageIsInboundMediaPlaceholder } from '../../libShared/scopeHeuristics.js'
 import { isAtendimentoIaPaused } from '../dadosClienteStore.js'
@@ -92,10 +101,14 @@ function sanitizeHistoryMessages(messages) {
 async function loadRecentHistoryMessages(env, telefone) {
   if (!telefone) return { messages: [], source: 'none' }
   const limit = resolveHistoryLimit(env)
+  const maxTail = Math.max(limit * 2, 16)
+
+  let n8nMsgs = []
+  let chatMsgs = []
   try {
     const out = await runBuscarHistorico(env, { telefone, limit })
     if (out.ok && Array.isArray(out.mensagens) && out.mensagens.length > 0) {
-      const messages = sanitizeHistoryMessages(
+      n8nMsgs = sanitizeHistoryMessages(
         out.mensagens
           .map((m) => {
             if (m.role === 'lead') return { role: 'user', content: m.content }
@@ -104,22 +117,49 @@ async function loadRecentHistoryMessages(env, telefone) {
           })
           .filter(Boolean),
       )
-      if (messages.length > 0) return { messages, source: 'n8n_chat_histories' }
     }
   } catch (err) {
     console.warn('[agentRunner] histórico (n8n_chat_histories) indisponível:', err.message)
   }
 
   try {
-    const fallback = sanitizeHistoryMessages(await readChatMessages(env, telefone, limit))
-    if (fallback.length > 0) {
-      return { messages: fallback, source: 'chat_messages_fallback' }
-    }
+    chatMsgs = sanitizeHistoryMessages(await readChatMessages(env, telefone, limit))
   } catch (err) {
     console.warn('[agentRunner] histórico (chat_messages fallback) indisponível:', err.message)
   }
 
+  const merged = trimHistoryTail(mergeHistoriesDedupe(n8nMsgs, chatMsgs), maxTail)
+  if (merged.length > 0) {
+    let source = 'empty'
+    if (n8nMsgs.length && chatMsgs.length) source = 'merged_n8n_chat'
+    else if (n8nMsgs.length) source = 'n8n_chat_histories'
+    else source = 'chat_messages_fallback'
+    return { messages: merged, source }
+  }
+
   return { messages: [], source: 'empty' }
+}
+
+/** "sim" após inscrição: recupera curso do Kommo se o histórico veio incompleto. */
+async function enrichHistoryForShortEnrollmentConfirm(env, leadId, userMessage, historyMessages) {
+  if (!isShortEnrollmentConfirmation(userMessage)) return historyMessages
+  if (assistantAskedEnrollmentInLastReply(historyMessages)) return historyMessages
+  if (!leadId) return historyMessages
+  try {
+    const snap = await fetchLeadFormSnapshot(env, leadId)
+    if (!snap.ok || !snap.snapshot) return historyMessages
+    const curso = String(snap.snapshot.sum_curso || snap.snapshot.curso || '').trim()
+    if (!curso) return historyMessages
+    return [
+      ...historyMessages,
+      {
+        role: 'assistant',
+        content: `Quer que eu te ajude com a inscrição no curso de ${curso}?`,
+      },
+    ]
+  } catch {
+    return historyMessages
+  }
 }
 
 // Confirmações curtas/ambíguas — quando o lead manda só isso e a memória
@@ -270,8 +310,23 @@ export async function runAgent(env, input) {
     loadPrompts(),
     loadRecentHistoryMessages(env, telefone),
   ])
-  const historyMessages = historyResult.messages
+  let historyMessages = historyResult.messages
   const historySource = historyResult.source
+
+  if (telefone && leadId) {
+    const enriched = await enrichHistoryForShortEnrollmentConfirm(
+      env,
+      leadId,
+      userMessage,
+      historyMessages,
+    )
+    if (enriched.length !== historyMessages.length) {
+      console.log(
+        `[${executionId}] HISTORICO_ENRIQUECIDO kommo_curso turnos=${enriched.length} (era ${historyMessages.length})`,
+      )
+      historyMessages = enriched
+    }
+  }
 
   // Loga o histórico carregado pra cada execução. Antes não tínhamos
   // visibilidade se a memória vinha vazia / curta — o agente parecia
@@ -298,6 +353,19 @@ export async function runAgent(env, input) {
   })
 
   formFlowCtx.historyMessages = historyMessages
+
+  // "sim" / "ok" após pergunta de inscrição → Form Sumar (antes de cair no orquestrador sem contexto).
+  if (telefone && isShortEnrollmentConfirmation(userMessage)) {
+    if (messageConfirmsProceedToInscricaoForm(userMessage, historyMessages)) {
+      const formEarly = await tryHandleInscricaoFormStart(env, formFlowCtx)
+      if (formEarly?.handled) {
+        console.log(
+          `[${executionId}] INSCRICAO_FORM_START early_confirm enrollment_step=${assistantInEnrollmentStep(lastAssistantText(historyMessages))}`,
+        )
+        return { ...formEarly.result, historyLoaded: historyMessages.length, aiMeta: ctx.toAiMeta() }
+      }
+    }
+  }
 
   // ── Shortcut barato: saudação pura (com ou sem contexto). Adiantado
   // pra rodar ANTES das chamadas Kommo (sum_curso), pós-form, course
@@ -599,7 +667,42 @@ export async function runAgent(env, input) {
         }
       : null
 
-  const ambiguousNoContext = historyMessages.length === 0 && isAmbiguousShortReply(userMessage)
+  const enrollmentContinuation =
+    userLikelyContinuingEnrollmentFlow(userMessage, historyMessages) ||
+    (isShortEnrollmentConfirmation(userMessage) &&
+      messageConfirmsProceedToInscricaoForm(userMessage, historyMessages))
+
+  const ambiguousNoContext =
+    historyMessages.length === 0 &&
+    isAmbiguousShortReply(userMessage) &&
+    !enrollmentContinuation
+
+  const frustrationAlreadySaid =
+    messageExpressesFrustrationAlreadySaid(userMessage) &&
+    (conversationHasActiveTopic(historyMessages) ||
+      Boolean(extractDiscussedCourseFromHistory(historyMessages)))
+
+  const enrollmentConfirmHint = enrollmentContinuation
+    ? {
+        role: 'system',
+        content:
+          'CONFIRMAÇÃO DE MATRÍCULA: o lead respondeu de forma afirmativa após você perguntar sobre inscrição/matrícula no curso em pauta. ' +
+          `Curso em discussão: ${extractDiscussedCourseFromHistory(historyMessages) || 'ver sum_Curso/histórico'}. ` +
+          'OBRIGATÓRIO neste turno: acionar a tool inscricao (Formulário Sumar) — não pergunte de novo "qual curso". ' +
+          'PROIBIDO resetar o atendimento ou pedir que o lead repita o nome do curso.',
+      }
+    : null
+
+  const frustrationHint = frustrationAlreadySaid
+    ? {
+        role: 'system',
+        content:
+          'O lead indicou que JÁ informou o curso/interesse. Peça desculpas breves, cite o curso que consta no histórico ' +
+          `(${extractDiscussedCourseFromHistory(historyMessages) || 'Gestão Financeira ou o último curso citado'}) ` +
+          'e ofereça seguir com inscrição (tool inscricao) ou tirar dúvida sobre ESSE curso — nunca pergunte "qual curso" de novo.',
+      }
+    : null
+
   const noContextWarning = ambiguousNoContext
     ? {
         role: 'system',
@@ -619,12 +722,14 @@ export async function runAgent(env, input) {
     ...(commercialHint ? [commercialHint] : []),
     ...(courseInterestHint ? [courseInterestHint] : []),
     ...(activeFlowHint ? [activeFlowHint] : []),
+    ...(enrollmentConfirmHint ? [enrollmentConfirmHint] : []),
+    ...(frustrationHint ? [frustrationHint] : []),
     ...(noContextWarning ? [noContextWarning] : []),
     ...historyMessages,
     { role: 'user', content: userMessage },
   ]
   console.log(
-    `[${executionId}] MONTOU_PROMPT promptsLoaded=${prompts.length} systemChars=${systemMessage.length} historyMsgs=${historyMessages.length} ambiguousNoContext=${ambiguousNoContext} model=${model}`,
+    `[${executionId}] MONTOU_PROMPT promptsLoaded=${prompts.length} systemChars=${systemMessage.length} historyMsgs=${historyMessages.length} ambiguousNoContext=${ambiguousNoContext} enrollmentContinuation=${enrollmentContinuation} model=${model}`,
   )
 
   const executors = buildToolExecutors(env, ctx)

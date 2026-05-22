@@ -83,8 +83,19 @@ export function assistantInEnrollmentStep(lastAssist) {
     /\b(deseja|quer|gostaria|posso)\b[\s\S]{0,70}\b(seguir|inscri|matricul|prosseguir|enviar|mandar|ativar)\b/i.test(a) ||
     /\b(seguir|prosseguir)\b[\s\S]{0,45}\b(com\s+a\s+)?(inscri|matricul)\b/i.test(a) ||
     /\b(enviar|mandar|ativar)\b[\s\S]{0,40}\bformul[aá]rio\b/i.test(a) ||
-    /\bformul[aá]rio\b[\s\S]{0,50}\b(inscri|matricul|enviar)\b/i.test(a)
+    /\bformul[aá]rio\b[\s\S]{0,50}\b(inscri|matricul|enviar)\b/i.test(a) ||
+    /\b(ajud(e|ar)|te\s+ajud)\b[\s\S]{0,45}\b(com\s+a\s+)?(inscri|matricul)/i.test(a) ||
+    /\binscri[cç][aã]o\s+nesse\s+curso\b/i.test(a) ||
+    /\bquer\s+que\s+eu\b[\s\S]{0,55}\b(inscri|matricul)/i.test(a) ||
+    /\b(posso|pode)\b[\s\S]{0,40}\b(seguir|continuar)\b[\s\S]{0,30}\b(inscri|matricul)/i.test(a)
   )
+}
+
+/** Confirmação curta típica após pergunta de inscrição ("sim", "ok", "pode"). */
+export function isShortEnrollmentConfirmation(text) {
+  const t = normalizeMessageForScope(text).toLowerCase().trim().replace(/[.!?]+$/, '')
+  if (!t || t.length > 24) return false
+  return /^\s*(sim|s|ok|okay|pode|bora|vamos|quero|isso|claro|beleza|pode\s+ser|t[aá]|ta)\s*$/i.test(t)
 }
 
 /** Confirmação curta quando o assistente já está no passo de inscrição / ingresso. */
