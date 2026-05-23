@@ -28,8 +28,9 @@ async function kommoFetch(env, path, { method = 'GET', body } = {}) {
       error: 'Configure KOMMO_BASE_URL e KOMMO_ACCESS_TOKEN.',
     }
   }
+  const requestUrl = `${base}${path}`
   try {
-    const res = await fetch(`${base}${path}`, {
+    const res = await fetch(requestUrl, {
       method,
       headers: {
         Accept: 'application/json',
@@ -41,15 +42,76 @@ async function kommoFetch(env, path, { method = 'GET', body } = {}) {
     const raw = await res.text()
     let data = null
     try { data = raw ? JSON.parse(raw) : null } catch { data = raw }
-    return { ok: res.ok, status: res.status, data, raw }
+    return { ok: res.ok, status: res.status, data, raw, requestUrl }
   } catch (e) {
-    return { ok: false, code: 'KOMMO_FETCH_FAILED', error: e.message }
+    return { ok: false, code: 'KOMMO_FETCH_FAILED', error: e.message, requestUrl }
   }
+}
+
+/**
+ * Diagnóstico rápido da API Kommo (account + list leads no funil do agente).
+ */
+export async function probeKommoApi(env) {
+  const { base, token } = getConfig(env)
+  const out = {
+    ok: false,
+    baseUrl: base || null,
+    tokenConfigured: Boolean(String(token || '').trim()),
+    account: null,
+    leadsSample: null,
+    pipelineId: env.KOMMO_AGENT_PIPELINE_ID || null,
+    statusIds: env.KOMMO_AGENT_STATUS_IDS || env.KOMMO_AGENT_STATUS_ID || null,
+  }
+  if (!base || !token) {
+    out.error = 'KOMMO_BASE_URL ou KOMMO_ACCESS_TOKEN ausente'
+    return out
+  }
+  const acc = await kommoFetch(env, '/api/v4/account')
+  out.account = {
+    ok: acc.ok,
+    status: acc.status,
+    requestUrl: acc.requestUrl,
+    error: acc.ok ? null : summarizeError(acc),
+    name: acc.data?.name || null,
+  }
+  if (!acc.ok) {
+    out.error = out.account.error
+    return out
+  }
+  const sid = Number(env.KOMMO_AGENT_STATUS_ID) || Number(String(env.KOMMO_AGENT_STATUS_IDS || '').split(/[,\s;]+/)[0])
+  const pipelineId = Number(env.KOMMO_AGENT_PIPELINE_ID)
+  if (Number.isFinite(sid) && sid > 0) {
+    const leads = await listLeadsByStatus(env, { pipelineId, statusId: sid, limit: 1, maxPages: 1 })
+    out.leadsSample = {
+      ok: leads.ok,
+      status: leads.status,
+      count: (leads.leads || []).length,
+      error: leads.ok ? null : leads.error,
+    }
+    out.ok = leads.ok
+    if (!leads.ok) out.error = leads.error
+  } else {
+    out.ok = true
+  }
+  return out
 }
 
 function summarizeError(r) {
   if (r.error) return r.error
-  if (typeof r.raw === 'string') return r.raw.slice(0, 400)
+  if (typeof r.raw === 'string') {
+    const raw = r.raw.trim()
+    if (raw.startsWith('<') && /<html/i.test(raw)) {
+      if (r.status === 403) {
+        return (
+          `HTTP 403 Forbidden (resposta HTML/nginx — não é JSON da API Kommo). ` +
+          `Verifique KOMMO_BASE_URL (deve ser https://SUA_CONTA.kommo.com sem /api/v4 no final) ` +
+          `e se o token OAuth ainda é válido. URL chamada: ${r.requestUrl || 'n/a'}`
+        )
+      }
+      return `HTTP ${r.status || '?'} resposta HTML (proxy/WAF?), não JSON Kommo. URL: ${r.requestUrl || 'n/a'}`
+    }
+    return raw.slice(0, 400)
+  }
   return `status ${r.status}`
 }
 

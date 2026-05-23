@@ -68,6 +68,7 @@ import {
   getTalkById,
   getLeadContactIds,
   listContactChats,
+  probeKommoApi,
 } from './server/kommoClient.js'
 import { fetchAmojoChatHistory } from './server/kommoAmojoHistory.js'
 import {
@@ -745,6 +746,17 @@ app.post('/api/history/save', async (req, res) => {
       idLead: idLead ?? id_lead,
     })
     res.status(out.ok ? 200 : 500).json(out)
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// ── Kommo: diagnóstico API (scheduler list leads) ──
+
+app.get('/api/kommo/health', async (_req, res) => {
+  try {
+    const out = await probeKommoApi(process.env)
+    res.status(out.ok ? 200 : 503).json(out)
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })
   }

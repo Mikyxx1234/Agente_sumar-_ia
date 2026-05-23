@@ -40,11 +40,13 @@ export async function listLeadsInAgentQueue(env) {
 
   const byId = new Map()
   let lastError = null
+  let lastStatus = null
 
   for (const statusId of statusIds) {
     const listing = await listLeadsByStatus(env, { pipelineId, statusId })
     if (!listing.ok) {
       lastError = listing.error || listing.code || `status_${statusId}`
+      lastStatus = listing.status ?? null
       continue
     }
     for (const lead of listing.leads || []) {
@@ -59,5 +61,6 @@ export async function listLeadsInAgentQueue(env) {
     leads,
     statusIds,
     error: leads.length === 0 ? lastError : undefined,
+    httpStatus: lastStatus,
   }
 }

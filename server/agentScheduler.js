@@ -207,7 +207,11 @@ export async function runSchedulerTick(env) {
   // 1) Listar leads no funil (um ou vários status — ver KOMMO_AGENT_STATUS_IDS)
   const listing = await listLeadsInAgentQueue(env)
   if (!listing.ok && !(listing.leads || []).length) {
-    console.error('[scheduler] kommo list falhou:', listing.error || 'unknown')
+    const base = String(env.KOMMO_BASE_URL || '').replace(/\/$/, '') || '(vazio)'
+    console.error(
+      `[scheduler] kommo list falhou: http=${listing.httpStatus ?? 'n/a'} base=${base} ` +
+        `status_ids=[${statusIds.join(',')}] pipeline=${pipelineId} err=${String(listing.error || 'unknown').slice(0, 280)}`,
+    )
     return stats
   }
   const leadsAll = listing.leads || []
