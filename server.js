@@ -953,12 +953,17 @@ app.get('/api/whatsapp/health', async (_req, res) => {
   }
 })
 
-app.get('/api/evolution/health', async (_req, res) => {
+app.get('/api/evolution/health', async (req, res) => {
   try {
     const ping = await pingBackend(process.env)
+    const withKommoProbe = ['1', 'true', 'yes'].includes(
+      String(req.query?.kommo || req.query?.kommoProbe || '').trim().toLowerCase(),
+    )
+    const kommoApi = withKommoProbe ? await probeKommoApi(process.env) : undefined
     res.json({
       ok: true,
       buffer: ping,
+      ...(kommoApi ? { kommoApi } : {}),
       webhookDiagnostics: getWebhookDiagnosticsSnapshot(),
       webhookForwarder: getForwarderSnapshot(process.env),
       kommoPoll: getKommoPollSnapshot(),
