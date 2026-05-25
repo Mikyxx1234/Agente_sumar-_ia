@@ -241,11 +241,27 @@ export function messageLooksLikeAgentOutboundEcho(text) {
   return /\s-\s+EX-\d{6}-\d{4}-\d{3}/i.test(String(text || ''))
 }
 
+/**
+ * Texto padrão do WhatsApp/Meta/Kommo quando o lead conclui o Flow do formulário.
+ * Ex.: "Flow responses received" (inglês) — não confundir com fala do lead.
+ */
+export function messageIsFlowResponsesReceived(text) {
+  const raw = String(text || '').trim()
+  if (!raw || raw.length < 8) return false
+  if (messageLooksLikeAgentOutboundEcho(raw)) return false
+  const t = raw.toLowerCase()
+  if (/^flow\s+responses\s+received\.?$/i.test(t)) return true
+  if (/\bflow\s+responses\s+received\b/i.test(t)) return true
+  if (/\brespostas\s+recebidas\s+(no\s+)?flow\b/i.test(t)) return true
+  return false
+}
+
 /** Resposta do WhatsApp Flow / formulário "Form Sumar" após preenchimento. */
 export function messageLooksLikeFormSumarResponse(text) {
   const raw = String(text || '').trim()
   if (!raw || raw.length < 4) return false
   if (messageLooksLikeAgentOutboundEcho(raw)) return false
+  if (messageIsFlowResponsesReceived(raw)) return true
   const t = raw.toLowerCase()
 
   if (/\[formulario\s+sumar\]/i.test(raw)) return true

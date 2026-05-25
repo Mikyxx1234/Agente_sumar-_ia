@@ -196,9 +196,6 @@ export async function detectFormSumarRecebidoNoKommo(env, leadId, options = {}) 
       if (messageLooksLikeFormSumarResponse(blob)) {
         return { detected: true, source: 'kommo_note', sample: blob.slice(0, 120) }
       }
-      if (/\brespostas\s+recebidas\s+no\s+flow\b/i.test(blob)) {
-        return { detected: true, source: 'kommo_note_flow', sample: blob.slice(0, 120) }
-      }
     }
   }
 
@@ -475,9 +472,20 @@ export async function tryProcessInscricaoPostFormPipeline(env, input) {
     return null
   }
 
+  const waitingForForm = [
+    INSCRICAO_FORM_STATUS_AGUARDANDO,
+    INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
+  ].includes(status)
+
   let kommoFormDone = false
   let detectSource = ''
-  if (schedulerTick && idLead) {
+  const shouldScanKommoNotes =
+    idLead &&
+    (schedulerTick ||
+      waitingForForm ||
+      messageLooksLikeFormSumarResponse(userMessage))
+
+  if (shouldScanKommoNotes) {
     const sessionCutoff = getAgentQueueSessionCutoffIso(idLead)
     const recebidoAt = row?.inscricao_form_recebido_at || null
     const minNoteAfterIso =
@@ -493,20 +501,15 @@ export async function tryProcessInscricaoPostFormPipeline(env, input) {
     detectSource = det.source || det.reason || ''
     if (kommoFormDone) {
       console.log(
-        `[inscricaoPostForm] scheduler lead=${idLead} formulario_detectado source=${detectSource} status_supabase=${status || 'n/a'}`,
+        `[inscricaoPostForm] lead=${idLead} formulario_detectado source=${detectSource} scheduler=${Boolean(schedulerTick)} status=${status || 'n/a'}`,
       )
     }
   }
 
-  const waitingForForm = [
-    INSCRICAO_FORM_STATUS_AGUARDANDO,
-    INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
-  ].includes(status)
-
   const trigger =
     shouldTriggerMatriculaPosForm(userMessage, status) ||
     (schedulerTick && status === INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO) ||
-    (schedulerTick && kommoFormDone && waitingForForm)
+    (kommoFormDone && waitingForForm)
 
   if (!trigger) return null
 

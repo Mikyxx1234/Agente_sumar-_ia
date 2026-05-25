@@ -41,11 +41,15 @@ import {
   tryEnsureInscricaoFormSent,
   tryHandleMatriculaAceitePagamentoFlow,
 } from '../inscricaoFormFlow.js'
+import { detectFormSumarRecebidoNoKommo } from '../inscricaoPostFormPipeline.js'
 import { tryHandlePoloEscolhaFlow } from '../inscricaoPoloFlow.js'
 import {
   messageExpressesCourseInterestOnly,
   messageLooksLikeFormSumarResponse,
+  messageIsFlowResponsesReceived,
   messageLooksLikeFormFollowUp,
+  INSCRICAO_FORM_STATUS_AGUARDANDO,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
   matriculaPosFormAlreadyProcessed,
   messageConfirmsProceedToInscricaoForm,
   isShortEnrollmentConfirmation,
@@ -439,28 +443,61 @@ export async function runAgent(env, input) {
     // Pós-form só quando a mensagem indica formulário respondido — evita pular
     // direto para "cadastro validado" em "sim"/"oi" com notas antigas no Kommo.
     let matriculaJaProcessada = false
+    let inscRow = null
     try {
       if (leadId != null && (await leadHasPostFormRegistradoNote(env, leadId))) {
         matriculaJaProcessada = true
       }
       if (!matriculaJaProcessada) {
-        const inscRow = await fetchDadosClienteByTelefone(env, telefone, DADOS_CLIENTE_INSCRICAO_SELECT)
+        inscRow = await fetchDadosClienteByTelefone(env, telefone, DADOS_CLIENTE_INSCRICAO_SELECT)
         matriculaJaProcessada = matriculaPosFormAlreadyProcessed(inscRow)
       }
     } catch {
       /* segue sem bloquear */
     }
+
+    const formStatus = inscRow?.inscricao_form_status ?? null
+    const waitingForForm = [
+      INSCRICAO_FORM_STATUS_AGUARDANDO,
+      INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
+    ].includes(formStatus)
+    const flowTextInbound =
+      messageLooksLikeFormSumarResponse(userMessage) || messageIsFlowResponsesReceived(userMessage)
+
+    let kommoFlowDetected = false
+    if (!matriculaJaProcessada && leadId && (waitingForForm || flowTextInbound)) {
+      try {
+        const det = await detectFormSumarRecebidoNoKommo(env, leadId)
+        kommoFlowDetected = Boolean(det.detected)
+        if (kommoFlowDetected) {
+          console.log(
+            `[${executionId}] FLOW_FORM_KOMMO lead=${leadId} source=${det.source || 'n/a'} sample="${String(det.sample || '').slice(0, 80)}"`,
+          )
+        }
+      } catch (detErr) {
+        console.warn(`[${executionId}] FLOW_FORM_KOMMO erro: ${detErr.message}`)
+      }
+    }
+
     const looksPostFormInbound =
       !matriculaJaProcessada &&
-      (messageLooksLikeFormSumarResponse(userMessage) ||
-        messageLooksLikeFormFollowUp(userMessage, { strictAwaitingForm: true }))
+      (flowTextInbound ||
+        kommoFlowDetected ||
+        (waitingForForm && messageLooksLikeFormFollowUp(userMessage, { strictAwaitingForm: true })))
+
+    if (flowTextInbound) {
+      console.log(
+        `[${executionId}] FLOW_FORM_INBOUND flow_received=${messageIsFlowResponsesReceived(userMessage)} status=${formStatus || 'n/a'}`,
+      )
+    }
+
     const formDone = looksPostFormInbound
       ? await tryHandleInscricaoFormComplete(env, formFlowCtx)
       : null
     if (formDone?.handled) {
       const step = formDone.result?.ctxSnapshot?.inscricaoForm ?? 'post_form'
       console.log(
-        `[${executionId}] INSCRICAO_POST_FORM step=${step} salesbot=${formDone.result?.ctxSnapshot?.salesbotId ?? formDone.result?.ctxSnapshot?.distribSalesbotId ?? 'n/a'}`,
+        `[${executionId}] INSCRICAO_POST_FORM step=${step} captacao=${formDone.result?.ctxSnapshot?.sumareCaptacao ?? 'n/a'} salesbot=${formDone.result?.ctxSnapshot?.salesbotId ?? formDone.result?.ctxSnapshot?.distribSalesbotId ?? 'n/a'}`,
       )
       return { ...formDone.result, historyLoaded: historyMessages.length, aiMeta: ctx.toAiMeta() }
     }
