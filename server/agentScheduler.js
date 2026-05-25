@@ -212,6 +212,8 @@ export async function runSchedulerTick(env) {
       `[scheduler] kommo list falhou: http=${listing.httpStatus ?? 'n/a'} base=${base} ` +
         `status_ids=[${statusIds.join(',')}] pipeline=${pipelineId} err=${String(listing.error || 'unknown').slice(0, 280)}`,
     )
+    // Kommo indisponível (ex.: 403 do IP do servidor): ainda tenta buffer só do webhook Evolution.
+    await tryFlushWebhookOrphanSessions(env, { debounceMs, stats })
     return stats
   }
   const leadsAll = listing.leads || []
@@ -304,6 +306,7 @@ export async function runSchedulerTick(env) {
           `[scheduler] lead=${lead.id} ignorado: nenhum telefone extraível do contato (field PHONE) nem do lead. ` +
             'Sem telefone não há sessionId WhatsApp → buffer vazio e a IA nunca responde. Preencha telefone no Kommo (contato ou lead).',
         )
+        stats.skippedNoPhone = (stats.skippedNoPhone || 0) + 1
         return
       }
       const sessionId = buildSessionId(phone)
@@ -457,6 +460,12 @@ export async function runSchedulerTick(env) {
   })
 
   await Promise.all(tasks)
+
+  // Lead no funil mas sem telefone no Kommo (ou bulk falhou): mensagens podem estar só no buffer Evolution.
+  if (stats.processed === 0 && (stats.skippedNoPhone || 0) > 0) {
+    await tryFlushWebhookOrphanSessions(env, { debounceMs, stats })
+  }
+
   return stats
 }
 

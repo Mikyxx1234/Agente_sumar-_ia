@@ -19,6 +19,7 @@ import {
   assistantInEnrollmentStep,
 } from '../libShared/inscricaoFormHeuristics.js'
 import { messageLooksLikeOperationalChat } from '../libShared/scopeHeuristics.js'
+import { messageAsksCoursePrice, sanitizeLeadInboundMessage } from '../libShared/inboundMessageSanitize.js'
 import { sendFormSumarTemplate } from './whatsappTemplateSender.js'
 import { runKommoSalesbot } from './kommoSalesbot.js'
 import { findLeadByPhone } from './kommoClient.js'
@@ -170,7 +171,9 @@ async function deliverInscricaoForm(env, { telefone, leadId, executionId, forceR
  * Lead pediu inscrição → ativa salesbot Formulario_Sum (formulário no WhatsApp).
  */
 export async function tryHandleInscricaoFormStart(env, input) {
-  const { telefone, userMessage, historyMessages, executionId, model, leadId: leadIdHint, pushName, t0 } = input
+  const { telefone, userMessage: rawMsg, historyMessages, executionId, model, leadId: leadIdHint, pushName, t0 } = input
+  const userMessage = sanitizeLeadInboundMessage(rawMsg)
+  if (messageAsksCoursePrice(userMessage)) return null
   const wantsForm = messageConfirmsProceedToInscricaoForm(userMessage, historyMessages)
   const asksResend = messageAsksForFormResend(userMessage)
   if (!telefone || (!wantsForm && !asksResend)) return null

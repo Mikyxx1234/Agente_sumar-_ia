@@ -63,6 +63,10 @@ import {
   lastAssistantText,
 } from '../../libShared/conversationContextHeuristics.js'
 import { messageIsInboundMediaPlaceholder } from '../../libShared/scopeHeuristics.js'
+import {
+  messageAsksCoursePrice,
+  sanitizeLeadInboundMessage,
+} from '../../libShared/inboundMessageSanitize.js'
 import { isAtendimentoIaPaused } from '../dadosClienteStore.js'
 
 const MAX_TOOL_ROUNDS = 5
@@ -248,7 +252,13 @@ async function executeToolCalls(executors, toolCalls, trace, ctx) {
 export async function runAgent(env, input) {
   const t0 = Date.now()
   const telefone = input?.telefone || ''
-  const userMessage = (input?.userMessage || '').trim()
+  const rawUserMessage = (input?.userMessage || '').trim()
+  const userMessage = sanitizeLeadInboundMessage(rawUserMessage)
+  if (rawUserMessage && userMessage !== rawUserMessage) {
+    console.log(
+      `[${input?.executionId || 'agent'}] INBOUND_SANITIZE rawLen=${rawUserMessage.length} cleanLen=${userMessage.length} preview="${userMessage.slice(0, 120)}"`,
+    )
+  }
   const executionId = input?.executionId || generateExecutionId()
   const leadId = Number.isFinite(Number(input?.leadId)) && Number(input?.leadId) > 0 ? Number(input.leadId) : null
   const model = resolveModel(env, 'orchestrator')
@@ -682,26 +692,39 @@ export async function runAgent(env, input) {
     (conversationHasActiveTopic(historyMessages) ||
       Boolean(extractDiscussedCourseFromHistory(historyMessages)))
 
-  const enrollmentConfirmHint = enrollmentContinuation
+  const enrollmentConfirmHint =
+    enrollmentContinuation && !messageAsksCoursePrice(userMessage)
+      ? {
+          role: 'system',
+          content:
+            'CONFIRMAÇÃO DE MATRÍCULA: o lead respondeu de forma afirmativa após você perguntar sobre inscrição/matrícula no curso em pauta. ' +
+            `Curso em discussão: ${extractDiscussedCourseFromHistory(historyMessages) || 'ver sum_Curso/histórico'}. ` +
+            'OBRIGATÓRIO neste turno: acionar a tool inscricao (Formulário Sumar) — não pergunte de novo "qual curso". ' +
+            'PROIBIDO resetar o atendimento ou pedir que o lead repita o nome do curso.',
+        }
+      : null
+
+  const priceQueryHint = messageAsksCoursePrice(userMessage)
     ? {
         role: 'system',
         content:
-          'CONFIRMAÇÃO DE MATRÍCULA: o lead respondeu de forma afirmativa após você perguntar sobre inscrição/matrícula no curso em pauta. ' +
-          `Curso em discussão: ${extractDiscussedCourseFromHistory(historyMessages) || 'ver sum_Curso/histórico'}. ` +
-          'OBRIGATÓRIO neste turno: acionar a tool inscricao (Formulário Sumar) — não pergunte de novo "qual curso". ' +
-          'PROIBIDO resetar o atendimento ou pedir que o lead repita o nome do curso.',
+          'PERGUNTA SOBRE VALORES/PREÇO: o lead quer saber quanto custa o curso em pauta. ' +
+          `OBRIGATÓRIO neste turno: chame buscar_precos (e buscar_conhecimento se precisar de contexto) para o curso "${extractDiscussedCourseFromHistory(historyMessages) || extractCursoAreaFromText(userMessage) || 'mencionado no histórico'}". ` +
+          'Responda com mensalidade promocional e preço cheio SOMENTE com dados do CONTEXT. ' +
+          'PROIBIDO neste turno: tool inscricao, enviar formulário, perguntar só "quer inscrição?" sem informar valores.',
       }
     : null
 
-  const frustrationHint = frustrationAlreadySaid
-    ? {
-        role: 'system',
-        content:
-          'O lead indicou que JÁ informou o curso/interesse. Peça desculpas breves, cite o curso que consta no histórico ' +
-          `(${extractDiscussedCourseFromHistory(historyMessages) || 'Gestão Financeira ou o último curso citado'}) ` +
-          'e ofereça seguir com inscrição (tool inscricao) ou tirar dúvida sobre ESSE curso — nunca pergunte "qual curso" de novo.',
-      }
-    : null
+  const frustrationHint =
+    frustrationAlreadySaid && !messageAsksCoursePrice(userMessage)
+      ? {
+          role: 'system',
+          content:
+            'O lead indicou que JÁ informou o curso/interesse. Peça desculpas breves, cite o curso que consta no histórico ' +
+            `(${extractDiscussedCourseFromHistory(historyMessages) || 'Gestão Financeira ou o último curso citado'}) ` +
+            'e ofereça seguir com inscrição (tool inscricao) ou tirar dúvida sobre ESSE curso — nunca pergunte "qual curso" de novo.',
+        }
+      : null
 
   const noContextWarning = ambiguousNoContext
     ? {
@@ -722,6 +745,7 @@ export async function runAgent(env, input) {
     ...(commercialHint ? [commercialHint] : []),
     ...(courseInterestHint ? [courseInterestHint] : []),
     ...(activeFlowHint ? [activeFlowHint] : []),
+    ...(priceQueryHint ? [priceQueryHint] : []),
     ...(enrollmentConfirmHint ? [enrollmentConfirmHint] : []),
     ...(frustrationHint ? [frustrationHint] : []),
     ...(noContextWarning ? [noContextWarning] : []),

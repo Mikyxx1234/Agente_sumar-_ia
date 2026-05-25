@@ -49,6 +49,8 @@ $envPairs = @(
   @('AGENT_OUTBOUND_COOLDOWN_SEC', '45'),
   @('AGENT_REPLY_COOLDOWN_SEC', '60'),
   @('KOMMO_SCHEDULER_DEBOUNCE_SEC', '8'),
+  @('KOMMO_AGENT_TEST_LEAD_IDS', '23833445'),
+  @('REDIS_URL', 'redis://evolution-api-redis:6379'),
   @('POST_FORM_SEND_REQUIRE_REDIS', 'true'),
   @('POST_FORM_SEND_GUARD_SEC', '300'),
   @('AGENT_QUEUE_SESSION_ENABLED', 'true'),
@@ -115,7 +117,9 @@ $checks = @(
   'SCOPE_BLOCK_REQUIRE_NO_CONTEXT',
   'WHATSAPP_OUTBOUND_DEDUPE_SEC',
   'SUMARE_CAPTACAO_ENABLED',
-  'SUMARE_CAPTACAO_TOKEN'
+  'SUMARE_CAPTACAO_TOKEN',
+  'KOMMO_AGENT_TEST_LEAD_IDS',
+  'POST_FORM_SEND_REQUIRE_REDIS'
 )
 foreach ($k in $checks) {
   if ($svc2.env -match "(?m)^$k=(.*)$") {

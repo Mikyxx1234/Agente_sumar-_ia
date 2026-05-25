@@ -42,6 +42,7 @@ import { canonicalWhatsAppSessionId, phoneToWhatsAppSessionId } from '../phoneWh
 import { normalizeKommoInboundPollMode } from '../kommoInboundPoll.js'
 import { enqueueCloudInboundPending, matchContactToPending, markCloudBridgeExpectsContact, shouldBufferOrphanContact, clearCloudBridgeContactWindow, bufferOrphanContact } from './cloudInboundPending.js'
 import { recordSyncOutcome, recordBufferWrite, recordAsyncError } from './webhookDiagnostics.js'
+import { sanitizeLeadInboundMessage } from '../../libShared/inboundMessageSanitize.js'
 
 function getBody(req) {
   const body = req.body || {}
@@ -518,7 +519,7 @@ async function flushSessionInner(env, sessionId, opts = {}) {
       return null
     }
 
-    const mensagemCompleta = itens.join(', ')
+    const mensagemCompleta = sanitizeLeadInboundMessage(itens.join(', '))
 
     const executionId = opts.executionId || generateExecutionId()
     const startedAt = new Date().toISOString()

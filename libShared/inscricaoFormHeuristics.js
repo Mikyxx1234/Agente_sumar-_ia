@@ -1,6 +1,11 @@
 /** Heurísticas do fluxo Form Sumar (template WhatsApp → salesbot pós-formulário). */
 
 import { normalizeMessageForScope, messageLooksLikeOperationalChat } from './scopeHeuristics.js'
+import {
+  inboundLooksLikeAgentEchoOnly,
+  messageAsksCoursePrice,
+  sanitizeLeadInboundMessage,
+} from './inboundMessageSanitize.js'
 import { conversationHasActiveTopic } from './conversationContextHeuristics.js'
 import { extractCursoAreaFromText, messageIsBareCourseSelection } from './cursoConfirmation.js'
 
@@ -146,8 +151,12 @@ export function messageExpressesCourseInterestOnly(text, historyMessages = []) {
  * Não dispara em "quero fazer curso de X" sem confirmação após informações do curso.
  */
 export function messageConfirmsProceedToInscricaoForm(text, historyMessages = []) {
-  const t = normalizeMessageForScope(text).toLowerCase()
+  const cleaned = sanitizeLeadInboundMessage(text)
+  const t = normalizeMessageForScope(cleaned).toLowerCase()
   if (!t) return false
+
+  if (inboundLooksLikeAgentEchoOnly(text)) return false
+  if (messageAsksCoursePrice(cleaned)) return false
 
   if (messageLooksLikeOperationalChat(text)) return false
   if (messageLooksLikeFormSumarResponse(text)) return false
