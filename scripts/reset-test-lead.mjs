@@ -11,13 +11,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..')
 
 function loadEnv() {
+  const env = { ...process.env }
   const envPath = path.join(root, '.env')
-  const env = {}
   if (!fs.existsSync(envPath)) return env
   for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
     if (!line || line.startsWith('#') || !line.includes('=')) continue
     const i = line.indexOf('=')
-    env[line.slice(0, i)] = line.slice(i + 1)
+    const k = line.slice(0, i).trim()
+    if (!k || env[k]) continue
+    env[k] = line.slice(i + 1)
   }
   return env
 }
@@ -52,28 +54,41 @@ async function sb(env, method, table, query, body) {
 
 async function main() {
   const env = loadEnv()
-  const telefone = normalizeTelefone(process.argv[2] || '5511998209798')
-  const idLead = process.argv[3] || '23758445'
+  const telefone = normalizeTelefone(process.argv[2] || '5511944690752')
+  const idLead = String(process.argv[3] || '23833445').trim()
   const sessionId = `${telefone}@s.whatsapp.net`
+  const jid = `${telefone}@s.whatsapp.net`
 
   const memoryTable = env.N8N_MEMORY_TABLE || 'n8n_chat_histories'
-  const messagesTable = env.SUPABASE_CHAT_MESSAGES_TABLE || 'chat_messages'
-  const chatsTable = env.SUPABASE_CHATS_TABLE || 'chats'
+  const messagesTable = env.SUPABASE_CHAT_MESSAGES_TABLE || 'chat_messages_sum'
+  const chatsTable = env.SUPABASE_CHATS_TABLE || 'chats_sum'
   const dadosTable = env.SUPABASE_DADOS_CLIENTE_TABLE || 'dados_cliente_sum'
   const bufferTable = env.MESSAGE_BUFFER_TABLE || 'message_buffer'
+
+  if (!env.SUPABASE_URL || !env.SUPABASE_KEY) {
+    console.error('SUPABASE_URL e SUPABASE_KEY são obrigatórios (env ou .env).')
+    process.exit(1)
+  }
 
   console.log('Reset lead teste:', { telefone, idLead, sessionId, dadosTable, messagesTable, memoryTable })
 
   const results = []
+  const phoneOr = `or=(phone.eq.${encodeURIComponent(telefone)},phone.eq.${encodeURIComponent(jid)})`
 
-  // Histórico IA
+  // Histórico IA + buffer + telemetria
   for (const [table, q] of [
     [memoryTable, `session_id=eq.${encodeURIComponent(sessionId)}`],
-    [messagesTable, `phone=eq.${telefone}`],
+    [messagesTable, phoneOr],
+    [messagesTable, `id_lead=eq.${encodeURIComponent(idLead)}`],
     [chatsTable, `phone=eq.${telefone}`],
+    [chatsTable, `phone=eq.${encodeURIComponent(jid)}`],
     [bufferTable, `session_id=eq.${encodeURIComponent(sessionId)}`],
-    ['chat_messages_sum', `phone=eq.${telefone}`],
+    ['chat_messages_sum', phoneOr],
+    ['chat_messages_sum', `id_lead=eq.${encodeURIComponent(idLead)}`],
     ['chats_sum', `phone=eq.${telefone}`],
+    ['n8n_chat_histories', `session_id=eq.${encodeURIComponent(sessionId)}`],
+    ['mensagens_ia', `usage->>lead_id=eq.${encodeURIComponent(idLead)}`],
+    ['mensagens_ia', `usage->>telefone=eq.${encodeURIComponent(telefone)}`],
   ]) {
     const before = await sb(env, 'GET', table, `${q}&select=id&limit=1`)
     const del = await sb(env, 'DELETE', table, q)
@@ -92,6 +107,10 @@ async function main() {
   }
   const patch = await updateDadosCliente(env, { telefone, fields: resetFields })
 
+  // Confirma memória vazia
+  const memAfter = await sb(env, 'GET', memoryTable, `session_id=eq.${encodeURIComponent(sessionId)}&select=id&limit=3`)
+  const msgAfter = await sb(env, 'GET', messagesTable, `${phoneOr}&select=id&limit=3`)
+
   console.log(
     JSON.stringify(
       {
@@ -99,7 +118,12 @@ async function main() {
         patch,
         sessionId,
         jid: telefoneToWhatsAppJid(telefone),
-        hint: 'Faça deploy do código com filtro de notas Kommo antes de testar do zero em produção.',
+        verify: {
+          memoryRemaining: memAfter.range || '0',
+          messagesRemaining: msgAfter.range || '0',
+        },
+        hint:
+          'Histórico Supabase limpo. Reinicie o serviço no EasyPanel se o poll Kommo ainda puxar notas antigas (estado em memória). Chat no Kommo não é apagado.',
       },
       null,
       2,
