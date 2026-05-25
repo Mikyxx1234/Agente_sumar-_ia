@@ -100,9 +100,6 @@ async function main() {
   const resetFields = {
     inscricao_form_status: null,
     inscricao_form_recebido_at: null,
-    captacao_candidato_id: null,
-    captacao_contrato_link: null,
-    captacao_contrato_link_at: null,
     atendimento_ia: null,
     reativacao_ping_at: null,
     reativacao_moved_at: null,
