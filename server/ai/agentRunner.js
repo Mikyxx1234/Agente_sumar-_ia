@@ -26,7 +26,7 @@ import {
   buildHumanHandoffReply,
   shouldBypassScopeBlock,
 } from '../../libShared/scopeHeuristics.js'
-import { buildContextualGreetingReply } from '../../libShared/conversationContextHeuristics.js'
+import { buildContextualGreetingReply, shouldUseContextualGreetingReply } from '../../libShared/conversationContextHeuristics.js'
 import {
   detectCursoConfirmadoPeloLead,
   extractCursoAreaFromText,
@@ -399,24 +399,22 @@ export async function runAgent(env, input) {
   // economiza I/O. Histórico já está carregado então o contexto continua
   // funcionando (saudação contextual mantida).
   if (isGreetingOnly(userMessage)) {
-    const hasContext =
-      conversationHasActiveTopic(historyMessages) ||
-      Boolean(extractDiscussedCourseFromHistory(historyMessages))
-    const greetingReply = hasContext
+    const useContextual = shouldUseContextualGreetingReply(userMessage, historyMessages)
+    const greetingReply = useContextual
       ? buildContextualGreetingReply({ userMessage, pushName: input?.pushName, historyMessages })
       : buildGreetingReply({ userMessage, pushName: input?.pushName })
     ctx.recordScopeClassification?.({
       blocked: false,
       source: 'heuristic',
-      reason: hasContext ? 'greeting_continuacao' : 'greeting',
+      reason: useContextual ? 'greeting_continuacao' : 'greeting',
       classification: {
         dentro_escopo: true,
-        categoria: hasContext ? 'saudacao_continuacao' : 'saudacao',
+        categoria: useContextual ? 'saudacao_continuacao' : 'saudacao',
         nivel: 'indefinido',
-        motivo: hasContext ? 'saudação com conversa em andamento' : 'saudação simples',
+        motivo: useContextual ? 'saudação com conversa em andamento' : 'saudação simples',
       },
     })
-    console.log(`[${executionId}] GREETING handled contexto=${hasContext} (sem orquestrador)`)
+    console.log(`[${executionId}] GREETING handled contextual=${useContextual} (sem orquestrador)`)
     return {
       ok: true,
       reply: greetingReply,
@@ -424,7 +422,7 @@ export async function runAgent(env, input) {
       greetingHandled: true,
       toolCalls: [],
       orchestratorSteps: [{ type: 'greeting', durationMs: Date.now() - t0 }],
-      ctxSnapshot: { greeting: true },
+      ctxSnapshot: { greeting: true, contextual: useContextual },
       usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
       durationMs: Date.now() - t0,
       historyLoaded: historyMessages.length,

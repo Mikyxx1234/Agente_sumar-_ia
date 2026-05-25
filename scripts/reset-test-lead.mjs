@@ -1,11 +1,15 @@
 /**
  * Reset de lead de teste no Supabase (histórico + estado do fluxo).
  * Uso: node scripts/reset-test-lead.mjs [telefone] [id_lead]
+ *      node scripts/reset-test-lead.mjs --lead 23841399
  */
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { updateDadosCliente, telefoneToWhatsAppJid } from '../server/dadosClienteStore.js'
+import { clearAgentConversationMemory } from '../server/historyStore.js'
+import { getLeadSummary } from '../server/kommoClient.js'
+import { resetKommoInboundPollStateForLead } from '../server/kommoInboundPoll.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..')
@@ -52,10 +56,46 @@ async function sb(env, method, table, query, body) {
   return { ok: res.ok, status: res.status, data, range: res.headers.get('content-range') }
 }
 
+async function resolveTelefoneAndLead(env, telefoneArg, leadIdArg) {
+  let telefone = normalizeTelefone(telefoneArg)
+  let idLead = String(leadIdArg || '').trim()
+
+  if (telefoneArg === '--lead' || (!telefone && idLead)) {
+    idLead = String(leadIdArg || telefoneArg).trim()
+    telefone = ''
+  }
+
+  if (!telefone && idLead) {
+    const summary = await getLeadSummary(env, Number(idLead))
+    if (summary.ok && summary.phone) {
+      telefone = normalizeTelefone(summary.phone)
+      console.log(`Telefone resolvido via Kommo lead=${idLead}: ${telefone}`)
+    }
+  }
+
+  if (!telefone) {
+    telefone = normalizeTelefone('5511944690752')
+  }
+  if (!idLead) {
+    idLead = '23833445'
+  }
+
+  return { telefone, idLead }
+}
+
 async function main() {
   const env = loadEnv()
-  const telefone = normalizeTelefone(process.argv[2] || '5511944690752')
-  const idLead = String(process.argv[3] || '23833445').trim()
+  const arg1 = process.argv[2]
+  const arg2 = process.argv[3]
+
+  let telefoneArg = arg1
+  let leadIdArg = arg2
+  if (arg1 === '--lead') {
+    telefoneArg = ''
+    leadIdArg = arg2
+  }
+
+  const { telefone, idLead } = await resolveTelefoneAndLead(env, telefoneArg, leadIdArg)
   const sessionId = `${telefone}@s.whatsapp.net`
   const jid = `${telefone}@s.whatsapp.net`
 
@@ -75,7 +115,6 @@ async function main() {
   const results = []
   const phoneOr = `or=(phone.eq.${encodeURIComponent(telefone)},phone.eq.${encodeURIComponent(jid)})`
 
-  // Histórico IA + buffer + telemetria
   for (const [table, q] of [
     [memoryTable, `session_id=eq.${encodeURIComponent(sessionId)}`],
     [messagesTable, phoneOr],
@@ -95,7 +134,11 @@ async function main() {
     results.push({ table, deleteStatus: del.status, beforeRange: before.range, deleted: Array.isArray(del.data) ? del.data.length : del.status })
   }
 
-  // Estado do fluxo — recebido_at null para não bloquear pós-form após novo teste.
+  const memClear = await clearAgentConversationMemory(env, telefone)
+  if (Number(idLead) > 0) {
+    resetKommoInboundPollStateForLead(Number(idLead))
+  }
+
   env.SUPABASE_DADOS_CLIENTE_TABLE = dadosTable
   const resetFields = {
     inscricao_form_status: null,
@@ -106,7 +149,6 @@ async function main() {
   }
   const patch = await updateDadosCliente(env, { telefone, fields: resetFields })
 
-  // Confirma memória vazia
   const memAfter = await sb(env, 'GET', memoryTable, `session_id=eq.${encodeURIComponent(sessionId)}&select=id&limit=3`)
   const msgAfter = await sb(env, 'GET', messagesTable, `${phoneOr}&select=id&limit=3`)
 
@@ -114,6 +156,8 @@ async function main() {
     JSON.stringify(
       {
         results,
+        memoryClear: memClear,
+        pollStateResetLeadId: Number(idLead) || null,
         patch,
         sessionId,
         jid: telefoneToWhatsAppJid(telefone),
@@ -122,7 +166,7 @@ async function main() {
           messagesRemaining: msgAfter.range || '0',
         },
         hint:
-          'Histórico Supabase limpo. Reinicie o serviço no EasyPanel se o poll Kommo ainda puxar notas antigas (estado em memória). Chat no Kommo não é apagado.',
+          'Histórico Supabase + memória IA limpos. Reinicie agente_sumare no EasyPanel se o poll Kommo ainda usar cursor antigo em RAM. Chat no Kommo não é apagado.',
       },
       null,
       2,

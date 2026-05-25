@@ -3,6 +3,12 @@
 import { normalizeMessageForScope } from './scopeHeuristics.js'
 import { extractCursoAreaFromText } from './cursoConfirmation.js'
 
+function isGreetingOnlyMessage(text) {
+  const t = normalizeMessageForScope(text).toLowerCase().trim().replace(/[.!?]+$/, '')
+  if (!t || t.length > 48) return false
+  return /^(oi|ol[aá]|ola|bom dia|boa tarde|boa noite|e ai|e aí|hey|hello|hi)\b/.test(t)
+}
+
 function recentTranscript(historyMessages, max = 8) {
   return (historyMessages || []).slice(-max)
 }
@@ -101,6 +107,30 @@ export function conversationHasActiveTopic(historyMessages) {
       blob,
     ) || /\bcurso\s+de\s+/i.test(blob)
   )
+}
+
+/** Lead já falou algo substantivo (não só saudação) nesta sessão de histórico. */
+export function userHadSubstantiveTurnInHistory(historyMessages, excludeCurrentUserMessage = '') {
+  const exclude = normalizeMessageForScope(excludeCurrentUserMessage).toLowerCase()
+  for (const m of historyMessages || []) {
+    if (m.role !== 'user' && m.role !== 'lead') continue
+    const t = normalizeMessageForScope(m.content).toLowerCase()
+    if (!t || t.length < 4) continue
+    if (exclude && t === exclude) continue
+    if (isGreetingOnlyMessage(m.content)) continue
+    return true
+  }
+  return false
+}
+
+/**
+ * Saudação contextual ("de onde paramos") só quando o lead já participou do assunto,
+ * não quando o histórico é só eco do bot ou conversa anterior no mesmo telefone.
+ */
+export function shouldUseContextualGreetingReply(userMessage, historyMessages) {
+  if (!isGreetingOnlyMessage(userMessage)) return false
+  if (!userHadSubstantiveTurnInHistory(historyMessages, userMessage)) return false
+  return conversationHasActiveTopic(historyMessages) || Boolean(extractDiscussedCourseFromHistory(historyMessages))
 }
 
 export function buildContextualGreetingReply(opts = {}) {
