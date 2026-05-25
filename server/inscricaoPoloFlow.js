@@ -1,14 +1,22 @@
 /**
- * Pós Form Sumar: pergunta polo → API Captação.
- * Prioridade: dados já no card Kommo (polo_inscricao / unidade).
+ * Escolha de polo Sumaré:
+ *   - ANTES do Form Sumar (fluxo principal)
+ *   - PÓS-formulário (legado aguardando_escolha_polo)
  */
 
-import { INSCRICAO_FORM_STATUS_AGUARDANDO_POLO } from '../libShared/inscricaoFormHeuristics.js'
+import {
+  INSCRICAO_FORM_STATUS_AGUARDANDO,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_POLO,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM,
+  buildInscricaoFormSentReply,
+} from '../libShared/inscricaoFormHeuristics.js'
 import {
   matchPoloFromUserMessage,
   resolvePoloUnidadeCode,
   buildPoloConfirmacaoInvalidaReply,
   buildPoloEscolhidoAckReply,
+  buildPoloOutroLocalidadeReply,
+  messageMentionsUnlistedPoloLocation,
 } from '../libShared/sumarePoloCatalog.js'
 import { fetchLeadFormSnapshot } from './inscricaoKommoFields.js'
 import {
@@ -18,6 +26,7 @@ import {
 } from './dadosClienteStore.js'
 import { DADOS_CLIENTE_INSCRICAO_SELECT } from './dadosClienteInscricaoFields.js'
 import { executeCaptacaoAfterFormResolved } from './inscricaoPostFormPipeline.js'
+import { deliverInscricaoForm } from './inscricaoFormFlow.js'
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
 
@@ -44,7 +53,97 @@ async function resolveLeadId(env, telefone, leadIdHint) {
 }
 
 /**
- * Lead escolheu polo (status aguardando_escolha_polo) → grava e dispara captação.
+ * Lead confirmou matrícula → escolhe polo (1–5) → dispara Formulario_Sum.
+ */
+export async function tryHandlePoloPreFormFlow(env, input) {
+  const { telefone, userMessage, executionId, model, leadId: leadIdHint, pushName, t0 } = input
+  if (!telefone || !String(userMessage || '').trim()) return null
+
+  const row = await fetchDadosClienteByTelefone(env, telefone, DADOS_CLIENTE_INSCRICAO_SELECT)
+  const status = row?.[FORM_STATUS_FIELD] ?? null
+  if (status !== INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM) return null
+
+  const idLead = await resolveLeadId(env, telefone, leadIdHint)
+  const polo = matchPoloFromUserMessage(userMessage)
+
+  if (!polo) {
+    const reply = messageMentionsUnlistedPoloLocation(userMessage)
+      ? buildPoloOutroLocalidadeReply()
+      : buildPoloConfirmacaoInvalidaReply()
+    return {
+      handled: true,
+      result: buildAgentReturn({
+        executionId,
+        model,
+        t0,
+        reply,
+        steps: [{ type: 'polo_pre_form_invalido', ok: false }],
+        ctxSnapshot: { inscricaoForm: status },
+      }),
+    }
+  }
+
+  const unidade = resolvePoloUnidadeCode(polo.id, env)
+  await updateDadosCliente(env, {
+    telefone,
+    fields: {
+      polo_inscricao_escolhido: polo.nome,
+      captacao_unidade: unidade,
+      [FORM_STATUS_FIELD]: INSCRICAO_FORM_STATUS_AGUARDANDO,
+    },
+  }).catch(() => {})
+
+  const delivery = await deliverInscricaoForm(env, {
+    telefone,
+    leadId: idLead,
+    executionId,
+    forceResend: false,
+  })
+  const sendOk = Boolean(delivery.result?.ok)
+  const ack = buildPoloEscolhidoAckReply(polo, { pushName })
+  const formReply = sendOk ? ack : buildInscricaoFormSentReply({ pushName })
+
+  console.log(
+    `[inscricaoPolo] pre_form polo=${polo.id} lead=${idLead ?? 'n/a'} form_ok=${sendOk} delivery=${delivery.delivery}`,
+  )
+
+  return {
+    handled: true,
+    result: buildAgentReturn({
+      executionId,
+      model,
+      t0,
+      ok: sendOk,
+      reply: formReply,
+      steps: [
+        { type: 'polo_pre_form_escolhido', polo: polo.id, unidade, ok: true },
+        {
+          type: 'inscricao_form_start',
+          delivery: delivery.delivery,
+          ok: sendOk,
+          bot_id: delivery.result?.botId,
+        },
+      ],
+      toolCalls: [
+        {
+          tool: 'polo_pre_form',
+          args: { telefone, polo: polo.id, unidade },
+          result: sendOk ? 'Polo registrado e formulário disparado' : delivery.result?.error,
+          ok: sendOk,
+        },
+      ],
+      ctxSnapshot: {
+        inscricaoForm: sendOk ? INSCRICAO_FORM_STATUS_AGUARDANDO : INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM,
+        poloId: polo.id,
+        poloNome: polo.nome,
+        unidade,
+      },
+    }),
+  }
+}
+
+/**
+ * Lead escolheu polo (status aguardando_escolha_polo pós-form) → grava e dispara captação.
  */
 export async function tryHandlePoloEscolhaFlow(env, input) {
   const { telefone, userMessage, executionId, model, leadId: leadIdHint, pushName, t0 } = input
@@ -57,13 +156,16 @@ export async function tryHandlePoloEscolhaFlow(env, input) {
   const idLead = await resolveLeadId(env, telefone, leadIdHint)
   const polo = matchPoloFromUserMessage(userMessage)
   if (!polo) {
+    const reply = messageMentionsUnlistedPoloLocation(userMessage)
+      ? buildPoloOutroLocalidadeReply()
+      : buildPoloConfirmacaoInvalidaReply()
     return {
       handled: true,
       result: buildAgentReturn({
         executionId,
         model,
         t0,
-        reply: buildPoloConfirmacaoInvalidaReply(),
+        reply,
         steps: [{ type: 'polo_escolha_invalida' }],
         ctxSnapshot: { inscricaoForm: status },
       }),
@@ -95,7 +197,7 @@ export async function tryHandlePoloEscolhaFlow(env, input) {
     snapshotOverride: snapshot,
   })
 
-  const ack = buildPoloEscolhidoAckReply(polo, { pushName })
+  const ack = buildPoloEscolhidoAckReply(polo, { pushName, afterForm: true })
   const baseReply = capResult?.reply
   return {
     handled: true,
@@ -116,8 +218,9 @@ export async function tryHandlePoloEscolhaFlow(env, input) {
         poloNome: polo.nome,
         unidade,
         sumareCaptacao: true,
+        contratoWhatsappSent: Boolean(capResult?.contratoWhatsappSent),
+        skipSchedulerWhatsapp: Boolean(capResult?.skipSchedulerWhatsapp),
       },
     }),
   }
 }
-

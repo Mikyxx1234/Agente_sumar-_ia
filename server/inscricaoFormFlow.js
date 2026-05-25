@@ -7,6 +7,7 @@
 
 import {
   INSCRICAO_FORM_STATUS_AGUARDANDO,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM,
   INSCRICAO_FORM_STATUS_CONCLUIDO,
   messageConfirmsProceedToInscricaoForm,
   messageExpressesCourseInterestOnly,
@@ -20,6 +21,11 @@ import {
 } from '../libShared/inscricaoFormHeuristics.js'
 import { messageLooksLikeOperationalChat } from '../libShared/scopeHeuristics.js'
 import { messageAsksCoursePrice, sanitizeLeadInboundMessage } from '../libShared/inboundMessageSanitize.js'
+import {
+  buildPoloEscolhaPreFormMessage,
+  resolvePoloFromKommoSnapshot,
+} from '../libShared/sumarePoloCatalog.js'
+import { fetchLeadFormSnapshot } from './inscricaoKommoFields.js'
 import { sendFormSumarTemplate } from './whatsappTemplateSender.js'
 import { runKommoSalesbot } from './kommoSalesbot.js'
 import { findLeadByPhone } from './kommoClient.js'
@@ -128,8 +134,36 @@ function buildAgentReturn({ executionId, model, t0, reply, steps, toolCalls, ctx
   }
 }
 
+async function resolvePoloEscolhidoParaForm(env, telefone, leadId) {
+  const row = await fetchDadosClienteByTelefone(
+    env,
+    telefone,
+    `${FORM_STATUS_FIELD},polo_inscricao_escolhido,captacao_unidade`,
+  )
+  const poloNome = String(row?.polo_inscricao_escolhido || '').trim()
+  const unidade = String(row?.captacao_unidade || '').trim()
+  if (poloNome && unidade) {
+    return { ok: true, poloNome, unidade, source: 'supabase' }
+  }
+  if (leadId != null) {
+    const snapRes = await fetchLeadFormSnapshot(env, leadId)
+    if (snapRes.ok && snapRes.snapshot) {
+      const resolved = resolvePoloFromKommoSnapshot(snapRes.snapshot, env)
+      if (resolved) {
+        return {
+          ok: true,
+          poloNome: resolved.polo.nome,
+          unidade: resolved.unidade,
+          source: resolved.source,
+        }
+      }
+    }
+  }
+  return { ok: false }
+}
+
 /** Dispara salesbot Formulario_Sum ou template Meta (fallback legado). */
-async function deliverInscricaoForm(env, { telefone, leadId, executionId, forceResend = false }) {
+export async function deliverInscricaoForm(env, { telefone, leadId, executionId, forceResend = false }) {
   if (useWhatsappTemplateDelivery(env)) {
     return {
       delivery: 'whatsapp_template',
@@ -183,6 +217,9 @@ export async function tryHandleInscricaoFormStart(env, input) {
   if (status === INSCRICAO_FORM_STATUS_CONCLUIDO) {
     return null
   }
+  if (status === INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM) {
+    return null
+  }
   if (status === INSCRICAO_FORM_STATUS_AGUARDANDO && !asksResend && !wantsForm) {
     if (
       messageExpressesCourseInterestOnly(userMessage, historyMessages) ||
@@ -209,6 +246,26 @@ export async function tryHandleInscricaoFormStart(env, input) {
   }
 
   const idLead = await resolveLeadId(env, telefone, leadIdHint)
+
+  if (!asksResend && (wantsForm || messageAsksForFormResend(userMessage))) {
+    const poloOk = await resolvePoloEscolhidoParaForm(env, telefone, idLead)
+    if (!poloOk.ok) {
+      await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM)
+      const reply = buildPoloEscolhaPreFormMessage({ pushName })
+      console.log(`[inscricaoForm] lead=${idLead ?? 'n/a'} aguardando_polo_pre_form telefone=${telefone}`)
+      return {
+        handled: true,
+        result: buildAgentReturn({
+          executionId,
+          model,
+          t0,
+          reply,
+          steps: [{ type: 'polo_escolha_pre_form', ok: true }],
+          ctxSnapshot: { inscricaoForm: INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM },
+        }),
+      }
+    }
+  }
 
   if (!asksResend) {
     const claim = await claimInscricaoFormStartExclusive(env, telefone)

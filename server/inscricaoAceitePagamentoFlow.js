@@ -106,6 +106,27 @@ export async function tryHandleMatriculaAceitePagamentoFlow(env, input) {
     (Number.isFinite(Number(leadIdHint)) && Number(leadIdHint) > 0 ? Number(leadIdHint) : null) ||
     (await getLeadIdByTelefone(env, telefone))
 
+  const sanitized = String(userMessage || '').trim()
+  if (
+    /\brecebi\s+o\s+link\b/i.test(sanitized) ||
+    /\bobrigad[oa]\s+por\s+enviar\b/i.test(sanitized)
+  ) {
+    const reply = contractUrl
+      ? buildContratoLinkResendReply({ pushName, contractUrl })
+      : buildContratoLinkResendReply({ pushName, contractUrl: '' })
+    return {
+      handled: true,
+      result: buildAgentReturn({
+        executionId,
+        model,
+        t0,
+        reply,
+        steps: [{ type: 'contrato_link_clarify_resend', ok: Boolean(contractUrl) }],
+        ctxSnapshot: { inscricaoForm: status, contractUrl: contractUrl || null },
+      }),
+    }
+  }
+
   if (messageAsksContratoLinkResend(userMessage)) {
     const reply = buildContratoLinkResendReply({ pushName, contractUrl })
     return {

@@ -42,7 +42,7 @@ import {
   tryHandleMatriculaAceitePagamentoFlow,
 } from '../inscricaoFormFlow.js'
 import { detectFormSumarRecebidoNoKommo } from '../inscricaoPostFormPipeline.js'
-import { tryHandlePoloEscolhaFlow } from '../inscricaoPoloFlow.js'
+import { tryHandlePoloPreFormFlow, tryHandlePoloEscolhaFlow } from '../inscricaoPoloFlow.js'
 import {
   messageExpressesCourseInterestOnly,
   messageLooksLikeFormSumarResponse,
@@ -279,6 +279,18 @@ export async function runAgent(env, input) {
       )
       return {
         ...aceiteFlow.result,
+        historyLoaded: 0,
+        aiMeta: ctx.toAiMeta(),
+      }
+    }
+
+    const poloPreFlow = await tryHandlePoloPreFormFlow(env, formFlowCtx)
+    if (poloPreFlow?.handled) {
+      console.log(
+        `[${executionId}] POLO_PRE_FORM polo=${poloPreFlow.result?.ctxSnapshot?.poloId ?? 'n/a'}`,
+      )
+      return {
+        ...poloPreFlow.result,
         historyLoaded: 0,
         aiMeta: ctx.toAiMeta(),
       }
@@ -736,8 +748,9 @@ export async function runAgent(env, input) {
           content:
             'CONFIRMAÇÃO DE MATRÍCULA: o lead respondeu de forma afirmativa após você perguntar sobre inscrição/matrícula no curso em pauta. ' +
             `Curso em discussão: ${extractDiscussedCourseFromHistory(historyMessages) || 'ver sum_Curso/histórico'}. ` +
-            'OBRIGATÓRIO neste turno: acionar a tool inscricao (Formulário Sumar) — não pergunte de novo "qual curso". ' +
-            'PROIBIDO resetar o atendimento ou pedir que o lead repita o nome do curso.',
+            'OBRIGATÓRIO neste turno: seguir inscrição — primeiro perguntar em qual dos 5 polos EAD o lead quer se cadastrar (São Miguel, Barra Funda, Tatuapé, Santana, Pinheiros); só após confirmação do polo enviar o Formulário Sumar. ' +
+            'Se pedir outra cidade/polo fora da lista, informe que por este WhatsApp só há esses 5 polos. ' +
+            'PROIBIDO enviar formulário antes do polo. PROIBIDO aceitar contrato pelo lead — só enviar o link para o candidato aceitar no portal.',
         }
       : null
 

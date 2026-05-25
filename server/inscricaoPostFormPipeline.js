@@ -8,6 +8,7 @@ import {
   INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
   INSCRICAO_FORM_STATUS_CONCLUIDO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM,
   INSCRICAO_FORM_STATUS_AGUARDANDO_POLO,
   messageLooksLikeFormSumarResponse,
   messageLooksLikeFormFollowUp,
@@ -19,12 +20,15 @@ import { sendMessageWithNote } from './whatsappSender.js'
 import { fetchLeadFormSnapshot, validateFormSnapshot } from './inscricaoKommoFields.js'
 import {
   resolvePoloFromKommoSnapshot,
-  buildPoloEscolhaMessage,
+  matchPoloFromUserMessage,
+  resolvePoloUnidadeCode,
+  SUMARE_POLOS_EAD,
 } from '../libShared/sumarePoloCatalog.js'
 import { runKommoSalesbot } from './kommoSalesbot.js'
 import { findLeadByPhone, listLeadNotes, listLeadEvents } from './kommoClient.js'
 import {
   updateDadosCliente,
+  marcarClienteIA,
   getLeadIdByTelefone,
   normalizeTelefone,
   fetchDadosClienteByTelefone,
@@ -40,6 +44,13 @@ import {
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
 const MATRICULA_BOT_ID_DEFAULT = 49813
+
+/** Claim em memória quando não há linha em dados_cliente_sum (form enviado só via Kommo). */
+const matriculaClaimMem = new Map()
+
+function matriculaClaimMemKey(telefone) {
+  return normalizeTelefone(telefone)
+}
 
 function getSupabaseCfg(env) {
   return {
@@ -60,13 +71,20 @@ async function setFormStatus(env, telefone, status) {
 /**
  * Claim atômico: marca concluído antes do salesbot 49813 — evita 5 disparos em réplicas paralelas.
  */
-async function claimMatriculaPosFormExclusive(env, telefone) {
+async function ensureClienteRowForMatricula(env, telefone, leadId) {
+  let row = await getClienteRow(env, telefone)
+  if (row?.id != null) return row
+  if (leadId != null) {
+    await marcarClienteIA(env, { telefone, idLead: leadId }).catch(() => {})
+    row = await getClienteRow(env, telefone)
+    if (row?.id != null) return row
+  }
+  return null
+}
+
+async function claimMatriculaPosFormExclusive(env, telefone, { leadId } = {}) {
   const { url, key, table } = getSupabaseCfg(env)
-  if (!url || !key) return { claimed: false, reason: 'no_supabase' }
-  const waiting = [
-    INSCRICAO_FORM_STATUS_AGUARDANDO,
-    INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
-  ].join(',')
+  const memKey = matriculaClaimMemKey(telefone)
   try {
     const existing = await getClienteRow(env, telefone)
     if (matriculaPosFormAlreadyProcessed(existing)) {
@@ -76,10 +94,30 @@ async function claimMatriculaPosFormExclusive(env, telefone) {
         status: existing?.[FORM_STATUS_FIELD],
       }
     }
-    const rowId = existing?.id != null ? Number(existing.id) : NaN
+
+    let rowId = existing?.id != null ? Number(existing.id) : NaN
     if (!Number.isFinite(rowId) || rowId <= 0) {
-      return { claimed: false, reason: 'no_cliente_row', status: existing?.[FORM_STATUS_FIELD] }
+      await ensureClienteRowForMatricula(env, telefone, leadId)
+      const again = await getClienteRow(env, telefone)
+      rowId = again?.id != null ? Number(again.id) : NaN
     }
+
+    if (!Number.isFinite(rowId) || rowId <= 0) {
+      if (!url || !key) return { claimed: false, reason: 'no_supabase' }
+      const prev = matriculaClaimMem.get(memKey)
+      if (prev && Date.now() - prev.at < 120_000) {
+        return { claimed: false, reason: 'memory_claim_busy' }
+      }
+      matriculaClaimMem.set(memKey, { at: Date.now(), leadId: leadId ?? null })
+      console.log(`[inscricaoPostForm] claim memória telefone=${telefone} (sem dados_cliente_sum)`)
+      return { claimed: true, reason: 'memory_claim_no_row' }
+    }
+
+    if (!url || !key) return { claimed: false, reason: 'no_supabase' }
+    const waiting = [
+      INSCRICAO_FORM_STATUS_AGUARDANDO,
+      INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
+    ].join(',')
 
     const res = await fetch(
       `${url}/rest/v1/${encodeURIComponent(table)}?id=eq.${rowId}&${FORM_STATUS_FIELD}=in.(${waiting})&inscricao_form_recebido_at=is.null`,
@@ -109,6 +147,17 @@ async function claimMatriculaPosFormExclusive(env, telefone) {
     const st = row?.[FORM_STATUS_FIELD] ?? null
     if (st === INSCRICAO_FORM_STATUS_CONCLUIDO) {
       return { claimed: false, reason: 'already_completed', status: st }
+    }
+    if (!matriculaPosFormAlreadyProcessed(row)) {
+      const prev = matriculaClaimMem.get(memKey)
+      if (prev && Date.now() - prev.at < 120_000) {
+        return { claimed: false, reason: 'memory_claim_busy' }
+      }
+      matriculaClaimMem.set(memKey, { at: Date.now(), leadId: leadId ?? null })
+      console.log(
+        `[inscricaoPostForm] claim memória telefone=${telefone} (status=${st || 'n/a'} sem patch aguardando)`,
+      )
+      return { claimed: true, reason: 'memory_claim_stale_status' }
     }
     return { claimed: false, reason: 'no_waiting_row', status: st }
   } catch (err) {
@@ -271,13 +320,33 @@ export async function detectFormSumarRecebidoNoKommo(env, leadId, options = {}) 
 }
 
 /**
- * Após formulário: pergunta polo ou segue direto se polo/unidade já no card Kommo.
+ * Polo deve ter sido escolhido ANTES do formulário. Usa Supabase, card Kommo ou default env.
  */
 async function preparePoloStepAfterForm(env, { telefone, leadId, pushName }) {
   const snapRes = leadId ? await fetchLeadFormSnapshot(env, leadId) : { ok: false }
   const snapshot = snapRes.ok ? snapRes.snapshot : {}
-  const resolved = resolvePoloFromKommoSnapshot(snapshot, env)
 
+  const row = await fetchDadosClienteByTelefone(
+    env,
+    telefone,
+    `${DADOS_CLIENTE_INSCRICAO_SELECT},polo_inscricao_escolhido,captacao_unidade`,
+  )
+  const poloDb = String(row?.polo_inscricao_escolhido || '').trim()
+  const unidadeDb = String(row?.captacao_unidade || '').trim()
+  if (poloDb && unidadeDb) {
+    const matched = matchPoloFromUserMessage(poloDb)
+    return {
+      askPolo: false,
+      snapshotOverride: { ...snapshot, unidade: unidadeDb, polo_inscricao: poloDb },
+      poloResolved: {
+        polo: matched || { nome: poloDb, id: 'supabase' },
+        unidade: unidadeDb,
+        source: 'supabase_pre_form',
+      },
+    }
+  }
+
+  const resolved = resolvePoloFromKommoSnapshot(snapshot, env)
   if (resolved) {
     return {
       askPolo: false,
@@ -290,17 +359,27 @@ async function preparePoloStepAfterForm(env, { telefone, leadId, pushName }) {
     }
   }
 
-  await updateDadosCliente(env, {
-    telefone,
-    fields: {
-      [FORM_STATUS_FIELD]: INSCRICAO_FORM_STATUS_AGUARDANDO_POLO,
-      inscricao_form_recebido_at: new Date().toISOString(),
-    },
-  }).catch(() => {})
+  const poloId = String(env.INSCRICAO_DEFAULT_POLO_ID || 'pinheiros').trim()
+  const matched = matchPoloFromUserMessage(poloId) || SUMARE_POLOS_EAD.find((p) => p.id === poloId)
+  if (matched) {
+    const unidade = resolvePoloUnidadeCode(matched.id, env)
+    console.warn(
+      `[inscricaoPostForm] lead=${leadId} polo ausente no pré-form — fallback ${matched.nome} (${unidade})`,
+    )
+    return {
+      askPolo: false,
+      snapshotOverride: { ...snapshot, unidade, polo_inscricao: matched.nome },
+      poloResolved: { polo: matched, unidade, source: 'fallback_default_polo' },
+    }
+  }
 
+  const nameBit = pushName ? `, ${String(pushName).split(/\s+/)[0]}` : ''
   return {
-    askPolo: true,
-    reply: buildPoloEscolhaMessage({ pushName }),
+    askPolo: false,
+    missingPolo: true,
+    reply:
+      `Obrigado${nameBit}! Recebemos seu formulário, mas não localizamos o polo de inscrição no cadastro. ` +
+      `Um consultor da Faculdade Sumaré entrará em contato em breve para concluir sua matrícula.`,
   }
 }
 
@@ -316,6 +395,7 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
   let matriculaOk = false
   let ctxForm = 'completed'
   let skipSchedulerWhatsapp = false
+  let contratoWhatsappSent = false
 
   if (isSumareCaptacaoEnabled(env)) {
     const cap = await runMatriculaCaptacaoAfterForm(env, {
@@ -339,6 +419,7 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
       ctxForm = INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE
       reply = cap.reply || reply
       if (cap.whatsappOk) skipSchedulerWhatsapp = true
+      matriculaClaimMem.delete(matriculaClaimMemKey(telefone))
       toolCalls.push({
         tool: 'sumare_captacao_contrato',
         args: { telefone, id_lead: idLead, candidato: cap.candidatoId },
@@ -346,9 +427,13 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
         ok: Boolean(cap.whatsappOk),
       })
     } else if (!cap.skipped && !cap.ok) {
+      const missing = Array.isArray(cap.missing) ? cap.missing.join(', ') : ''
+      const detail = cap.error || cap.code || 'falha'
       reply =
-        `Obrigado${pushName ? `, ${String(pushName).split(/\s+/)[0]}` : ''}! Recebemos seu formulário, mas houve um problema ao gerar sua inscrição no sistema. ` +
-        `Um consultor da Faculdade Sumaré entrará em contato em breve para concluir o aceite do contrato e o pagamento.`
+        missing.includes('curso') || cap.code === 'MISSING_FIELDS'
+          ? `Obrigado${pushName ? `, ${String(pushName).split(/\s+/)[0]}` : ''}! Recebemos seu formulário, mas o curso informado ainda não está mapeado para inscrição automática no sistema (${detail}${missing ? `: ${missing}` : ''}). Um consultor da Faculdade Sumaré entrará em contato em breve.`
+          : `Obrigado${pushName ? `, ${String(pushName).split(/\s+/)[0]}` : ''}! Recebemos seu formulário, mas houve um problema ao gerar sua inscrição no sistema (${detail}). Um consultor da Faculdade Sumaré entrará em contato em breve para concluir o aceite do contrato e o pagamento.`
+      console.error(`[inscricaoPostForm] captação falhou lead=${idLead} code=${cap.code} missing=${missing} err=${cap.error}`)
       toolCalls.push({
         tool: 'sumare_captacao_contrato',
         args: { telefone, id_lead: idLead },
@@ -411,6 +496,7 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
     toolCalls,
     ctxForm,
     skipSchedulerWhatsapp,
+    contratoWhatsappSent,
   }
 }
 
@@ -427,18 +513,7 @@ async function stepMatriculaPosForm(env, ctx) {
 
   const poloPrep = await preparePoloStepAfterForm(env, { telefone, leadId: idLead, pushName })
 
-  if (poloPrep?.askPolo) {
-    let skipSchedulerWhatsapp = false
-    if (poloPrep.reply) {
-      const sendRes = await sendMessageWithNote(env, {
-        telefone,
-        text: poloPrep.reply,
-        leadId: idLead,
-        executionId,
-      })
-      skipSchedulerWhatsapp = Boolean(sendRes?.ok)
-    }
-    console.log(`[inscricaoPostForm] lead=${idLead} aguardando_escolha_polo telefone=${telefone}`)
+  if (poloPrep?.missingPolo) {
     return {
       handled: true,
       result: buildAgentReturn({
@@ -446,21 +521,37 @@ async function stepMatriculaPosForm(env, ctx) {
         model,
         t0,
         reply: poloPrep.reply,
-        steps: [{ type: 'polo_escolha_pergunta', ok: true }],
-        ctxSnapshot: {
-          inscricaoForm: INSCRICAO_FORM_STATUS_AGUARDANDO_POLO,
-          sumareCaptacao: isSumareCaptacaoEnabled(env),
-          skipSchedulerWhatsapp,
-        },
+        steps: [{ type: 'polo_ausente_pos_form', ok: false }],
+        ctxSnapshot: { inscricaoForm: INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO },
       }),
     }
   }
 
-  const claim = await claimMatriculaPosFormExclusive(env, telefone)
+  const claim = await claimMatriculaPosFormExclusive(env, telefone, { leadId: idLead })
   if (!claim.claimed) {
     console.log(
       `[inscricaoPostForm] lead=${idLead} matricula_pos_form skip claim=${claim.reason} status=${claim.status || 'n/a'}`,
     )
+    if (kommoFormDetected) {
+      const pushFirst = pushName ? String(pushName).split(/\s+/)[0] : ''
+      const nameBit = pushFirst ? `, ${pushFirst}` : ''
+      return {
+        handled: true,
+        result: buildAgentReturn({
+          executionId,
+          model,
+          t0,
+          reply:
+            `Obrigado${nameBit}! Recebemos seu formulário e já estamos processando sua inscrição no sistema. ` +
+            `Em instantes você recebe aqui o link para aceitar o contrato e concluir o pagamento.`,
+          steps: [{ type: 'matricula_claim_deferred', ok: false, reason: claim.reason }],
+          ctxSnapshot: {
+            inscricaoForm: claim.status || INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
+            kommoFormDetected: true,
+          },
+        }),
+      }
+    }
     return { handled: false, reason: claim.reason || 'matricula_claim_failed' }
   }
 
@@ -502,7 +593,8 @@ async function stepMatriculaPosForm(env, ctx) {
         inscricaoForm: capOut.ctxForm,
         iaPaused: capOut.ctxForm !== INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
         sumareCaptacao: isSumareCaptacaoEnabled(env),
-        contratoLinkSent: capOut.matriculaOk && isSumareCaptacaoEnabled(env),
+        contratoWhatsappSent: Boolean(capOut.contratoWhatsappSent),
+        contratoLinkSent: Boolean(capOut.contratoWhatsappSent),
         skipSchedulerWhatsapp: capOut.skipSchedulerWhatsapp,
         kommoFormDetected,
       },
@@ -528,6 +620,7 @@ export async function tryProcessInscricaoPostFormPipeline(env, input) {
     return null
   }
 
+  if (status === INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM) return null
   if (status === INSCRICAO_FORM_STATUS_AGUARDANDO_POLO) return null
   if (status === INSCRICAO_FORM_STATUS_CONCLUIDO) return null
   if (status === INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE) return null
@@ -551,7 +644,8 @@ export async function tryProcessInscricaoPostFormPipeline(env, input) {
     idLead &&
     (schedulerTick ||
       waitingForForm ||
-      messageLooksLikeFormSumarResponse(userMessage))
+      messageLooksLikeFormSumarResponse(userMessage) ||
+      messageLooksLikeFormFollowUp(userMessage))
 
   if (shouldScanKommoNotes) {
     const sessionCutoff = getAgentQueueSessionCutoffIso(idLead)
@@ -577,7 +671,7 @@ export async function tryProcessInscricaoPostFormPipeline(env, input) {
   const trigger =
     shouldTriggerMatriculaPosForm(userMessage, status) ||
     (schedulerTick && status === INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO) ||
-    (kommoFormDone && (waitingForForm || messageLooksLikeFormSumarResponse(userMessage)))
+    kommoFormDone
 
   if (!trigger) return null
 

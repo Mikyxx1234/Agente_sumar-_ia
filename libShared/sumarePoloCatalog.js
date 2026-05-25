@@ -129,17 +129,55 @@ export function resolvePoloFromKommoSnapshot(snapshot, env = process.env) {
   return null
 }
 
+/** Lista numerada dos 5 polos EAD (cadastro Sumaré). */
+export function formatPoloListaNumerada() {
+  return SUMARE_POLOS_EAD.map((p, i) => `${i + 1}. *${p.nome}* — ${p.endereco}`).join('\n')
+}
+
+/** Antes do formulário: pergunta polo e limita às 5 unidades cadastradas. */
+export function buildPoloEscolhaPreFormMessage(opts = {}) {
+  const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
+  return (
+    `Perfeito${nameBit}! Para seguir com sua inscrição na Faculdade Sumaré, primeiro preciso saber em qual *polo* ` +
+    `você prefere se cadastrar. Todos os cursos são EAD; o polo é o ponto de apoio presencial.\n\n` +
+    `Por este canal oferecemos *somente* estes polos:\n\n` +
+    `${formatPoloListaNumerada()}\n\n` +
+    `Responda com o *número* (1 a 5) ou o *nome do polo* (ex.: Pinheiros). ` +
+    `Assim que confirmar, envio o formulário de dados básicos aqui no WhatsApp.`
+  )
+}
+
+/** Pós-formulário (legado): ainda aguardando polo antes da captação. */
 export function buildPoloEscolhaMessage(opts = {}) {
   const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
-  const lines = SUMARE_POLOS_EAD.map(
-    (p, i) => `${i + 1}. *${p.nome}* — ${p.endereco}`,
-  )
   return (
     `Obrigado${nameBit}! Recebemos seu formulário. ` +
-    `Para seguir com a inscrição na Faculdade Sumaré, em qual *polo* você prefere estudar? ` +
-    `Todos são EAD; o polo é o ponto de apoio presencial:\n\n` +
-    `${lines.join('\n')}\n\n` +
+    `Para seguir com a inscrição na Faculdade Sumaré, em qual *polo* você prefere estudar?\n\n` +
+    `${formatPoloListaNumerada()}\n\n` +
     `Responda com o *número* (1 a 5) ou o *nome do polo* (ex.: Tatuapé).`
+  )
+}
+
+/** Lead pediu cidade/polo fora dos 5 cadastrados neste WhatsApp. */
+export function messageMentionsUnlistedPoloLocation(text) {
+  const t = normalizePoloText(text)
+  if (!t || t.length < 4) return false
+  if (matchPoloFromUserMessage(text)) return false
+  if (/\b(outr[oa]s?\s+(cidade|polo|unidade|campus|local|regi[aã]o)|outro\s+polo|outra\s+cidade)\b/i.test(t)) {
+    return true
+  }
+  if (/\b(s[oó]\s+atend|n[aã]o\s+tem|n[aã]o\s+oferece|fora\s+dessa|interior|outro\s+estado)\b/i.test(t)) {
+    return true
+  }
+  return false
+}
+
+export function buildPoloOutroLocalidadeReply() {
+  return (
+    `Por este número de WhatsApp da Faculdade Sumaré oferecemos inscrição apenas nos *5 polos* listados abaixo:\n\n` +
+    `${formatPoloListaNumerada()}\n\n` +
+    `Se quiser seguir por aqui, responda com o *número* (1 a 5) ou o *nome* de um desses polos. ` +
+    `Para outras localidades, nossa central pode orientar por outros canais de atendimento.`
   )
 }
 
@@ -152,8 +190,15 @@ export function buildPoloConfirmacaoInvalidaReply() {
 
 export function buildPoloEscolhidoAckReply(polo, opts = {}) {
   const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
+  const afterForm = Boolean(opts.afterForm)
+  if (afterForm) {
+    return (
+      `Perfeito${nameBit}! Polo *${polo.nome}* (${polo.endereco}) registrado. ` +
+      `Estou gerando sua inscrição no sistema da Sumaré e em instantes envio o *link para você visualizar e aceitar o contrato* por aqui.`
+    )
+  }
   return (
     `Perfeito${nameBit}! Polo *${polo.nome}* (${polo.endereco}) registrado. ` +
-    `Estou gerando sua inscrição no sistema da Sumaré e em instantes envio o link do contrato por aqui.`
+    `Acabei de enviar o formulário de dados básicos aqui no WhatsApp — preencha e envie para continuarmos sua inscrição.`
   )
 }

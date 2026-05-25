@@ -40,6 +40,7 @@ export function messageAsksCoursePrice(text) {
 export function sanitizeLeadInboundMessage(text) {
   const raw = String(text || '').trim()
   if (!raw) return ''
+  if (inboundLooksLikeContratoLinkEcho(raw)) return ''
 
   const parts = raw
     .split(/,(?=\s*(?:[A-Za-zÀ-ÿ0-9]|Salesbot|Boa|Olá|Perfeito|Desculpe))/)
@@ -60,14 +61,42 @@ export function sanitizeLeadInboundMessage(text) {
 }
 
 /** Texto típico de nota/sistema Kommo (salesbot, integração) — nunca é fala do lead. */
+/** Nota interna Kommo sobre captação/contrato — nunca é fala do lead. */
+export function isKommoCaptacaoContratoSystemNote(text) {
+  const low = String(text || '').toLowerCase()
+  if (!low) return false
+  if (/\binscri[cç][aã]o sumar[eé]\b/i.test(low) && /\b(candidato|link contrato|contrato)\b/i.test(low)) {
+    return true
+  }
+  if (/\blink contrato enviado\b/i.test(low)) return true
+  if (/\bsumar[eé]\.edu\.br\b/i.test(low) && /\bcontrato\b/i.test(low) && /\b(candidato|id=)\b/i.test(low)) {
+    return true
+  }
+  return false
+}
+
 export function isKommoSystemOrIntegrationNote(text) {
   const low = String(text || '').toLowerCase()
   if (!low) return false
+  if (isKommoCaptacaoContratoSystemNote(text)) return true
   if (/\bsalesbot\b/i.test(low)) return true
   if (/\bformulario_sum\b/i.test(low)) return true
   if (/\binscri[cç][aã]o via agente ia\b/i.test(low)) return true
   if (/\bnome da integra[cç][aã]o\b/i.test(low)) return true
   if (/\bintegra[cç][aã]o\b/i.test(low) && /\bwhatsapp\b/i.test(low)) return true
+  return false
+}
+
+/** Eco de link de contrato (outbound ou nota CRM) — não tratar como mensagem do candidato. */
+export function inboundLooksLikeContratoLinkEcho(text) {
+  const raw = String(text || '').trim()
+  if (!raw) return false
+  if (isKommoCaptacaoContratoSystemNote(raw)) return true
+  const low = raw.toLowerCase()
+  if (/\bsumar[eé]\.edu\.br\b/i.test(low) && /\bcontrato\b/i.test(low) && /\bid=\d{8,}/i.test(low)) {
+    return true
+  }
+  if (/\blink contrato enviado\b/i.test(low)) return true
   return false
 }
 

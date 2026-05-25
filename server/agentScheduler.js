@@ -353,9 +353,14 @@ export async function runSchedulerTick(env) {
             `[scheduler] pós-form lead=${lead.id} handled=true inscricaoForm=${ctxForm} salesbot=${botId} matricula_ok=${matriculaOk}`,
           )
           const reply = postFormAdv.result?.reply
-          const linkAlreadySent = Boolean(postFormAdv.result?.ctxSnapshot?.contratoLinkSent)
+          const contratoWhatsappSent = Boolean(postFormAdv.result?.ctxSnapshot?.contratoWhatsappSent)
           const skipSchedulerWhatsapp = Boolean(postFormAdv.result?.ctxSnapshot?.skipSchedulerWhatsapp)
-          if (reply && !linkAlreadySent && !skipSchedulerWhatsapp) {
+          const mustSendContrato =
+            reply &&
+            /sumare\.edu\.br/i.test(reply) &&
+            /\bcontrato\b/i.test(reply) &&
+            !contratoWhatsappSent
+          if (reply && (mustSendContrato || (!contratoWhatsappSent && !skipSchedulerWhatsapp))) {
             const execId = generateExecutionId()
             const sendRes = await sendMessageWithNote(env, {
               telefone: phone,
@@ -369,7 +374,7 @@ export async function runSchedulerTick(env) {
               botMessage: reply,
             }).catch(() => {})
             console.log(`[scheduler] pós-form lead=${lead.id} whatsapp_send_ok=${sendRes?.ok}`)
-          } else if (linkAlreadySent) {
+          } else if (contratoWhatsappSent) {
             console.log(`[scheduler] pós-form lead=${lead.id} link contrato já enviado pela captação`)
           } else if (skipSchedulerWhatsapp) {
             console.log(`[scheduler] pós-form lead=${lead.id} WhatsApp omitido (captação/salesbot já enviou)`)

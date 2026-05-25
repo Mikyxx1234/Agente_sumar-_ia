@@ -136,23 +136,33 @@ export async function runMatriculaCaptacaoAfterForm(env, ctx) {
   await persistCaptacaoResult(env, telefone, { candidatoId, contractUrl })
 
   const reply = buildContratoAceiteLinkReply({ pushName, contractUrl })
-  const sendRes = await sendMessageWithNote(env, {
+  let sendRes = await sendMessageWithNote(env, {
     telefone,
     text: reply,
     leadId,
     executionId,
   })
+  if (!sendRes?.ok && !(sendRes?.skipped && sendRes?.deduped)) {
+    await new Promise((r) => setTimeout(r, 1500))
+    sendRes = await sendMessageWithNote(env, {
+      telefone,
+      text: reply,
+      leadId,
+      executionId: `${executionId || 'cap'}-retry`,
+    })
+  }
+
+  const whatsappOk = Boolean(sendRes?.ok && (sendRes.sent || 0) > 0)
 
   if (leadId) {
-    await createLeadNote(
-      env,
-      leadId,
-      `Inscrição Sumaré (candidato ${candidatoId}) — link contrato enviado por WhatsApp: ${contractUrl}`,
-    ).catch(() => {})
+    const noteLine = whatsappOk
+      ? `Inscrição Sumaré (candidato ${candidatoId}) — link contrato enviado por WhatsApp: ${contractUrl}`
+      : `Inscrição Sumaré (candidato ${candidatoId}) — link contrato gerado (pendente envio WhatsApp): ${contractUrl}`
+    await createLeadNote(env, leadId, noteLine).catch(() => {})
   }
 
   console.log(
-    `[matriculaCaptacao] lead=${leadId} candidato=${candidatoId} whatsapp_ok=${sendRes?.ok} url=${contractUrl.slice(0, 80)}`,
+    `[matriculaCaptacao] lead=${leadId} candidato=${candidatoId} whatsapp_ok=${whatsappOk} url=${contractUrl.slice(0, 80)} err=${sendRes?.error || sendRes?.reason || 'n/a'}`,
   )
 
   return {
@@ -160,7 +170,7 @@ export async function runMatriculaCaptacaoAfterForm(env, ctx) {
     candidatoId,
     contractUrl,
     reply,
-    whatsappOk: Boolean(sendRes?.ok),
+    whatsappOk,
     steps: workflow.steps,
     runSalesbot49813: shouldRunSalesbot49813(env),
   }

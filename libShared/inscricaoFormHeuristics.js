@@ -13,7 +13,9 @@ export const INSCRICAO_FORM_STATUS_AGUARDANDO = 'aguardando_form_sumar'
 /** Formulário recebido — salesbot de distribuição em andamento. */
 export const INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO = 'aguardando_distribuicao_form'
 export const INSCRICAO_FORM_STATUS_CONCLUIDO = 'form_sumar_concluido'
-/** Formulário recebido — aguardando o lead escolher o polo (antes da API Captação). */
+/** Antes do Form Sumar: aguardando o lead escolher o polo de inscrição. */
+export const INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM = 'aguardando_escolha_polo_pre_form'
+/** Formulário recebido — aguardando o lead escolher o polo (legado pós-form). */
 export const INSCRICAO_FORM_STATUS_AGUARDANDO_POLO = 'aguardando_escolha_polo'
 /** Inscrição na API Sumaré feita; aguardando aceite do contrato no portal. */
 export const INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE = 'aguardando_aceite_contrato'
@@ -28,6 +30,7 @@ const MATRICULA_POS_FORM_TERMINAL_STATUSES = new Set([
 
 /** Em andamento — não reprocessar pós-form nem salesbot 49813. */
 const MATRICULA_POS_FORM_IN_PROGRESS_STATUSES = new Set([
+  INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM,
   INSCRICAO_FORM_STATUS_AGUARDANDO_POLO,
   ...MATRICULA_POS_FORM_TERMINAL_STATUSES,
 ])
@@ -371,8 +374,9 @@ export function buildContratoAceiteLinkReply(opts = {}) {
     `Ótimo${nameBit}! Sua inscrição foi registrada na Faculdade Sumaré.\n\n` +
     `Para concluir a matrícula, acesse o link abaixo:\n\n` +
     `${link}\n\n` +
-    `Nesse link você deve *aceitar o contrato* (ler os termos, marcar a concordância e clicar em *ASSINAR CONTRATO*) ` +
-    `e, em seguida, realizar o *pagamento da matrícula* na mesma página.\n\n` +
+    `*Você* deve abrir o link, ler os termos, marcar a concordância e clicar em *ASSINAR CONTRATO* — ` +
+    `a inscrição só é concluída quando *você* aceita o contrato no portal (não fazemos isso por você). ` +
+    `Em seguida, realize o *pagamento da matrícula* na mesma página.\n\n` +
     `Depois que o pagamento for confirmado, envie aqui no WhatsApp um *print ou foto do comprovante* ` +
     `para darmos continuidade aos próximos passos da sua matrícula.\n\n` +
     `Qualquer dúvida sobre o contrato ou o pagamento, é só responder por aqui.`

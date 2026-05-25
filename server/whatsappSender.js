@@ -183,7 +183,7 @@ export async function sendText(env, { to, text }) {
         recipient_type: 'individual',
         to: recipient,
         type: 'text',
-        text: { body, preview_url: false },
+        text: { body, preview_url: /https?:\/\//i.test(body) },
       }),
     })
     const raw = await res.text()
