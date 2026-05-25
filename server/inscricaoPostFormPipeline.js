@@ -428,12 +428,17 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
       })
     } else if (!cap.skipped && !cap.ok) {
       const missing = Array.isArray(cap.missing) ? cap.missing.join(', ') : ''
-      const detail = cap.error || cap.code || 'falha'
-      reply =
-        missing.includes('curso') || cap.code === 'MISSING_FIELDS'
-          ? `Obrigado${pushName ? `, ${String(pushName).split(/\s+/)[0]}` : ''}! Recebemos seu formulário, mas o curso informado ainda não está mapeado para inscrição automática no sistema (${detail}${missing ? `: ${missing}` : ''}). Um consultor da Faculdade Sumaré entrará em contato em breve.`
-          : `Obrigado${pushName ? `, ${String(pushName).split(/\s+/)[0]}` : ''}! Recebemos seu formulário, mas houve um problema ao gerar sua inscrição no sistema (${detail}). Um consultor da Faculdade Sumaré entrará em contato em breve para concluir o aceite do contrato e o pagamento.`
-      console.error(`[inscricaoPostForm] captação falhou lead=${idLead} code=${cap.code} missing=${missing} err=${cap.error}`)
+      console.error(
+        `[inscricaoPostForm] captação falhou lead=${idLead} code=${cap.code} missing=${missing} err=${String(cap.error || '').slice(0, 800)}`,
+      )
+      const firstName = pushName ? `, ${String(pushName).split(/\s+/)[0]}` : ''
+      if (missing.includes('curso') || cap.code === 'MISSING_FIELDS') {
+        reply =
+          `Obrigado${firstName}! Recebemos seu formulário. O curso informado ainda não está disponível para inscrição automática no momento. ` +
+          `Um consultor da Faculdade Sumaré entrará em contato em breve.`
+      } else {
+        reply = buildInscricaoFormCompleteReply({ pushName, ok: false })
+      }
       toolCalls.push({
         tool: 'sumare_captacao_contrato',
         args: { telefone, id_lead: idLead },
