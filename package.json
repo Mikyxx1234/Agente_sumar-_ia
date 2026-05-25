@@ -11,6 +11,9 @@
     "start": "node scripts/start-production.mjs",
     "start:local": "node --env-file=.env server.js",
     "db:ensure-inscricao-columns": "node --env-file=.env scripts/ensureDadosClienteInscricaoColumns.mjs",
+    "db:ensure-captacao-curso": "node --env-file=.env scripts/ensureSumareCaptacaoCursoTable.mjs",
+    "db:import-captacao-curso": "node --env-file=.env scripts/importSumareCaptacaoCurso.mjs",
+    "db:seed-captacao-curso": "node --env-file=.env scripts/ensureSumareCaptacaoCursoTable.mjs && node --env-file=.env scripts/importSumareCaptacaoCurso.mjs",
     "db:ensure-feedback-job-runs": "node --env-file=.env scripts/ensureFeedbackJobRunsTable.mjs"
   },
   "dependencies": {

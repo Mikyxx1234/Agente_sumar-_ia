@@ -11,6 +11,7 @@
 
 import { getDefaultTipoIngresso } from './inscricaoConfig.js'
 import { matchPoloFromUserMessage, resolvePoloUnidadeCode } from '../libShared/sumarePoloCatalog.js'
+import { resolveCursoCodigoFromDb } from './sumareCaptacaoCursoStore.js'
 
 export function isSumareCaptacaoEnabled(env = process.env) {
   if (String(env.SUMARE_CAPTACAO_ENABLED || '').trim().toLowerCase() === 'false') {
@@ -276,6 +277,15 @@ export function buildGerarCandidatoQuery(snapshot, telefone, env = process.env) 
   }
 }
 
+/** Igual a buildGerarCandidatoQuery, mas consulta sumare_captacao_curso no Supabase se curso vazio. */
+export async function buildGerarCandidatoQueryAsync(snapshot, telefone, env = process.env) {
+  const params = buildGerarCandidatoQuery(snapshot, telefone, env)
+  if (params.curso) return params
+  const fromDb = await resolveCursoCodigoFromDb(snapshot?.curso_inscricao, env)
+  if (fromDb) return { ...params, curso: fromDb }
+  return params
+}
+
 export function validateGerarCandidatoParams(params) {
   const missing = []
   if (!params.cpf) missing.push('cpf')
@@ -323,7 +333,7 @@ export async function solicitarAceiteContrato(env, candidatoId) {
  */
 export async function runCaptacaoContratoWorkflow(env, { snapshot, telefone }) {
   const steps = []
-  const params = buildGerarCandidatoQuery(snapshot, telefone, env)
+  const params = await buildGerarCandidatoQueryAsync(snapshot, telefone, env)
   const missing = validateGerarCandidatoParams(params)
   if (missing.length) {
     return {
