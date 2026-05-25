@@ -44,7 +44,6 @@ import { enqueueCloudInboundPending, matchContactToPending, markCloudBridgeExpec
 import { recordSyncOutcome, recordBufferWrite, recordAsyncError } from './webhookDiagnostics.js'
 import { sanitizeLeadInboundMessage } from '../../libShared/inboundMessageSanitize.js'
 import { recordBufferFlushHash } from '../sessionFlushDedupe.js'
-import { isKommoInboundMirrorEnabled, mirrorInboundToKommo } from '../kommoInboundMirror.js'
 
 function getBody(req) {
   const body = req.body || {}
@@ -163,17 +162,6 @@ function normalizeContactPhoneToSessionId(phone) {
 function normalizeTelefone(sessionId) {
   if (!sessionId) return ''
   return String(sessionId).split('@')[0].replace(/[^0-9]/g, '')
-}
-
-async function bufferInboundMessage(env, sessionId, text, { messageId, leadId } = {}) {
-  await pushMessage(env, sessionId, text)
-  recordBufferWrite(sessionId)
-  if (isKommoInboundMirrorEnabled(env)) {
-    const telefone = normalizeTelefone(sessionId)
-    mirrorInboundToKommo(env, { telefone, text, messageId, leadId }).catch((err) => {
-      console.warn(`[kommo-mirror] exception session=${sessionId}: ${err.message}`)
-    })
-  }
 }
 
 /**
@@ -847,7 +835,8 @@ export function makeEvolutionWebhookHandler(env) {
             sync('contact_skipped_phone_allowlist', sessionId)
           } else {
             if (pending.messageId) rememberWamid(sessionId, pending.messageId)
-            await bufferInboundMessage(env, sessionId, clean, { messageId: pending.messageId })
+            await pushMessage(env, sessionId, clean)
+            recordBufferWrite(sessionId)
             clearCloudBridgeContactWindow(instance)
             console.log('[Evolution][cloud] buffer', sessionId, String(clean).slice(0, 120), evtName)
             sync('contact_matched_buffer_ok', sessionId)
@@ -930,7 +919,8 @@ export function makeEvolutionWebhookHandler(env) {
               return
             }
             if (messageId) rememberWamid(hit.sessionId, messageId)
-            await bufferInboundMessage(env, hit.sessionId, clean, { messageId })
+            await pushMessage(env, hit.sessionId, clean)
+            recordBufferWrite(hit.sessionId)
             console.log('[Evolution][cloud] buffer orphan resolved', hit.sessionId, String(clean).slice(0, 120))
             clearCloudBridgeContactWindow(instance)
           } catch (err) {
@@ -966,7 +956,8 @@ export function makeEvolutionWebhookHandler(env) {
           return
         }
         console.log(`[Evolution] ${messageType} ← ${sessionId} (${pushName}): "${clean.slice(0, 140)}"`)
-        await bufferInboundMessage(env, sessionId, clean, { messageId })
+        await pushMessage(env, sessionId, clean)
+        recordBufferWrite(sessionId)
       } catch (err) {
         recordAsyncError('msg_async_buffer', err.message)
         console.error('[Evolution] processing error:', err.message)
