@@ -40,7 +40,11 @@ export function matriculaPosFormAlreadyProcessed(row) {
   if (!row || typeof row !== 'object') return false
   const status = String(row.inscricao_form_status || '').trim()
   if (MATRICULA_POS_FORM_IN_PROGRESS_STATUSES.has(status)) return true
-  if (row.inscricao_form_recebido_at) return true
+  if (row.inscricao_form_recebido_at) {
+    const waiting = [INSCRICAO_FORM_STATUS_AGUARDANDO, INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO]
+    if (waiting.includes(status)) return false
+    return true
+  }
   if (row.captacao_contrato_link_at) return true
   if (row.captacao_candidato_id != null && String(row.captacao_candidato_id).trim() !== '') return true
   if (row.captacao_contrato_link != null && String(row.captacao_contrato_link).trim() !== '') return true

@@ -59,10 +59,7 @@ import { phoneToWhatsAppSessionId } from './phoneWhatsApp.js'
 import { getMessages, getLastTouchedAt, listSessionsWithPendingMessages } from './evolution/messageBuffer.js'
 import { clearBufferIfStaleRepush } from './sessionFlushDedupe.js'
 import { flushSession } from './evolution/webhookEvolution.js'
-import {
-  tryAdvanceInscricaoPostFormScheduler,
-  isInscricaoPostFormSchedulerEnabled,
-} from './inscricaoPostFormPipeline.js'
+import { tryAdvanceInscricaoPostFormScheduler } from './inscricaoPostFormPipeline.js'
 import { tryInactivityReengagement } from './inactivityReengagement.js'
 import { sendMessageWithNote } from './whatsappSender.js'
 import { saveConversation } from './historyStore.js'
@@ -342,7 +339,6 @@ export async function runSchedulerTick(env) {
       })
 
       let skipFlushAfterPostForm = false
-      if (isInscricaoPostFormSchedulerEnabled(env)) {
       try {
         const postFormAdv = await tryAdvanceInscricaoPostFormScheduler(env, {
           telefone: phone,
@@ -369,19 +365,18 @@ export async function runSchedulerTick(env) {
             })
             await saveConversation(env, {
               telefone: phone,
-              userMessage: '[scheduler] avanço pós-formulário',
+              userMessage: '[scheduler] avanço pós-formulário Kommo',
               botMessage: reply,
             }).catch(() => {})
             console.log(`[scheduler] pós-form lead=${lead.id} whatsapp_send_ok=${sendRes?.ok}`)
           } else if (linkAlreadySent) {
             console.log(`[scheduler] pós-form lead=${lead.id} link contrato já enviado pela captação`)
           } else if (skipSchedulerWhatsapp) {
-            console.log(`[scheduler] pós-form lead=${lead.id} WhatsApp omitido (salesbot 49813 já tratou o lead)`)
+            console.log(`[scheduler] pós-form lead=${lead.id} WhatsApp omitido (captação/salesbot já enviou)`)
           }
         }
       } catch (postErr) {
         console.warn(`[scheduler] pós-form lead=${lead.id}:`, postErr.message)
-      }
       }
       if (isKommoInboundPollDebugLead(env, Number(lead.id))) {
         console.log(

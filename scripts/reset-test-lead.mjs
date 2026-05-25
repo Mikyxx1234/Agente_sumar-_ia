@@ -95,12 +95,14 @@ async function main() {
     results.push({ table, deleteStatus: del.status, beforeRange: before.range, deleted: Array.isArray(del.data) ? del.data.length : del.status })
   }
 
-  // Estado do fluxo
-  // Marca "agora" em recebido_at para o scheduler ignorar notas antigas do Form no Kommo.
+  // Estado do fluxo — recebido_at null para não bloquear pós-form após novo teste.
   env.SUPABASE_DADOS_CLIENTE_TABLE = dadosTable
   const resetFields = {
     inscricao_form_status: null,
-    inscricao_form_recebido_at: new Date().toISOString(),
+    inscricao_form_recebido_at: null,
+    captacao_candidato_id: null,
+    captacao_contrato_link: null,
+    captacao_contrato_link_at: null,
     atendimento_ia: null,
     reativacao_ping_at: null,
     reativacao_moved_at: null,

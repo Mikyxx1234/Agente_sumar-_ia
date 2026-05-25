@@ -16,13 +16,13 @@ import {
   INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO,
 } from '../libShared/inscricaoFormHeuristics.js'
 import { sendMessageWithNote } from './whatsappSender.js'
-import { fetchLeadFormSnapshot } from './inscricaoKommoFields.js'
+import { fetchLeadFormSnapshot, validateFormSnapshot } from './inscricaoKommoFields.js'
 import {
   resolvePoloFromKommoSnapshot,
   buildPoloEscolhaMessage,
 } from '../libShared/sumarePoloCatalog.js'
 import { runKommoSalesbot } from './kommoSalesbot.js'
-import { findLeadByPhone, listLeadNotes } from './kommoClient.js'
+import { findLeadByPhone, listLeadNotes, listLeadEvents } from './kommoClient.js'
 import {
   updateDadosCliente,
   getLeadIdByTelefone,
@@ -170,9 +170,40 @@ function noteBlob(n) {
     .join(' ')
 }
 
+function noteCreatedMs(n) {
+  const c = n?.created_at ?? n?.date_create
+  if (c == null) return 0
+  if (typeof c === 'number') return c < 1e12 ? c * 1000 : c
+  const t = Date.parse(c)
+  return Number.isNaN(t) ? 0 : t
+}
+
+function eventCreatedMs(ev) {
+  const c = ev?.created_at
+  if (c == null) return 0
+  if (typeof c === 'number') return c < 1e12 ? c * 1000 : c
+  const t = Date.parse(c)
+  return Number.isNaN(t) ? 0 : t
+}
+
+/** Última ativação do salesbot Formulario_Sum (ms) — referência p/ detectar preenchimento. */
+function findLastFormularioSumSentMs(notes) {
+  let max = 0
+  for (const n of notes || []) {
+    const blob = noteBlob(n).toLowerCase()
+    if (!blob.includes('formulario_sum')) continue
+    if (!/\bativad[oa]\b|inscri[cç]/i.test(blob)) continue
+    max = Math.max(max, noteCreatedMs(n))
+  }
+  return max
+}
+
 /**
- * O Flow do Form Sumar costuma aparecer só nas notas do Kommo
- * ("Respostas recebidas no Flow"), sem mensagem no buffer WhatsApp.
+ * O Flow do Form Sumar no WhatsApp costuma NÃO virar nota inbound com texto
+ * ("Flow responses received" fica só no chat Amojo). Detectamos por:
+ *   1) nota com texto de flow / respostas recebidas
+ *   2) eventos custom_field_*_value_changed após Formulario_Sum
+ *   3) snapshot do lead no Kommo com campos obrigatórios preenchidos
  */
 export async function detectFormSumarRecebidoNoKommo(env, leadId, options = {}) {
   const id = Number(leadId)
@@ -183,23 +214,60 @@ export async function detectFormSumarRecebidoNoKommo(env, leadId, options = {}) 
   const now = Date.now()
   const minNoteAfterMs = options.minNoteAfterIso ? Date.parse(options.minNoteAfterIso) : NaN
 
-  const notesRes = await listLeadNotes(env, id, { limit: 50, order: 'desc' })
-  if (notesRes.ok && Array.isArray(notesRes.notes)) {
-    for (const n of notesRes.notes) {
-      const created = n?.created_at ?? n?.date_create
-      if (created) {
-        const ts = Date.parse(created)
-        if (!Number.isNaN(ts) && now - ts > maxAgeMs) continue
-        if (!Number.isNaN(minNoteAfterMs) && !Number.isNaN(ts) && ts <= minNoteAfterMs) continue
+  const notesRes = await listLeadNotes(env, id, { limit: 60, order: 'desc' })
+  const notes = notesRes.ok && Array.isArray(notesRes.notes) ? notesRes.notes : []
+  const formSentMs = findLastFormularioSumSentMs(notes)
+  const afterMs = Math.max(
+    Number.isFinite(minNoteAfterMs) && !Number.isNaN(minNoteAfterMs) ? minNoteAfterMs : 0,
+    formSentMs > 0 ? formSentMs - 60_000 : 0,
+  )
+
+  for (const n of notes) {
+    const ts = noteCreatedMs(n)
+    if (ts && now - ts > maxAgeMs) continue
+    if (afterMs && ts && ts < afterMs) continue
+    const blob = noteBlob(n)
+    if (messageLooksLikeFormSumarResponse(blob)) {
+      return { detected: true, source: 'kommo_note', sample: blob.slice(0, 120) }
+    }
+  }
+
+  if (formSentMs > 0) {
+    const fromTs = Math.max(0, Math.floor((afterMs || formSentMs) / 1000))
+    const evRes = await listLeadEvents(env, id, { types: [], limit: 80, fromTs })
+    if (evRes.ok && Array.isArray(evRes.events)) {
+      let fieldChanges = 0
+      for (const ev of evRes.events) {
+        const ts = eventCreatedMs(ev)
+        if (ts && ts < afterMs) continue
+        const t = String(ev?.type || '').toLowerCase()
+        if (/^custom_field_\d+_value_changed$/.test(t)) fieldChanges += 1
       }
-      const blob = noteBlob(n)
-      if (messageLooksLikeFormSumarResponse(blob)) {
-        return { detected: true, source: 'kommo_note', sample: blob.slice(0, 120) }
+      const minChanges = Number(env.INSCRICAO_FORM_KOMMO_FIELD_CHANGES_MIN)
+      const need = Number.isFinite(minChanges) && minChanges > 0 ? Math.floor(minChanges) : 2
+      if (fieldChanges >= need) {
+        return {
+          detected: true,
+          source: 'kommo_field_events',
+          sample: `${fieldChanges} alterações de campo após Formulario_Sum`,
+        }
+      }
+    }
+
+    const snapRes = await fetchLeadFormSnapshot(env, id)
+    if (snapRes.ok && snapRes.snapshot) {
+      const val = validateFormSnapshot(env, snapRes.snapshot)
+      if (val.valid) {
+        return {
+          detected: true,
+          source: 'kommo_snapshot',
+          sample: `nome=${String(snapRes.snapshot.nome || '').slice(0, 40)} email=${String(snapRes.snapshot.email || '').slice(0, 40)}`,
+        }
       }
     }
   }
 
-  return { detected: false, reason: 'not_found' }
+  return { detected: false, reason: formSentMs > 0 ? 'not_found_after_form_sent' : 'no_formulario_sum_note' }
 }
 
 /**
@@ -509,7 +577,7 @@ export async function tryProcessInscricaoPostFormPipeline(env, input) {
   const trigger =
     shouldTriggerMatriculaPosForm(userMessage, status) ||
     (schedulerTick && status === INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO) ||
-    (kommoFormDone && waitingForForm)
+    (kommoFormDone && (waitingForForm || messageLooksLikeFormSumarResponse(userMessage)))
 
   if (!trigger) return null
 
@@ -545,20 +613,16 @@ export async function tryHandleInscricaoFormComplete(env, input) {
   return tryProcessInscricaoPostFormPipeline(env, input)
 }
 
-/** Liga o avanço pós-form no tick do scheduler (default: desligado). */
+/** Liga o avanço pós-form legado no tick (extra além da detecção Kommo). */
 export function isInscricaoPostFormSchedulerEnabled(env = process.env) {
   return String(env?.INSCRICAO_POST_FORM_SCHEDULER_ENABLED ?? 'false').trim().toLowerCase() === 'true'
 }
 
 /**
- * Scheduler: detecta form preenchido via notas Kommo (Flow) ou status Supabase
- * e dispara salesbot 49813 sem depender de mensagem no buffer.
- * Desligado por padrão — defina INSCRICAO_POST_FORM_SCHEDULER_ENABLED=true para reativar.
+ * Scheduler: detecta formulário preenchido no Kommo (campos/eventos) mesmo sem
+ * "Flow responses received" no buffer — roda após cada sync do poll.
  */
 export async function tryAdvanceInscricaoPostFormScheduler(env, { telefone, leadId }) {
-  if (!isInscricaoPostFormSchedulerEnabled(env)) {
-    return null
-  }
   return tryProcessInscricaoPostFormPipeline(env, {
     telefone,
     leadId,
