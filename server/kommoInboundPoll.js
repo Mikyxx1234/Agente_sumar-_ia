@@ -1849,3 +1849,16 @@ export function resetKommoInboundPollStateForLead(leadId) {
   dispatcherState.delete(lid)
   return true
 }
+
+/**
+ * Marca nota inbound já processada (ex.: espelhamento Evolution → Kommo) para o poll
+ * não reempurrar o mesmo texto no buffer com skipDedupe.
+ */
+export function advanceKommoInboundPollNoteCursor(leadId, noteId) {
+  const lid = Number(leadId)
+  const nid = Number(noteId)
+  if (!Number.isFinite(lid) || lid <= 0 || !Number.isFinite(nid) || nid <= 0) return false
+  const st = noteState.get(lid) || { warmed: false, lastNoteId: 0 }
+  noteState.set(lid, { warmed: true, lastNoteId: Math.max(st.lastNoteId, nid) })
+  return true
+}

@@ -323,7 +323,41 @@ export async function createLeadNote(env, leadId, text) {
   if (!r.ok) {
     return { ok: false, code: r.code || 'KOMMO_ERROR', status: r.status, error: summarizeError(r) }
   }
-  return { ok: true, status: r.status, data: r.data }
+  return { ok: true, status: r.status, data: r.data, noteId: extractCreatedNoteId(r.data) }
+}
+
+/**
+ * Espelha mensagem recebida do candidato no timeline Kommo (tipo sms_in).
+ * Usado quando o WhatsApp entra via Evolution e não passa pelo canal nativo do CRM.
+ *
+ * @returns { ok, status?, data?, noteId?, error? }
+ */
+export async function createLeadInboundSmsNote(env, leadId, { text, phone } = {}) {
+  if (leadId == null || leadId === '') {
+    return { ok: false, code: 'MISSING_LEAD_ID', error: 'leadId ausente' }
+  }
+  const body = String(text ?? '').trim()
+  if (!body) {
+    return { ok: false, code: 'EMPTY_BODY', error: 'texto vazio' }
+  }
+  const digits = String(phone || '').replace(/[^0-9]/g, '')
+  const phoneParam = digits ? (digits.startsWith('55') ? `+${digits}` : `+55${digits}`) : ''
+  const r = await kommoFetch(env, `/api/v4/leads/${leadId}/notes`, {
+    method: 'POST',
+    body: [{ note_type: 'sms_in', params: { text: body, phone: phoneParam } }],
+  })
+  if (!r.ok) {
+    return { ok: false, code: r.code || 'KOMMO_ERROR', status: r.status, error: summarizeError(r) }
+  }
+  return { ok: true, status: r.status, data: r.data, noteId: extractCreatedNoteId(r.data) }
+}
+
+function extractCreatedNoteId(data) {
+  const fromEmbed = data?._embedded?.notes?.[0]?.id
+  if (fromEmbed != null) return Number(fromEmbed) || null
+  const fromArr = Array.isArray(data) ? data[0]?.id : data?.id
+  if (fromArr != null) return Number(fromArr) || null
+  return null
 }
 
 /**
