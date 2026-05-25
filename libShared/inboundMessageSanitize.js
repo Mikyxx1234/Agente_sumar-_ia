@@ -59,6 +59,18 @@ export function sanitizeLeadInboundMessage(text) {
   return joined.length >= 3 ? joined : raw
 }
 
+/** Texto típico de nota/sistema Kommo (salesbot, integração) — nunca é fala do lead. */
+export function isKommoSystemOrIntegrationNote(text) {
+  const low = String(text || '').toLowerCase()
+  if (!low) return false
+  if (/\bsalesbot\b/i.test(low)) return true
+  if (/\bformulario_sum\b/i.test(low)) return true
+  if (/\binscri[cç][aã]o via agente ia\b/i.test(low)) return true
+  if (/\bnome da integra[cç][aã]o\b/i.test(low)) return true
+  if (/\bintegra[cç][aã]o\b/i.test(low) && /\bwhatsapp\b/i.test(low)) return true
+  return false
+}
+
 /** Bloqueia disparo de formulário quando o texto é eco do agente misturado com frase de inscrição. */
 export function inboundLooksLikeAgentEchoOnly(text) {
   const raw = String(text || '').trim()

@@ -57,6 +57,7 @@ import {
 import { listLeadsInAgentQueue, parseAgentStatusIds } from './kommoAgentFunnel.js'
 import { phoneToWhatsAppSessionId } from './phoneWhatsApp.js'
 import { getMessages, getLastTouchedAt, listSessionsWithPendingMessages } from './evolution/messageBuffer.js'
+import { clearBufferIfStaleRepush } from './sessionFlushDedupe.js'
 import { flushSession } from './evolution/webhookEvolution.js'
 import {
   tryAdvanceInscricaoPostFormScheduler,
@@ -394,6 +395,10 @@ export async function runSchedulerTick(env) {
         getMessages(env, sessionId),
         getLastTouchedAt(env, sessionId),
       ])
+      if (messages?.length) {
+        const stale = await clearBufferIfStaleRepush(env, sessionId, messages)
+        if (stale.skip) return
+      }
       if (!messages || messages.length === 0) {
         try {
           const inact = await tryInactivityReengagement(env, {

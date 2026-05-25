@@ -54,6 +54,10 @@ import {
   recordEventsTick,
   recordDispatcherTick,
 } from './kommoInboundDiagnostics.js'
+import {
+  isKommoSystemOrIntegrationNote,
+  isLikelyAgentEcho,
+} from '../libShared/inboundMessageSanitize.js'
 
 /** @type {Map<number, { warmed: boolean, lastNoteId: number }>} */
 const noteState = new Map()
@@ -314,7 +318,7 @@ function classifyInboundNote(n, env, contactDigits, types) {
   if (!rawText) {
     return { kind: 'skip', reason: 'empty', advance: true, nid }
   }
-  if (isAgentOutboundEcho(rawText)) {
+  if (isAgentOutboundEcho(rawText) || isLikelyAgentEcho(rawText) || isKommoSystemOrIntegrationNote(rawText)) {
     return { kind: 'skip', reason: 'echo', advance: true, nid }
   }
   if (noteTypeMayCarryIntegrationSummary(n.note_type) && isLikelyCrmSummaryCommonNote(rawText, env)) {
@@ -928,7 +932,9 @@ async function resolveWabaStubViaLeadNotes(env, ev, leadId, sessionId) {
     if (nt === 'common' && !isCommonInboundEnabled(env)) continue
     const raw = extractNoteText(n, env)
     if (!raw) continue
-    if (nt === 'common' && isAgentOutboundEcho(raw)) continue
+    if (nt === 'common' && (isAgentOutboundEcho(raw) || isLikelyAgentEcho(raw) || isKommoSystemOrIntegrationNote(raw))) {
+      continue
+    }
     if (noteTypeMayCarryIntegrationSummary(nt) && isLikelyCrmSummaryCommonNote(raw, env)) continue
     const text = stripExecutionSuffix(raw)
     if (!text) continue
@@ -1172,7 +1178,7 @@ async function pollEvents(env, leadId, sessionId, contactId) {
       continue
     }
 
-    if (isAgentOutboundEcho(text)) {
+    if (isAgentOutboundEcho(text) || isLikelyAgentEcho(text) || isKommoSystemOrIntegrationNote(text)) {
       filteredOutbound += 1
       if (evId) st.seenIds.add(evId)
       maxAt = Math.max(maxAt, at)
@@ -1593,7 +1599,7 @@ async function pollDispatcher(env, leadId, sessionId) {
       continue
     }
 
-    if (isAgentOutboundEcho(text)) {
+    if (isAgentOutboundEcho(text) || isLikelyAgentEcho(text) || isKommoSystemOrIntegrationNote(text)) {
       filteredOutbound += 1
       st.seenIds.add(mid)
       maxApplied = Math.max(maxApplied, mid)

@@ -43,6 +43,7 @@ import { normalizeKommoInboundPollMode } from '../kommoInboundPoll.js'
 import { enqueueCloudInboundPending, matchContactToPending, markCloudBridgeExpectsContact, shouldBufferOrphanContact, clearCloudBridgeContactWindow, bufferOrphanContact } from './cloudInboundPending.js'
 import { recordSyncOutcome, recordBufferWrite, recordAsyncError } from './webhookDiagnostics.js'
 import { sanitizeLeadInboundMessage } from '../../libShared/inboundMessageSanitize.js'
+import { recordBufferFlushHash } from '../sessionFlushDedupe.js'
 
 function getBody(req) {
   const body = req.body || {}
@@ -712,8 +713,9 @@ async function flushSessionInner(env, sessionId, opts = {}) {
       sendResult?.ok &&
         ((sendResult.sent || 0) > 0 || sendResult.deduped),
     )
-    if (telefone && sentOk && !sendResult?.deduped) {
+    if (telefone && sentOk) {
       markReplyCooldown(env, telefone)
+      await recordBufferFlushHash(env, sessionId, itens)
     }
     if (out?.reply && !sentOk && !out?.iaPaused && !out.inscricaoFormHandled && !out.distribuirHumanoHandled) {
       console.warn(
