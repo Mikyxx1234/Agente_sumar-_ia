@@ -12,10 +12,12 @@ import {
   INSCRICAO_FORM_STATUS_AGUARDANDO_POLO,
   messageLooksLikeFormSumarResponse,
   messageLooksLikeFormFollowUp,
+  messageSignalsFormSubmissionAck,
   buildInscricaoFormCompleteReply,
   matriculaPosFormAlreadyProcessed,
   INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO,
 } from '../libShared/inscricaoFormHeuristics.js'
+import { findLastFormularioSumSentMs, noteBlob, noteCreatedMs } from '../libShared/kommoFormNotes.js'
 import { sendMessageWithNote } from './whatsappSender.js'
 import { fetchLeadFormSnapshot, validateFormSnapshot } from './inscricaoKommoFields.js'
 import {
@@ -35,7 +37,10 @@ import {
 } from './dadosClienteStore.js'
 import { DADOS_CLIENTE_INSCRICAO_SELECT } from './dadosClienteInscricaoFields.js'
 import { isSumareCaptacaoEnabled } from './sumareCaptacaoClient.js'
-import { leadHasPostFormRegistradoNote } from './postFormSendGuard.js'
+import {
+  leadHasPostFormRegistradoNote,
+  leadHasPostFormRegistradoNoteSinceLastFormSend,
+} from './postFormSendGuard.js'
 import { getAgentQueueSessionCutoffIso } from './agentQueueSession.js'
 import {
   runMatriculaCaptacaoAfterForm,
@@ -198,7 +203,7 @@ function buildAgentReturn({ executionId, model, t0, reply, steps, toolCalls, ctx
 }
 
 function shouldTriggerMatriculaPosForm(userMessage, status) {
-  if (messageLooksLikeFormSumarResponse(userMessage)) return true
+  if (messageSignalsFormSubmissionAck(userMessage)) return true
   if (
     status === INSCRICAO_FORM_STATUS_AGUARDANDO ||
     status === INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO
@@ -208,43 +213,12 @@ function shouldTriggerMatriculaPosForm(userMessage, status) {
   return false
 }
 
-function noteBlob(n) {
-  return [
-    n?.params?.text,
-    n?.params?.message,
-    n?.text,
-    typeof n?.params === 'object' ? JSON.stringify(n.params) : '',
-  ]
-    .filter(Boolean)
-    .join(' ')
-}
-
-function noteCreatedMs(n) {
-  const c = n?.created_at ?? n?.date_create
-  if (c == null) return 0
-  if (typeof c === 'number') return c < 1e12 ? c * 1000 : c
-  const t = Date.parse(c)
-  return Number.isNaN(t) ? 0 : t
-}
-
 function eventCreatedMs(ev) {
   const c = ev?.created_at
   if (c == null) return 0
   if (typeof c === 'number') return c < 1e12 ? c * 1000 : c
   const t = Date.parse(c)
   return Number.isNaN(t) ? 0 : t
-}
-
-/** Última ativação do salesbot Formulario_Sum (ms) — referência p/ detectar preenchimento. */
-function findLastFormularioSumSentMs(notes) {
-  let max = 0
-  for (const n of notes || []) {
-    const blob = noteBlob(n).toLowerCase()
-    if (!blob.includes('formulario_sum')) continue
-    if (!/\bativad[oa]\b|inscri[cç]/i.test(blob)) continue
-    max = Math.max(max, noteCreatedMs(n))
-  }
-  return max
 }
 
 /**
@@ -513,8 +487,8 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
 async function stepMatriculaPosForm(env, ctx) {
   const { telefone, idLead, executionId, model, pushName, t0, kommoFormDetected } = ctx
 
-  if (idLead != null && (await leadHasPostFormRegistradoNote(env, idLead))) {
-    console.log(`[inscricaoPostForm] lead=${idLead} skip matricula_pos_form (nota Kommo já existe)`)
+  if (idLead != null && (await leadHasPostFormRegistradoNoteSinceLastFormSend(env, idLead))) {
+    console.log(`[inscricaoPostForm] lead=${idLead} skip matricula_pos_form (nota pós-form após último Formulario_Sum)`)
     return { handled: false, reason: 'kommo_post_form_note_exists' }
   }
 
@@ -635,8 +609,12 @@ export async function tryProcessInscricaoPostFormPipeline(env, input) {
 
   const idLead = await resolveLeadId(env, telefone, leadIdHint)
 
-  if (idLead != null && (await leadHasPostFormRegistradoNote(env, idLead))) {
-    console.log(`[inscricaoPostForm] lead=${idLead} skip pipeline (nota pós-form já no Kommo)`)
+  if (
+    idLead != null &&
+    !messageSignalsFormSubmissionAck(userMessage) &&
+    (await leadHasPostFormRegistradoNoteSinceLastFormSend(env, idLead))
+  ) {
+    console.log(`[inscricaoPostForm] lead=${idLead} skip pipeline (nota pós-form após último Formulario_Sum)`)
     return null
   }
 
@@ -651,8 +629,7 @@ export async function tryProcessInscricaoPostFormPipeline(env, input) {
     idLead &&
     (schedulerTick ||
       waitingForForm ||
-      messageLooksLikeFormSumarResponse(userMessage) ||
-      messageLooksLikeFormFollowUp(userMessage))
+      messageSignalsFormSubmissionAck(userMessage))
 
   if (shouldScanKommoNotes) {
     const sessionCutoff = getAgentQueueSessionCutoffIso(idLead)

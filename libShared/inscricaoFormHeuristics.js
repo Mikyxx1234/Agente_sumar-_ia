@@ -239,8 +239,17 @@ export function messageLooksLikeFormFollowUp(text, options = {}) {
     return true
   }
   if (/^\s*(e\s+agora|e\s+ai|e\s+aí)\s*[.!?]*\s*$/i.test(t)) return true
-  if (!strict && /^\s*(ok|pronto|feito|done)\s*[.!?]*\s*$/i.test(t)) return true
+  if (!strict && /^\s*(ok|pronto|feito|done|enviei|mandei)\s*[.!?]*\s*$/i.test(t)) return true
   return false
+}
+
+/** Lead sinaliza que acabou de enviar / concluir o Form Sumar (inclui "pronto", Flow, etc.). */
+export function messageSignalsFormSubmissionAck(text) {
+  return (
+    messageLooksLikeFormSumarResponse(text) ||
+    messageIsFlowResponsesReceived(text) ||
+    messageLooksLikeFormFollowUp(text, { strictAwaitingForm: false })
+  )
 }
 
 /** Eco de mensagem enviada pelo agente (sufixo EX-… nas notas Kommo). */

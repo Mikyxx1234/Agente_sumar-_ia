@@ -6,6 +6,7 @@ import { fetchDadosClienteByTelefone, normalizeTelefone } from './dadosClienteSt
 import { getMessageBufferRedis } from './evolution/messageBuffer.js'
 import { listLeadNotes } from './kommoClient.js'
 import { isPostFormRegistradoBoilerplate } from './dadosClienteInscricaoFields.js'
+import { findLastFormularioSumSentMs, noteBlob, noteCreatedMs } from '../libShared/kommoFormNotes.js'
 import {
   INSCRICAO_FORM_STATUS_CONCLUIDO,
   matriculaPosFormAlreadyProcessed,
@@ -50,7 +51,7 @@ export function releasePostFormSendSync(telefone) {
 }
 
 function noteText(n) {
-  return [n?.params?.text, n?.params?.message, n?.text].filter(Boolean).join(' ').trim()
+  return noteBlob(n)
 }
 
 /**
@@ -67,6 +68,31 @@ export async function leadHasPostFormRegistradoNote(env, leadId) {
     }
   } catch (err) {
     console.warn(`[postFormSendGuard] leadHasPostFormRegistradoNote lead=${id}:`, err.message)
+  }
+  return false
+}
+
+/**
+ * Nota pós-form só conta se for DEPOIS do último Formulario_Sum ativado neste lead.
+ * Evita bloquear nova captação por mensagens de testes anteriores.
+ */
+export async function leadHasPostFormRegistradoNoteSinceLastFormSend(env, leadId) {
+  const id = Number(leadId)
+  if (!Number.isFinite(id) || id <= 0) return false
+  try {
+    const notesRes = await listLeadNotes(env, id, { limit: 60, order: 'desc' })
+    if (!notesRes.ok || !Array.isArray(notesRes.notes)) return false
+    const formSentMs = findLastFormularioSumSentMs(notesRes.notes)
+    if (!formSentMs) {
+      return leadHasPostFormRegistradoNote(env, leadId)
+    }
+    for (const n of notesRes.notes) {
+      const ts = noteCreatedMs(n)
+      if (ts && ts < formSentMs - 30_000) continue
+      if (isPostFormRegistradoBoilerplate(noteText(n))) return true
+    }
+  } catch (err) {
+    console.warn(`[postFormSendGuard] leadHasPostFormRegistradoNoteSinceLastFormSend lead=${id}:`, err.message)
   }
   return false
 }

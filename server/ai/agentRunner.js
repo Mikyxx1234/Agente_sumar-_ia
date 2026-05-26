@@ -57,10 +57,11 @@ import {
   messageConfirmsProceedToInscricaoForm,
   isShortEnrollmentConfirmation,
   assistantInEnrollmentStep,
+  messageSignalsFormSubmissionAck,
 } from '../../libShared/inscricaoFormHeuristics.js'
 import { fetchDadosClienteByTelefone } from '../dadosClienteStore.js'
 import { DADOS_CLIENTE_INSCRICAO_SELECT } from '../dadosClienteInscricaoFields.js'
-import { leadHasPostFormRegistradoNote } from '../postFormSendGuard.js'
+import { leadHasPostFormRegistradoNoteSinceLastFormSend } from '../postFormSendGuard.js'
 import {
   conversationHasActiveTopic,
   extractDiscussedCourseFromHistory,
@@ -449,13 +450,15 @@ export async function runAgent(env, input) {
     // Pós-form só quando a mensagem indica formulário respondido — evita pular
     // direto para "cadastro validado" em "sim"/"oi" com notas antigas no Kommo.
     const wantsNewForm = leadExplicitlyRequestsInscricaoForm(userMessage, historyMessages)
+    const formSubmissionAck = messageSignalsFormSubmissionAck(userMessage)
     let matriculaJaProcessada = false
     let inscRow = null
     try {
       if (
         !wantsNewForm &&
+        !formSubmissionAck &&
         leadId != null &&
-        (await leadHasPostFormRegistradoNote(env, leadId))
+        (await leadHasPostFormRegistradoNoteSinceLastFormSend(env, leadId))
       ) {
         matriculaJaProcessada = true
       }
@@ -482,7 +485,12 @@ export async function runAgent(env, input) {
       messageLooksLikeFormSumarResponse(userMessage) || messageIsFlowResponsesReceived(userMessage)
 
     let kommoFlowDetected = false
-    if (!matriculaJaProcessada && !wantsNewForm && leadId && (waitingForForm || flowTextInbound)) {
+    if (
+      !matriculaJaProcessada &&
+      !wantsNewForm &&
+      leadId &&
+      (waitingForForm || flowTextInbound || formSubmissionAck)
+    ) {
       try {
         const det = await detectFormSumarRecebidoNoKommo(env, leadId)
         kommoFlowDetected = Boolean(det.detected)
@@ -498,9 +506,7 @@ export async function runAgent(env, input) {
 
     const looksPostFormInbound =
       !matriculaJaProcessada &&
-      (flowTextInbound ||
-        kommoFlowDetected ||
-        (waitingForForm && messageLooksLikeFormFollowUp(userMessage, { strictAwaitingForm: true })))
+      (flowTextInbound || kommoFlowDetected || formSubmissionAck)
 
     if (flowTextInbound) {
       console.log(
