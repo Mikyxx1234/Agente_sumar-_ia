@@ -112,6 +112,7 @@ app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'agente-sumare',
+    app_env: String(process.env.APP_ENV || 'production').trim() || 'production',
     uptime_sec: Math.round(process.uptime()),
     port: PORT,
     dist: existsSync(join(__dirname, 'dist', 'index.html')),
