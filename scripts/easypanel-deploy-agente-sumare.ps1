@@ -21,6 +21,7 @@ param(
   [string]$Project = 'banco',
   [string]$Service = '',
   [string[]]$TestLeadIds = @(),
+  [switch]$CanaryTest,
   [switch]$SkipDeploy
 )
 
@@ -96,9 +97,13 @@ $profiles = @{
   }
   prod = @{
     Service = 'agente_sumare'
-    DefaultTestLeadIds = '23841399'
+    DefaultTestLeadIds = ''
     EnvOverrides = [ordered]@{
       APP_ENV = 'production'
+      NODE_ENV = 'production'
+      HOST = '0.0.0.0'
+      PORT = '8000'
+      KOMMO_SCHEDULER_ENABLED = 'true'
       KOMMO_SCHEDULER_WEBHOOK_ORPHAN_FLUSH = 'false'
       INATIVIDADE_ENABLED = 'false'
       INSCRICAO_POST_FORM_SCHEDULER_ENABLED = 'false'
@@ -132,12 +137,30 @@ if (-not $Service) { $Service = $profile.Service }
 
 $testIds = if ($TestLeadIds.Length -gt 0) {
   ($TestLeadIds -join ',')
+} elseif ($CanaryTest) {
+  if ($env:KOMMO_AGENT_TEST_LEAD_IDS) { $env:KOMMO_AGENT_TEST_LEAD_IDS } else { '23841399' }
 } elseif ($env:KOMMO_AGENT_TEST_LEAD_IDS) {
   $env:KOMMO_AGENT_TEST_LEAD_IDS
 } else {
   $profile.DefaultTestLeadIds
 }
 $profile.EnvOverrides['KOMMO_AGENT_TEST_LEAD_IDS'] = $testIds
+
+function Get-EasyPanelService {
+  param($ListData, [string]$ProjectName, [string]$ServiceName)
+  if ($ListData.services) {
+    return $ListData.services | Where-Object {
+      $_.projectName -eq $ProjectName -and $_.name -eq $ServiceName
+    } | Select-Object -First 1
+  }
+  foreach ($item in @($ListData)) {
+    if (-not $item.services) { continue }
+    foreach ($s in $item.services) {
+      if ($s.name -eq $ServiceName) { return $s }
+    }
+  }
+  return $null
+}
 
 if ($env:STAGING_PHONE_ALLOWLIST -and $Target -eq 'staging') {
   $profile.EnvOverrides['EVOLUTION_INGEST_PHONE_ALLOWLIST'] = $env:STAGING_PHONE_ALLOWLIST
@@ -158,18 +181,12 @@ $token = $login.result.data.json.token
 $headers = @{ Authorization = "Bearer $token" }
 
 $list = Invoke-RestMethod -Uri "$BaseUrl/api/trpc/projects.listProjectsAndServices" -Headers $headers -TimeoutSec 40
-$svc = $null
-foreach ($item in $list.result.data.json) {
-  if (-not $item.services) { continue }
-  foreach ($s in $item.services) {
-    if ($s.name -eq $Service) { $svc = $s; break }
-  }
-  if ($svc) { break }
-}
+$svc = Get-EasyPanelService -ListData $list.result.data.json -ProjectName $Project -ServiceName $Service
 if (-not $svc) {
-  Write-Error "Servico '$Service' nao encontrado no projeto '$Project'. Crie o servico no EasyPanel (ver docs/AMBIENTE-STAGING.md)."
+  Write-Error "Servico '$Service' nao encontrado no projeto '$Project'. Confira no painel: $BaseUrl/projects/$Project/app/$Service"
   exit 1
 }
+Write-Host "servico EP: projeto=$($svc.projectName) app=$($svc.name) repo=$($svc.source.owner)/$($svc.source.repo) ref=$($svc.source.ref)"
 
 $envText = $svc.env
 foreach ($kv in $profile.EnvOverrides.GetEnumerator()) {
@@ -188,6 +205,20 @@ if ($env:SUMARE_CAPTACAO_TOKEN) {
 if ($env:SUMARE_CAPTACAO_CURSO_MAP) {
   $envText = Set-EnvKey $envText 'SUMARE_CAPTACAO_CURSO_MAP' $env:SUMARE_CAPTACAO_CURSO_MAP
   Write-Host 'env SUMARE_CAPTACAO_CURSO_MAP=(definido)'
+}
+
+# Sincroniza do .env local chaves que existem no PC (gitignored) — nao sobrescreve EP_* de login
+$syncFromLocal = @(
+  'SUMARE_CAPTACAO_TOKEN', 'KOMMO_AGENT_PIPELINE_ID', 'KOMMO_AGENT_STATUS_ID',
+  'KOMMO_SALESBOT_FORMULARIO_SUM_ID', 'KOMMO_SALESBOT_MATRICULA_POS_FORM_ID', 'KOMMO_SALESBOT_DISTRIBUIR_ID'
+)
+foreach ($syncKey in $syncFromLocal) {
+  $localVal = [Environment]::GetEnvironmentVariable($syncKey)
+  if ($localVal) {
+    $envText = Set-EnvKey $envText $syncKey $localVal
+    $logVal = if ($syncKey -match 'TOKEN|KEY|PASSWORD|SECRET') { '***' } else { $localVal }
+    Write-Host "sync .env -> EP $syncKey=$logVal"
+  }
 }
 
 $updateBody = @{ json = @{ projectName = $Project; serviceName = $Service; env = $envText } } | ConvertTo-Json -Depth 5 -Compress
@@ -210,14 +241,7 @@ if (-not $SkipDeploy) {
 }
 
 $list2 = Invoke-RestMethod -Uri "$BaseUrl/api/trpc/projects.listProjectsAndServices" -Headers $headers -TimeoutSec 40
-$svc2 = $null
-foreach ($item in $list2.result.data.json) {
-  if (-not $item.services) { continue }
-  foreach ($s in $item.services) {
-    if ($s.name -eq $Service) { $svc2 = $s; break }
-  }
-  if ($svc2) { break }
-}
+$svc2 = Get-EasyPanelService -ListData $list2.result.data.json -ProjectName $Project -ServiceName $Service
 
 if ($svc2.commit.sha) {
   Write-Host "commit implantado: $($svc2.commit.sha.Substring(0, 12))"
