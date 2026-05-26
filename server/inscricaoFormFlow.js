@@ -29,6 +29,7 @@ import {
 import { fetchLeadFormSnapshot } from './inscricaoKommoFields.js'
 import { sendFormSumarTemplate } from './whatsappTemplateSender.js'
 import { runKommoSalesbot } from './kommoSalesbot.js'
+import { tryHandlePoloPreFormFlow } from './inscricaoPoloFlow.js'
 import { findLeadByPhone } from './kommoClient.js'
 import {
   updateDadosCliente,
@@ -465,6 +466,14 @@ export async function tryEnsureInscricaoFormSent(env, input) {
     leadId: leadIdHint,
   })
   if (handled?.handled) return handled
+
+  const poloHandled = await tryHandlePoloPreFormFlow(env, {
+    ...input,
+    userMessage,
+    historyMessages,
+    leadId: leadIdHint,
+  })
+  if (poloHandled?.handled) return poloHandled
 
   if (llmPromisedForm) {
     console.warn(

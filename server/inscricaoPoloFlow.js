@@ -17,10 +17,14 @@ import {
   buildPoloEscolhidoAckReply,
   buildPoloOutroLocalidadeReply,
   messageMentionsUnlistedPoloLocation,
+  assistantAskedPoloPreFormChoice,
 } from '../libShared/sumarePoloCatalog.js'
+import { lastAssistantText } from '../libShared/inscricaoFormHeuristics.js'
+import { filterHistoryMessagesForAgent } from '../libShared/historySanitize.js'
 import { fetchLeadFormSnapshot } from './inscricaoKommoFields.js'
 import {
   updateDadosCliente,
+  ensureDadosClienteRow,
   fetchDadosClienteByTelefone,
   getLeadIdByTelefone,
 } from './dadosClienteStore.js'
@@ -59,9 +63,15 @@ export async function tryHandlePoloPreFormFlow(env, input) {
   const { telefone, userMessage, executionId, model, leadId: leadIdHint, pushName, t0 } = input
   if (!telefone || !String(userMessage || '').trim()) return null
 
+  const historyMessages = filterHistoryMessagesForAgent(input.historyMessages || [])
+  const lastAssist = lastAssistantText(historyMessages)
+
   const row = await fetchDadosClienteByTelefone(env, telefone, DADOS_CLIENTE_INSCRICAO_SELECT)
   const status = row?.[FORM_STATUS_FIELD] ?? null
-  if (status !== INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM) return null
+  const inPoloChoiceStep =
+    status === INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM || assistantAskedPoloPreFormChoice(lastAssist)
+
+  if (!inPoloChoiceStep) return null
 
   const idLead = await resolveLeadId(env, telefone, leadIdHint)
   const polo = matchPoloFromUserMessage(userMessage)
@@ -84,6 +94,15 @@ export async function tryHandlePoloPreFormFlow(env, input) {
   }
 
   const unidade = resolvePoloUnidadeCode(polo.id, env)
+  await ensureDadosClienteRow(env, {
+    telefone,
+    idLead,
+    fields: {
+      polo_inscricao_escolhido: polo.nome,
+      captacao_unidade: unidade,
+      [FORM_STATUS_FIELD]: INSCRICAO_FORM_STATUS_AGUARDANDO,
+    },
+  }).catch(() => {})
   await updateDadosCliente(env, {
     telefone,
     fields: {

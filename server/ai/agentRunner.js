@@ -281,29 +281,6 @@ export async function runAgent(env, input) {
       }
     }
 
-    const poloPreFlow = await tryHandlePoloPreFormFlow(env, formFlowCtx)
-    if (poloPreFlow?.handled) {
-      console.log(
-        `[${executionId}] POLO_PRE_FORM polo=${poloPreFlow.result?.ctxSnapshot?.poloId ?? 'n/a'}`,
-      )
-      return {
-        ...poloPreFlow.result,
-        historyLoaded: 0,
-        aiMeta: ctx.toAiMeta(),
-      }
-    }
-
-    const poloFlow = await tryHandlePoloEscolhaFlow(env, formFlowCtx)
-    if (poloFlow?.handled) {
-      console.log(
-        `[${executionId}] POLO_ESCOLHA polo=${poloFlow.result?.ctxSnapshot?.poloId ?? 'n/a'} unidade=${poloFlow.result?.ctxSnapshot?.unidade ?? 'n/a'}`,
-      )
-      return {
-        ...poloFlow.result,
-        historyLoaded: 0,
-        aiMeta: ctx.toAiMeta(),
-      }
-    }
   }
 
   // Gate `ia_paused` é responsabilidade do caller (webhookEvolution faz o
@@ -376,6 +353,32 @@ export async function runAgent(env, input) {
   })
 
   formFlowCtx.historyMessages = historyMessages
+
+  if (telefone) {
+    const poloPreFlow = await tryHandlePoloPreFormFlow(env, formFlowCtx)
+    if (poloPreFlow?.handled) {
+      console.log(
+        `[${executionId}] POLO_PRE_FORM polo=${poloPreFlow.result?.ctxSnapshot?.poloId ?? 'n/a'} form_ok=${poloPreFlow.result?.toolCalls?.[0]?.ok ?? 'n/a'}`,
+      )
+      return {
+        ...poloPreFlow.result,
+        historyLoaded: historyMessages.length,
+        aiMeta: ctx.toAiMeta(),
+      }
+    }
+
+    const poloFlow = await tryHandlePoloEscolhaFlow(env, formFlowCtx)
+    if (poloFlow?.handled) {
+      console.log(
+        `[${executionId}] POLO_ESCOLHA polo=${poloFlow.result?.ctxSnapshot?.poloId ?? 'n/a'} unidade=${poloFlow.result?.ctxSnapshot?.unidade ?? 'n/a'}`,
+      )
+      return {
+        ...poloFlow.result,
+        historyLoaded: historyMessages.length,
+        aiMeta: ctx.toAiMeta(),
+      }
+    }
+  }
 
   // "sim" / "ok" após pergunta de inscrição → Form Sumar (antes de cair no orquestrador sem contexto).
   if (telefone && isShortEnrollmentConfirmation(userMessage)) {
@@ -937,6 +940,16 @@ export async function runAgent(env, input) {
         console.warn(
           `[${executionId}] LLM prometeu formulário sem entrega — substituindo resposta por fluxo servidor`,
         )
+        const retryPolo = await tryHandlePoloPreFormFlow(env, formFlowCtx)
+        if (retryPolo?.handled) {
+          return {
+            ...retryPolo.result,
+            toolCalls: [...(retryPolo.result.toolCalls || []), ...toolTrace],
+            orchestratorSteps,
+            historyLoaded: historyMessages.length,
+            aiMeta: ctx.toAiMeta(),
+          }
+        }
         const retryForm = await tryHandleInscricaoFormStart(env, formFlowCtx)
         if (retryForm?.handled) {
           return {

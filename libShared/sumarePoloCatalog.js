@@ -134,6 +134,19 @@ export function formatPoloListaNumerada() {
   return SUMARE_POLOS_EAD.map((p, i) => `${i + 1}. *${p.nome}* — ${p.endereco}`).join('\n')
 }
 
+/** Assistente acabou de pedir escolha de polo (lista 1–5) antes do Form Sumar. */
+export function assistantAskedPoloPreFormChoice(text) {
+  const a = String(text || '')
+    .replace(/\s-\s+EX-\d{6}-\d{4}-\d{3}(-[a-f0-9]+)?\s*$/i, '')
+    .toLowerCase()
+  if (!a) return false
+  if (/\b(em qual|qual)\b[\s\S]{0,50}\bpolo\b/i.test(a)) return true
+  if (/\bsomente\b[\s\S]{0,40}\bestes polos\b/i.test(a)) return true
+  if (/\bresponda com o\b[\s\S]{0,30}\b(n[uú]mero|nome do polo)\b/i.test(a)) return true
+  if (/1\.\s*\*?s[aã]o miguel/i.test(a) && /tatuap[eé]/i.test(a)) return true
+  return false
+}
+
 /** Antes do formulário: pergunta polo e limita às 5 unidades cadastradas. */
 export function buildPoloEscolhaPreFormMessage(opts = {}) {
   const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
