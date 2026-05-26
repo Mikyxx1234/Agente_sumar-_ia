@@ -1,10 +1,12 @@
 # Deploy EasyPanel — Agente Sumaré (staging ou produção)
 #
-# Uso:
-#   $env:EP_EMAIL = '...'
-#   $env:EP_PASSWORD = '...'
-#   .\scripts\easypanel-deploy-agente-sumare.ps1 -Target staging
+# Uso (credenciais no .env da raiz — gitignored, não sobe pro GitHub):
+#   EP_EMAIL=...
+#   EP_PASSWORD=...
 #   .\scripts\easypanel-deploy-agente-sumare.ps1 -Target prod
+#   .\scripts\easypanel-deploy-agente-sumare.ps1 -Target staging
+#
+# Alternativa: $env:EP_EMAIL / $env:EP_PASSWORD na sessão atual.
 #
 # Pré-requisito staging: criar no EasyPanel o serviço `agente_sumare_staging`
 # (clone do agente_sumare, mesmo repositório Git, rede interna igual).
@@ -22,8 +24,38 @@ param(
   [switch]$SkipDeploy
 )
 
+function Import-ProjectDotEnv {
+  param([string]$RootDir)
+  $envPath = Join-Path $RootDir '.env'
+  if (-not (Test-Path $envPath)) { return }
+  Get-Content $envPath -Encoding UTF8 | ForEach-Object {
+    $line = $_.Trim()
+    if (-not $line -or $line.StartsWith('#')) { return }
+    $eq = $line.IndexOf('=')
+    if ($eq -lt 1) { return }
+    $key = $line.Substring(0, $eq).Trim()
+    $val = $line.Substring($eq + 1).Trim()
+    if (($val.StartsWith('"') -and $val.EndsWith('"')) -or ($val.StartsWith("'") -and $val.EndsWith("'"))) {
+      $val = $val.Substring(1, $val.Length - 2)
+    }
+    if (-not [Environment]::GetEnvironmentVariable($key)) {
+      Set-Item -Path "Env:$key" -Value $val
+    }
+  }
+}
+
+$scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$projectRoot = Split-Path -Parent $scriptRoot
+Import-ProjectDotEnv -RootDir $projectRoot
+
+if (-not $Email) { $Email = $env:EP_EMAIL }
+if (-not $Password) { $Password = $env:EP_PASSWORD }
+if ($env:EP_BASE_URL -and $BaseUrl -eq 'http://168.231.99.126:3000') {
+  $BaseUrl = $env:EP_BASE_URL
+}
+
 if (-not $Email -or -not $Password) {
-  Write-Error 'Defina EP_EMAIL e EP_PASSWORD (ou passe -Email / -Password).'
+  Write-Error 'Defina EP_EMAIL e EP_PASSWORD no .env (raiz do projeto, gitignored) ou passe -Email / -Password.'
   exit 1
 }
 
