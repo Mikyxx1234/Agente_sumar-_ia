@@ -4,7 +4,7 @@
  */
 
 import { rewriteSearchQuery } from './queryRewrite'
-import { classifyKnowledgeQuery, planKnowledgeRpcs } from '../../queryClassifier.mjs'
+import { classifyKnowledgeQuery, planKnowledgeRpcs } from '../../libShared/queryClassifier.js'
 import { enrichRowContentForRag } from '../../libShared/knowledgeRowFormat.js'
 
 const BASE = '/api/supabase'

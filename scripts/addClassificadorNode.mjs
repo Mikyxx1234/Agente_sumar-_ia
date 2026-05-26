@@ -75,6 +75,6 @@ function patchApagar(path) {
   console.log(`[ok] classificador adicionado em ${path}`)
 }
 
-for (const rel of ['public/APAGAR.txt', 'APAGAR.txt']) {
+for (const rel of ['public/APAGAR.txt']) {
   patchApagar(join(root, rel))
 }

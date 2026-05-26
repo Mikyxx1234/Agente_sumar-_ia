@@ -6,7 +6,7 @@
 
 import { resolveModel } from './modelRegistry.js'
 import { rewriteSearchQuery } from './queryRewrite.js'
-import { classifyKnowledgeQuery, planKnowledgeRpcs } from '../../queryClassifier.mjs'
+import { classifyKnowledgeQuery, planKnowledgeRpcs } from '../../libShared/queryClassifier.js'
 import { enrichRowContentForRag } from '../../libShared/knowledgeRowFormat.js'
 
 const INSTITUTION = 'Faculdade Sumaré'
