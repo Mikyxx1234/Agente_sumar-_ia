@@ -172,6 +172,68 @@ export async function marcarClienteIA(env, { telefone, idLead }) {
  * Busca o id_lead gravado em dados_cliente para um telefone.
  * Retorna um número, string ou null. Nunca lança — em qualquer erro devolve null.
  */
+/**
+ * Garante linha em dados_cliente_sum (PATCH só atualiza linhas existentes).
+ */
+export async function ensureDadosClienteRow(env, { telefone, idLead, fields = {} }) {
+  const { url, key, table } = getConfig(env)
+  if (!url || !key) {
+    return { ok: false, code: 'SUPABASE_NOT_CONFIGURED' }
+  }
+  const fone = normalizeTelefone(telefone)
+  if (!fone) return { ok: false, code: 'MISSING_TELEFONE' }
+
+  const existing = await fetchDadosClienteByTelefone(env, telefone, 'id')
+  if (existing) {
+    if (fields && Object.keys(fields).length > 0) {
+      return updateDadosCliente(env, { telefone, fields })
+    }
+    return { ok: true, created: false, matched: true }
+  }
+
+  const jid = telefoneToWhatsAppJid(fone)
+  const row = {
+    telefone: jid || fone,
+    teste_AB: 'IA',
+    ...fields,
+  }
+  if (idLead != null && idLead !== '') {
+    const n = Number(idLead)
+    row.id_lead = Number.isFinite(n) ? n : idLead
+  }
+
+  try {
+    const res = await fetch(`${url}/rest/v1/${encodeURIComponent(table)}`, {
+      method: 'POST',
+      headers: {
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=representation',
+      },
+      body: JSON.stringify(row),
+    })
+    const text = await res.text()
+    let data = null
+    try {
+      data = text ? JSON.parse(text) : null
+    } catch {
+      data = text
+    }
+    if (!res.ok) {
+      return {
+        ok: false,
+        code: 'SUPABASE_INSERT_FAILED',
+        status: res.status,
+        error: typeof data === 'string' ? data.slice(0, 400) : JSON.stringify(data)?.slice(0, 400),
+      }
+    }
+    return { ok: true, created: true, rows: Array.isArray(data) ? data : [data] }
+  } catch (err) {
+    return { ok: false, code: 'SUPABASE_INSERT_ERROR', error: err.message }
+  }
+}
+
 export async function getLeadIdByTelefone(env, telefone) {
   try {
     const { url, key, table } = getConfig(env)

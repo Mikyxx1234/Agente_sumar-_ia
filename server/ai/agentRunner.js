@@ -40,7 +40,10 @@ import {
   tryHandleInscricaoFormStart,
   tryEnsureInscricaoFormSent,
   tryHandleMatriculaAceitePagamentoFlow,
+  leadExplicitlyRequestsInscricaoForm,
+  llmReplyImpliesPendingFormSend,
 } from '../inscricaoFormFlow.js'
+import { filterHistoryMessagesForAgent } from '../../libShared/historySanitize.js'
 import { detectFormSumarRecebidoNoKommo } from '../inscricaoPostFormPipeline.js'
 import { tryHandlePoloPreFormFlow, tryHandlePoloEscolhaFlow } from '../inscricaoPoloFlow.js'
 import {
@@ -96,14 +99,7 @@ function resolveHistoryLimit(env) {
  * Retorna { messages, source } pra dar visibilidade no debug.
  */
 function sanitizeHistoryMessages(messages) {
-  return (messages || []).filter((m) => {
-    const c = String(m?.content || '').trim()
-    if (!c || c.length < 2) return false
-    if (m.role === 'system') return false
-    if (/^\[(scheduler|system|legenda|áudio|audio|imagem|mensagem)\]/i.test(c)) return false
-    if (/\[scheduler\]/i.test(c)) return false
-    return true
-  })
+  return filterHistoryMessagesForAgent(messages)
 }
 
 async function loadRecentHistoryMessages(env, telefone) {
@@ -452,15 +448,26 @@ export async function runAgent(env, input) {
   if (telefone) {
     // Pós-form só quando a mensagem indica formulário respondido — evita pular
     // direto para "cadastro validado" em "sim"/"oi" com notas antigas no Kommo.
+    const wantsNewForm = leadExplicitlyRequestsInscricaoForm(userMessage, historyMessages)
     let matriculaJaProcessada = false
     let inscRow = null
     try {
-      if (leadId != null && (await leadHasPostFormRegistradoNote(env, leadId))) {
+      if (
+        !wantsNewForm &&
+        leadId != null &&
+        (await leadHasPostFormRegistradoNote(env, leadId))
+      ) {
         matriculaJaProcessada = true
       }
       if (!matriculaJaProcessada) {
         inscRow = await fetchDadosClienteByTelefone(env, telefone, DADOS_CLIENTE_INSCRICAO_SELECT)
         matriculaJaProcessada = matriculaPosFormAlreadyProcessed(inscRow)
+      }
+      if (wantsNewForm && matriculaJaProcessada) {
+        console.log(
+          `[${executionId}] INSCRICAO_NOVO_FORM pedido explícito — ignorando guarda pós-form antiga no Kommo`,
+        )
+        matriculaJaProcessada = false
       }
     } catch {
       /* segue sem bloquear */
@@ -475,7 +482,7 @@ export async function runAgent(env, input) {
       messageLooksLikeFormSumarResponse(userMessage) || messageIsFlowResponsesReceived(userMessage)
 
     let kommoFlowDetected = false
-    if (!matriculaJaProcessada && leadId && (waitingForForm || flowTextInbound)) {
+    if (!matriculaJaProcessada && !wantsNewForm && leadId && (waitingForForm || flowTextInbound)) {
       try {
         const det = await detectFormSumarRecebidoNoKommo(env, leadId)
         kommoFlowDetected = Boolean(det.detected)
@@ -903,7 +910,7 @@ export async function runAgent(env, input) {
         continue
       }
 
-      const reply = msg.content || 'Sem resposta.'
+      let reply = msg.content || 'Sem resposta.'
       const formAfter = await tryEnsureInscricaoFormSent(env, {
         ...formFlowCtx,
         llmReply: reply,
@@ -918,6 +925,21 @@ export async function runAgent(env, input) {
           orchestratorSteps,
           historyLoaded: historyMessages.length,
           aiMeta: ctx.toAiMeta(),
+        }
+      }
+      if (llmReplyImpliesPendingFormSend(reply)) {
+        console.warn(
+          `[${executionId}] LLM prometeu formulário sem entrega — substituindo resposta por fluxo servidor`,
+        )
+        const retryForm = await tryHandleInscricaoFormStart(env, formFlowCtx)
+        if (retryForm?.handled) {
+          return {
+            ...retryForm.result,
+            toolCalls: [...(retryForm.result.toolCalls || []), ...toolTrace],
+            orchestratorSteps,
+            historyLoaded: historyMessages.length,
+            aiMeta: ctx.toAiMeta(),
+          }
         }
       }
       return {

@@ -18,6 +18,7 @@ import {
   buildInscricaoFormSentReply,
   lastAssistantText,
   assistantInEnrollmentStep,
+  isShortEnrollmentConfirmation,
 } from '../libShared/inscricaoFormHeuristics.js'
 import { messageLooksLikeOperationalChat } from '../libShared/scopeHeuristics.js'
 import { messageAsksCoursePrice, sanitizeLeadInboundMessage } from '../libShared/inboundMessageSanitize.js'
@@ -31,11 +32,16 @@ import { runKommoSalesbot } from './kommoSalesbot.js'
 import { findLeadByPhone } from './kommoClient.js'
 import {
   updateDadosCliente,
+  ensureDadosClienteRow,
   getLeadIdByTelefone,
   normalizeTelefone,
   fetchDadosClienteByTelefone,
   dadosClienteTelefoneOrFilter,
 } from './dadosClienteStore.js'
+import {
+  filterHistoryMessagesForAgent,
+  isAssistantFormSendPromiseOnly,
+} from '../libShared/historySanitize.js'
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
 
@@ -57,11 +63,29 @@ function getSupabaseCfg(env) {
   }
 }
 
-async function setFormStatus(env, telefone, status) {
+async function setFormStatus(env, telefone, status, leadIdHint) {
+  await ensureDadosClienteRow(env, {
+    telefone,
+    idLead: leadIdHint,
+    fields: { [FORM_STATUS_FIELD]: status },
+  }).catch(() => {})
   return updateDadosCliente(env, {
     telefone,
     fields: { [FORM_STATUS_FIELD]: status },
   })
+}
+
+/** Lead pediu (re)envio do Form Sumar — ignora guardas de pós-formulário antigo no Kommo. */
+export function leadExplicitlyRequestsInscricaoForm(userMessage, historyMessages) {
+  return (
+    messageAsksForFormResend(userMessage) ||
+    messageConfirmsProceedToInscricaoForm(userMessage, historyMessages)
+  )
+}
+
+/** Resposta do LLM que promete envio sem confirmar entrega (deve disparar salesbot no servidor). */
+export function llmReplyImpliesPendingFormSend(llmReply) {
+  return isAssistantFormSendPromiseOnly(String(llmReply || ''))
 }
 
 /**
@@ -75,11 +99,12 @@ async function releaseInscricaoFormStartClaim(env, telefone) {
   })
 }
 
-async function claimInscricaoFormStartExclusive(env, telefone) {
+async function claimInscricaoFormStartExclusive(env, telefone, leadIdHint) {
   const { url, key, table } = getSupabaseCfg(env)
   if (!url || !key) return { claimed: false, reason: 'no_supabase' }
   const telFilter = dadosClienteTelefoneOrFilter(telefone)
   if (!telFilter) return { claimed: false, reason: 'invalid_phone' }
+  await ensureDadosClienteRow(env, { telefone, idLead: leadIdHint }).catch(() => {})
   try {
     const res = await fetch(
       `${url}/rest/v1/${encodeURIComponent(table)}?${telFilter}&${FORM_STATUS_FIELD}=is.null`,
@@ -205,7 +230,8 @@ export async function deliverInscricaoForm(env, { telefone, leadId, executionId,
  * Lead pediu inscrição → ativa salesbot Formulario_Sum (formulário no WhatsApp).
  */
 export async function tryHandleInscricaoFormStart(env, input) {
-  const { telefone, userMessage: rawMsg, historyMessages, executionId, model, leadId: leadIdHint, pushName, t0 } = input
+  const { telefone, userMessage: rawMsg, executionId, model, leadId: leadIdHint, pushName, t0 } = input
+  const historyMessages = filterHistoryMessagesForAgent(input.historyMessages || [])
   const userMessage = sanitizeLeadInboundMessage(rawMsg)
   if (messageAsksCoursePrice(userMessage)) return null
   const wantsForm = messageConfirmsProceedToInscricaoForm(userMessage, historyMessages)
@@ -218,6 +244,23 @@ export async function tryHandleInscricaoFormStart(env, input) {
     return null
   }
   if (status === INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM) {
+    if (wantsForm || asksResend || isShortEnrollmentConfirmation(userMessage)) {
+      const reply = buildPoloEscolhaPreFormMessage({ pushName })
+      console.log(
+        `[inscricaoForm] lead=${leadIdHint ?? 'n/a'} reenvio_lista_polo status=${status} telefone=${telefone}`,
+      )
+      return {
+        handled: true,
+        result: buildAgentReturn({
+          executionId,
+          model,
+          t0,
+          reply,
+          steps: [{ type: 'polo_escolha_pre_form_reminder', ok: true }],
+          ctxSnapshot: { inscricaoForm: INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM },
+        }),
+      }
+    }
     return null
   }
   if (status === INSCRICAO_FORM_STATUS_AGUARDANDO && !asksResend && !wantsForm) {
@@ -250,7 +293,7 @@ export async function tryHandleInscricaoFormStart(env, input) {
   if (!asksResend && (wantsForm || messageAsksForFormResend(userMessage))) {
     const poloOk = await resolvePoloEscolhidoParaForm(env, telefone, idLead)
     if (!poloOk.ok) {
-      await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM)
+      await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM, idLead)
       const reply = buildPoloEscolhaPreFormMessage({ pushName })
       console.log(`[inscricaoForm] lead=${idLead ?? 'n/a'} aguardando_polo_pre_form telefone=${telefone}`)
       return {
@@ -268,7 +311,7 @@ export async function tryHandleInscricaoFormStart(env, input) {
   }
 
   if (!asksResend) {
-    const claim = await claimInscricaoFormStartExclusive(env, telefone)
+    const claim = await claimInscricaoFormStartExclusive(env, telefone, idLead)
     if (!claim.claimed) {
       const st = claim.status ?? (await getFormStatus(env, telefone))
       if (st === INSCRICAO_FORM_STATUS_AGUARDANDO) {
@@ -303,7 +346,7 @@ export async function tryHandleInscricaoFormStart(env, input) {
 
   let statusUpdate = { ok: false, skipped: true }
   if (sendOk && asksResend) {
-    statusUpdate = await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO)
+    statusUpdate = await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO, idLead)
   } else if (sendOk) {
     statusUpdate = { ok: true, skipped: false, matched: true }
   }
@@ -386,7 +429,9 @@ export { tryHandleInscricaoFormComplete } from './inscricaoPostFormPipeline.js'
 export { tryHandleMatriculaAceitePagamentoFlow } from './inscricaoAceitePagamentoFlow.js'
 
 export async function tryEnsureInscricaoFormSent(env, input) {
-  const { telefone, userMessage, historyMessages, llmReply } = input
+  const { telefone, userMessage: rawMsg, llmReply, leadId: leadIdHint } = input
+  const historyMessages = filterHistoryMessagesForAgent(input.historyMessages || [])
+  const userMessage = sanitizeLeadInboundMessage(rawMsg)
   if (!telefone) return null
   if (messageIsCourseCatalogRequest(userMessage)) return null
 
@@ -394,32 +439,49 @@ export async function tryEnsureInscricaoFormSent(env, input) {
   const lastAssist = lastAssistantText(historyMessages)
   const llmPromisedForm =
     llmReply &&
-    /\bformul[aá]rio\b/i.test(llmReply) &&
-    /\b(enviad|enviar|mandar|enviando|whatsapp|instantes|ativar|preencher)\b/i.test(llmReply) &&
+    (llmReplyImpliesPendingFormSend(llmReply) ||
+      (/\bformul[aá]rio\b/i.test(llmReply) &&
+        /\b(enviad|enviar|mandar|enviando|whatsapp|instantes|ativar|preencher)\b/i.test(llmReply) &&
+        !/\b(acabei de enviar|já enviei|já ativei)\b/i.test(llmReply))) &&
     (userConfirmed || assistantInEnrollmentStep(lastAssist))
   const should = userConfirmed || messageAsksForFormResend(userMessage) || llmPromisedForm
   if (!should) return null
 
   const status = await getFormStatus(env, telefone)
-  if (status === INSCRICAO_FORM_STATUS_CONCLUIDO) return null
+  if (status === INSCRICAO_FORM_STATUS_CONCLUIDO && !messageAsksForFormResend(userMessage)) return null
   if (
     status === INSCRICAO_FORM_STATUS_AGUARDANDO &&
     !messageAsksForFormResend(userMessage) &&
-    !userConfirmed
+    !userConfirmed &&
+    !llmPromisedForm
   ) {
     return null
   }
 
-  return tryHandleInscricaoFormStart(env, input)
+  const handled = await tryHandleInscricaoFormStart(env, {
+    ...input,
+    userMessage,
+    historyMessages,
+    leadId: leadIdHint,
+  })
+  if (handled?.handled) return handled
+
+  if (llmPromisedForm) {
+    console.warn(
+      `[inscricaoForm] LLM prometeu formulário mas tryHandleInscricaoFormStart retornou null telefone=${telefone} status=${status || 'n/a'}`,
+    )
+  }
+  return null
 }
 
 /** Tool/API: início do fluxo (salesbot Formulario_Sum por padrão). */
 export async function runInscricaoFormStart(env, body) {
   const telefone = body?.telefone
   if (!telefone) return { ok: false, code: 'MISSING_TELEFONE' }
+  const idLead = await resolveLeadId(env, telefone, body?.id_lead ?? body?.idLead)
   const forceResend = Boolean(body?.force || body?.resend)
   if (!forceResend) {
-    const claim = await claimInscricaoFormStartExclusive(env, telefone)
+    const claim = await claimInscricaoFormStartExclusive(env, telefone, idLead)
     if (!claim.claimed) {
       const st = claim.status ?? (await getFormStatus(env, telefone))
       if (st === INSCRICAO_FORM_STATUS_AGUARDANDO || st === INSCRICAO_FORM_STATUS_CONCLUIDO) {
@@ -433,12 +495,11 @@ export async function runInscricaoFormStart(env, body) {
       }
     }
   }
-  const idLead = await resolveLeadId(env, telefone, body?.id_lead ?? body?.idLead)
   const delivery = await deliverInscricaoForm(env, { telefone, leadId: idLead, forceResend })
   const sendOk = Boolean(delivery.result?.ok)
   const statusUpdate =
     sendOk && forceResend
-      ? await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO)
+      ? await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO, idLead)
       : sendOk
         ? { ok: true, skipped: false }
         : { ok: false, skipped: true }

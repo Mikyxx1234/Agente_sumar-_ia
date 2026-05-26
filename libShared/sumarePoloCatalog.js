@@ -163,6 +163,8 @@ export function messageMentionsUnlistedPoloLocation(text) {
   const t = normalizePoloText(text)
   if (!t || t.length < 4) return false
   if (matchPoloFromUserMessage(text)) return false
+  // Polo do card Kommo (ex.: Santo Amaro) fora dos 5 EAD deste WhatsApp
+  if (/\bsanto\s+amaro\b/.test(t)) return true
   if (/\b(outr[oa]s?\s+(cidade|polo|unidade|campus|local|regi[aã]o)|outro\s+polo|outra\s+cidade)\b/i.test(t)) {
     return true
   }
