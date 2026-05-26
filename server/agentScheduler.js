@@ -60,6 +60,10 @@ import { getMessages, getLastTouchedAt, listSessionsWithPendingMessages } from '
 import { clearBufferIfStaleRepush } from './sessionFlushDedupe.js'
 import { flushSession } from './evolution/webhookEvolution.js'
 import { tryAdvanceInscricaoPostFormScheduler } from './inscricaoPostFormPipeline.js'
+import {
+  messageLooksLikeFormFollowUp,
+  messageLooksLikeFormSumarResponse,
+} from '../libShared/inscricaoFormHeuristics.js'
 import { tryInactivityReengagement } from './inactivityReengagement.js'
 import { sendMessageWithNote } from './whatsappSender.js'
 import { saveConversation } from './historyStore.js'
@@ -443,6 +447,19 @@ export async function runSchedulerTick(env) {
           }
         }
         return
+      }
+      if (skipFlushAfterPostForm && messages?.length) {
+        const pendingText = messages.map((m) => String(m?.content || m?.text || '')).join('\n').trim()
+        const looksLikeNormalChat =
+          pendingText.length > 0 &&
+          !messageLooksLikeFormSumarResponse(pendingText) &&
+          !messageLooksLikeFormFollowUp(pendingText, { strictAwaitingForm: true })
+        if (looksLikeNormalChat) {
+          console.log(
+            `[scheduler] lead=${lead.id} buffer com chat pendente ("${pendingText.slice(0, 60)}…") — flush mesmo com pós-form ativo`,
+          )
+          skipFlushAfterPostForm = false
+        }
       }
       if (skipFlushAfterPostForm) {
         console.log(`[scheduler] lead=${lead.id} flush omitido neste tick (pós-form tratado)`)

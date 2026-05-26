@@ -306,7 +306,9 @@ export async function detectFormSumarRecebidoNoKommo(env, leadId, options = {}) 
     const snapRes = await fetchLeadFormSnapshot(env, id)
     if (snapRes.ok && snapRes.snapshot) {
       const val = validateFormSnapshot(env, snapRes.snapshot)
-      if (val.valid) {
+      // No tick do scheduler: snapshot preenchido não significa "formulário
+      // acabou de chegar" — senão bloqueia flush de mensagens novas (ex.: "olá").
+      if (val.valid && !options.schedulerTick) {
         return {
           detected: true,
           source: 'kommo_snapshot',
