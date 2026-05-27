@@ -23,7 +23,24 @@
  * o fluxo direto sem passar pelo scheduler.
  */
 
-import { pushMessage, drainMessages, clearMessages, getMessageBufferRedis, getMessages } from './messageBuffer.js'
+import {
+  pushMessage,
+  drainMessages,
+  clearMessages,
+  getMessageBufferRedis,
+  getMessages,
+} from './messageBuffer.js'
+
+/** Reenfileira turnos drenados quando IA ou WhatsApp falhou — evita mensagem "sumida". */
+async function repushDrainedMessages(env, sessionId, items) {
+  if (!items?.length) return
+  for (const text of items) {
+    const clean = String(text || '').trim()
+    if (!clean) continue
+    await pushMessage(env, sessionId, clean, { skipDedupe: true })
+  }
+  console.log(`[Evolution][flush] reenfileiradas ${items.length} msg(s) session=${sessionId}`)
+}
 import { tryClaimAgentFlush, tryReserveFlushSync, releaseFlushSync } from '../flushClaim.js'
 import { shouldSkipReplyCooldown, markReplyCooldown, getReplyCooldownRemainingMs } from '../replyCooldown.js'
 import { transcribeAudioBase64, analyzeImageBase64 } from './openaiMedia.js'
@@ -756,12 +773,26 @@ async function flushSessionInner(env, sessionId, opts = {}) {
     }
     if (sendRace) {
       console.warn(
-        `[${executionId}] WhatsApp race (${sendResult?.reason || 'outbound_inflight_sync'}) — mensagens permanecem no buffer para o próximo tick`,
+        `[${executionId}] WhatsApp race (${sendResult?.reason || 'outbound_inflight_sync'}) — reenfileirando ${itens.length} turno(s)`,
       )
-    } else if (out?.reply && !sentOk && !out?.iaPaused && !out.inscricaoFormHandled && !out.distribuirHumanoHandled) {
-      console.warn(
-        `[${executionId}] envio não confirmado após drain — mensagens não reenfileiradas (${itens.length} turno(s))`,
-      )
+      await repushDrainedMessages(env, sessionId, itens)
+    } else if (
+      itens.length > 0 &&
+      !out?.iaPaused &&
+      !out.inscricaoFormHandled &&
+      !out.distribuirHumanoHandled
+    ) {
+      if (!out?.ok) {
+        console.warn(
+          `[${executionId}] agente falhou — reenfileirando ${itens.length} turno(s): ${executionError || out?.error || 'n/a'}`,
+        )
+        await repushDrainedMessages(env, sessionId, itens)
+      } else if (out?.reply && !sentOk) {
+        console.warn(
+          `[${executionId}] envio não confirmado após drain — reenfileirando ${itens.length} turno(s)`,
+        )
+        await repushDrainedMessages(env, sessionId, itens)
+      }
     }
 
     return out

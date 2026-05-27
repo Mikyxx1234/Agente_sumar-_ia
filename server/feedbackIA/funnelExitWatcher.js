@@ -24,6 +24,8 @@
 import { evaluateConversation } from './ruleEvaluator.js'
 
 let previousFunnelIds = new Set()
+/** Primeiro tick após boot: só hidrata snapshot — evita "reentrada" em massa e wipe de memória. */
+let funnelSnapshotWarmedUp = false
 const pendingQueue = new Set()
 let draining = false
 
@@ -51,14 +53,23 @@ function getCap(env) {
 export function notifyFunnelSnapshot(env, currentLeadIds) {
   const current = new Set(currentLeadIds.map(Number).filter((n) => Number.isFinite(n)))
   const entered = []
-  for (const id of current) {
-    if (!previousFunnelIds.has(id)) entered.push(id)
+  if (funnelSnapshotWarmedUp) {
+    for (const id of current) {
+      if (!previousFunnelIds.has(id)) entered.push(id)
+    }
+  } else {
+    console.log(
+      `[scheduler] funnel snapshot warmup (${current.size} lead(s) na fila — sem reentrada neste tick)`,
+    )
   }
   const exited = []
-  for (const id of previousFunnelIds) {
-    if (!current.has(id)) exited.push(id)
+  if (funnelSnapshotWarmedUp) {
+    for (const id of previousFunnelIds) {
+      if (!current.has(id)) exited.push(id)
+    }
   }
   previousFunnelIds = current
+  funnelSnapshotWarmedUp = true
 
   if (entered.length > 0) {
     console.log(
