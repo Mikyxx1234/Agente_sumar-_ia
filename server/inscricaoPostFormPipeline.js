@@ -40,6 +40,7 @@ import { isSumareCaptacaoEnabled } from './sumareCaptacaoClient.js'
 import {
   leadHasPostFormRegistradoNote,
   leadHasPostFormRegistradoNoteSinceLastFormSend,
+  leadHasCaptacaoContratoNote,
 } from './postFormSendGuard.js'
 import { getAgentQueueSessionCutoffIso } from './agentQueueSession.js'
 import {
@@ -625,6 +626,13 @@ export async function tryProcessInscricaoPostFormPipeline(env, input) {
     return null
   }
 
+  if (idLead != null && schedulerTick && (await leadHasCaptacaoContratoNote(env, idLead))) {
+    console.log(
+      `[inscricaoPostForm] lead=${idLead} skip pipeline scheduler (captação/contrato já registrado no Kommo)`,
+    )
+    return null
+  }
+
   const waitingForForm = [
     INSCRICAO_FORM_STATUS_AGUARDANDO,
     INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
@@ -649,6 +657,7 @@ export async function tryProcessInscricaoPostFormPipeline(env, input) {
         : recebidoAt || sessionCutoff || null
     const det = await detectFormSumarRecebidoNoKommo(env, idLead, {
       minNoteAfterIso,
+      schedulerTick: Boolean(schedulerTick),
     })
     kommoFormDone = Boolean(det.detected)
     detectSource = det.source || det.reason || ''

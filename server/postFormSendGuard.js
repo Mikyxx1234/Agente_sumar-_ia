@@ -76,6 +76,23 @@ export async function leadHasPostFormRegistradoNote(env, leadId) {
  * Nota pós-form só conta se for DEPOIS do último Formulario_Sum ativado neste lead.
  * Evita bloquear nova captação por mensagens de testes anteriores.
  */
+/** Já rodou captação Sumaré (nota com candidato + link contrato) neste lead. */
+export async function leadHasCaptacaoContratoNote(env, leadId) {
+  const id = Number(leadId)
+  if (!Number.isFinite(id) || id <= 0) return false
+  try {
+    const notesRes = await listLeadNotes(env, id, { limit: 40, order: 'desc' })
+    if (!notesRes.ok || !Array.isArray(notesRes.notes)) return false
+    for (const n of notesRes.notes) {
+      const t = noteText(n)
+      if (/Inscrição Sumaré \(candidato \d+/i.test(t) && /contrato/i.test(t)) return true
+    }
+  } catch (err) {
+    console.warn(`[postFormSendGuard] leadHasCaptacaoContratoNote lead=${id}:`, err.message)
+  }
+  return false
+}
+
 export async function leadHasPostFormRegistradoNoteSinceLastFormSend(env, leadId) {
   const id = Number(leadId)
   if (!Number.isFinite(id) || id <= 0) return false
