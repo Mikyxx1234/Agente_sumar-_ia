@@ -186,25 +186,51 @@ function isAmbiguousShortReply(text) {
   return AMBIGUOUS_SHORT_REPLIES.has(t)
 }
 
+const OPENAI_RETRY_STATUSES = new Set([429, 500, 502, 503])
+
+function sleepMs(ms) {
+  return new Promise((r) => setTimeout(r, ms))
+}
+
 async function callOpenAI(env, apiMessages, model, tools) {
   const apiKey = env.OPENAI_API_KEY || env.VITE_OPENAI_API_KEY
   if (!apiKey) throw new Error('OPENAI_API_KEY não configurada')
-  const res = await fetch(CHAT_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model,
-      messages: apiMessages,
-      tools,
-      temperature: 0.7,
-      max_tokens: 2048,
-    }),
-  })
-  if (!res.ok) {
+  const maxAttempts = Math.min(4, Math.max(1, Number(env.OPENAI_CHAT_RETRY_ATTEMPTS) || 3))
+  let lastErr = null
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const res = await fetch(CHAT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        messages: apiMessages,
+        tools,
+        temperature: 0.7,
+        max_tokens: 2048,
+      }),
+    })
+    if (res.ok) return res.json()
     const body = await res.text().catch(() => '')
-    throw new Error(`OpenAI ${res.status}: ${body.slice(0, 200)}`)
+    lastErr = new Error(`OpenAI ${res.status}: ${body.slice(0, 200)}`)
+    if (!OPENAI_RETRY_STATUSES.has(res.status) || attempt >= maxAttempts) throw lastErr
+    const backoff = attempt * 1200
+    console.warn(
+      `[callOpenAI] tentativa ${attempt}/${maxAttempts} falhou HTTP ${res.status} — retry em ${backoff}ms`,
+    )
+    await sleepMs(backoff)
   }
-  return res.json()
+  throw lastErr || new Error('OpenAI falhou após retries')
+}
+
+function buildOpenAiTransientFallbackReply() {
+  return (
+    'Desculpe, tive uma instabilidade momentânea ao processar sua mensagem. ' +
+    'Em alguns segundos pode enviar de novo que continuo o atendimento, tudo bem?'
+  )
+}
+
+function isOpenAiTransientError(err) {
+  return /OpenAI (429|500|502|503)\b/.test(String(err?.message || err || ''))
 }
 
 async function executeToolCalls(executors, toolCalls, trace, ctx) {
@@ -1169,6 +1195,24 @@ export async function runAgent(env, input) {
       aiMeta: ctx.toAiMeta(),
     }
   } catch (err) {
+    if (isOpenAiTransientError(err)) {
+      console.warn(`[${executionId}] OpenAI instável — resposta fallback ao lead: ${err.message}`)
+      orchestratorSteps.push({ type: 'openai_transient_fallback', error: String(err.message).slice(0, 300) })
+      return {
+        ok: true,
+        reply: buildOpenAiTransientFallbackReply(),
+        toolCalls: toolTrace,
+        orchestratorSteps,
+        ctxSnapshot: { ...ctxSnapshot, openaiTransientFallback: true },
+        usage,
+        durationMs: Date.now() - t0,
+        historyLoaded: historyMessages.length,
+        executionId,
+        model,
+        aiMeta: ctx.toAiMeta(),
+        openaiError: err.message,
+      }
+    }
     return {
       ok: false,
       error: err.message,
