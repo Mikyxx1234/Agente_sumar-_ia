@@ -6,6 +6,43 @@ complexas devem ser registradas aqui após aprovação do usuário.
 
 ---
 
+### 2026-05-27 — Pós-link contrato: IA pausa e status API valida reenvio
+
+**Decisão.** Depois que `runMatriculaCaptacaoAfterForm` registra o candidato
+na API Sumaré e envia o link `SUMARE_CONTRATO_PORTAL_URL?id={candidato}`,
+a IA generativa **entra em pausa** (`atendimento_ia=pause`). O candidato lê
+o contrato, aceita e paga no portal. Só fluxos canônicos respondem após o
+link: reenvio do link (se pedido) e recebimento de comprovante de pagamento
+— `tryHandleMatriculaAceitePagamentoFlow` roda ANTES do gate `ia_paused` no
+`agentRunner`, então segue ativo.
+
+**Contexto.** Bug duplo:
+1. Em `executeCaptacaoAfterFormResolved`, `contratoWhatsappSent` era
+   declarado `false` e nunca atualizado — o `agentScheduler` lia o flag,
+   detectava reply com `sumare.edu.br` + `contrato`, e reenviava o link
+   pelo WhatsApp (duplicação garantida).
+2. A IA seguia ativa em `aguardando_aceite_contrato`, podendo gerar
+   respostas variadas sobre o contrato em vez de aguardar leitura/aceite
+   do candidato.
+
+**Implementação.**
+- `inscricaoPostFormPipeline.js`: `contratoWhatsappSent = true` quando o
+  link foi enviado com sucesso (ou pulado por dedupe). `pauseAtendimentoIa`
+  agora cobre também o estado `aguardando_aceite_contrato`.
+- `matriculaCaptacaoPipeline.js`: nova função `fetchCandidatoStatus` usa
+  `GET /api-status-candidato/candidato/status?candidato={id}` — segunda
+  barreira anti-duplicação. Se status é `matriculado` / `aceite` /
+  `contrato` / `pagamento`, dedupe entra mesmo sem janela de 6h.
+- `inscricaoAceitePagamentoFlow.js`: pedido de reenvio do link consulta a
+  API antes; já matriculado → resposta canônica "consultor entrará em
+  contato", sem reenviar link.
+
+**Impacto.** O agente faz exatamente um envio do link e silencia até o
+candidato mandar comprovante de pagamento. Falha de rede na API de status
+é silenciosa (não bloqueia reenvio).
+
+---
+
 ### 2026-05-27 — Trinco fixo do funil Kommo (só pipeline 13756724 + status 106140284)
 
 **Decisão.** O atendimento automático via WhatsApp/scheduler só roda se o lead

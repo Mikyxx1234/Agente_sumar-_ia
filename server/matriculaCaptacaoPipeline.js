@@ -13,10 +13,40 @@ import { fetchLeadFormSnapshot } from './inscricaoKommoFields.js'
 import { updateDadosCliente, normalizeTelefone } from './dadosClienteStore.js'
 import { sendMessageWithNote } from './whatsappSender.js'
 import { createLeadNote } from './kommoClient.js'
-import { isSumareCaptacaoEnabled, runCaptacaoContratoWorkflow } from './sumareCaptacaoClient.js'
+import {
+  isSumareCaptacaoEnabled,
+  runCaptacaoContratoWorkflow,
+  consultarStatusCandidato,
+} from './sumareCaptacaoClient.js'
 
 const DEDUPE_MS = 6 * 60 * 60 * 1000
 const _linkSentMemory = new Map()
+
+/**
+ * Status do candidato na API Sumaré.
+ * Se já "matriculado" / "aceite contrato" / "pagamento", não reenvia link.
+ * Falha silenciosa (API fora) não bloqueia o fluxo.
+ *
+ * @returns {Promise<{ status: string|null, alreadyEnrolled: boolean }>}
+ */
+export async function fetchCandidatoStatus(env, candidatoId) {
+  if (!candidatoId) return { status: null, alreadyEnrolled: false }
+  try {
+    const r = await consultarStatusCandidato(env, candidatoId)
+    if (!r.ok) return { status: null, alreadyEnrolled: false }
+    const raw = r.data?.status ?? r.data?.candidato?.status ?? null
+    const status = raw ? String(raw).toLowerCase().trim() : null
+    const alreadyEnrolled =
+      !!status &&
+      (status.includes('matricul') ||
+        status.includes('aceite') ||
+        status.includes('contrato') ||
+        status.includes('pagamento'))
+    return { status, alreadyEnrolled }
+  } catch {
+    return { status: null, alreadyEnrolled: false }
+  }
+}
 
 function shouldRunSalesbot49813(env) {
   return ['true', '1', 'yes'].includes(
@@ -50,6 +80,18 @@ async function getCaptacaoDedupe(env, telefone) {
       const ts = Date.parse(row.captacao_contrato_link_at)
       if (!Number.isNaN(ts) && Date.now() - ts < DEDUPE_MS) {
         return { skip: true, reason: 'supabase_dedupe', candidatoId: row.captacao_candidato_id }
+      }
+    }
+    // Mesmo fora da janela de 6h, se o candidato já tem ID Sumaré e está
+    // matriculado/em aceite, NÃO regerar — apenas reportar como já tratado.
+    if (row?.captacao_candidato_id) {
+      const apiStatus = await fetchCandidatoStatus(env, row.captacao_candidato_id)
+      if (apiStatus.alreadyEnrolled) {
+        return {
+          skip: true,
+          reason: `api_status_${apiStatus.status || 'matriculado'}`,
+          candidatoId: row.captacao_candidato_id,
+        }
       }
     }
   } catch {

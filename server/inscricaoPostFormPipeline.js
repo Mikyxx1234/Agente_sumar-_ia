@@ -394,7 +394,10 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
       matriculaOk = true
       ctxForm = INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE
       reply = cap.reply || reply
-      if (cap.whatsappOk) skipSchedulerWhatsapp = true
+      if (cap.whatsappOk) {
+        skipSchedulerWhatsapp = true
+        contratoWhatsappSent = true
+      }
       matriculaClaimMem.delete(matriculaClaimMemKey(telefone))
       toolCalls.push({
         tool: 'sumare_captacao_contrato',
@@ -402,6 +405,10 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
         result: `Link contrato enviado: ${cap.contractUrl}`,
         ok: Boolean(cap.whatsappOk),
       })
+    } else if (cap.skipped) {
+      ctxForm = INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE
+      contratoWhatsappSent = true
+      skipSchedulerWhatsapp = true
     } else if (!cap.skipped && !cap.ok) {
       const missing = Array.isArray(cap.missing) ? cap.missing.join(', ') : ''
       console.error(
@@ -454,19 +461,19 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
   }
 
   if (ctxForm === INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE) {
-    steps.push({
-      type: 'ia_paused',
-      ok: false,
-      skipped: true,
-      reason: 'aguardando_aceite_contrato_ia_ativa',
-    })
+    // Após enviar o link, IA generativa fica em pausa. tryHandleMatriculaAceitePagamentoFlow
+    // roda ANTES do gate ia_paused (agentRunner), garantindo:
+    //   - reenvio canônico do link se o lead pedir
+    //   - recebimento e validação do comprovante de pagamento
+    // Qualquer outra mensagem é ignorada — candidato lê o contrato, aceita e paga
+    // pelo portal Sumaré; só volta IA quando consultor liberar.
+    const pauseRes = await pauseAtendimentoIa(env, telefone)
+    steps.unshift({ type: 'ia_paused', ok: pauseRes.ok, reason: 'aguardando_aceite_contrato' })
   } else {
     const pauseRes = await pauseAtendimentoIa(env, telefone)
     steps.unshift({ type: 'ia_paused', ok: pauseRes.ok })
-    if (ctxForm !== INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE) {
-      await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_CONCLUIDO).catch(() => {})
-      ctxForm = INSCRICAO_FORM_STATUS_CONCLUIDO
-    }
+    await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_CONCLUIDO).catch(() => {})
+    ctxForm = INSCRICAO_FORM_STATUS_CONCLUIDO
   }
 
   return {

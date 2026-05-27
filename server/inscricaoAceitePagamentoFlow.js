@@ -20,6 +20,7 @@ import {
 } from './dadosClienteStore.js'
 import { runDistribuirHumano, formatDistribuirHumanoReply } from './distribuirHumanoTool.js'
 import { createLeadNote } from './kommoClient.js'
+import { fetchCandidatoStatus } from './matriculaCaptacaoPipeline.js'
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
 
@@ -128,6 +129,24 @@ export async function tryHandleMatriculaAceitePagamentoFlow(env, input) {
   }
 
   if (messageAsksContratoLinkResend(userMessage)) {
+    if (candidatoId) {
+      const apiStatus = await fetchCandidatoStatus(env, candidatoId)
+      if (apiStatus.alreadyEnrolled) {
+        return {
+          handled: true,
+          result: buildAgentReturn({
+            executionId,
+            model,
+            t0,
+            reply:
+              `Seu cadastro já consta como ${apiStatus.status || 'matriculado'} no sistema da Faculdade Sumaré. ` +
+              `Em breve um consultor entra em contato por aqui para finalizar a matrícula.`,
+            steps: [{ type: 'contrato_link_skip_already_enrolled', api_status: apiStatus.status }],
+            ctxSnapshot: { inscricaoForm: status, apiStatus: apiStatus.status || null },
+          }),
+        }
+      }
+    }
     const reply = buildContratoLinkResendReply({ pushName, contractUrl })
     return {
       handled: true,
