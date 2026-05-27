@@ -4,6 +4,8 @@
  * `server/ai/toolExecutorsServer.js` (legado `match_documents_*`).
  */
 
+import { extractCourseNameFromGradContent, formatPerfilBlockForRag, getCursoPerfil } from './cursoPerfilSumare.js'
+
 export function extractGradeLink(metadata) {
   if (!metadata || typeof metadata !== 'object') return null
   const raw =
@@ -155,6 +157,9 @@ export function enrichRowContentForRag(source, d) {
 
   if (source === 'grad_info' || source === 'pos_info') {
     const partes = [base]
+    const courseLabel = extractCourseNameFromGradContent(base) || base
+    const perfilBlock = formatPerfilBlockForRag(getCursoPerfil(courseLabel))
+    if (perfilBlock) partes.push(perfilBlock)
     const gradeUrl = extractGradeLink(d?.metadata)
     const gradeStatus = gradeUrl
       ? `STATUS DA GRADE: DISPONIVEL — link oficial: ${gradeUrl}`

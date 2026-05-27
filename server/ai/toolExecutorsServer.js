@@ -19,6 +19,7 @@ import { rewriteSearchQuery } from './queryRewrite.js'
 import { createNoopExecutionContext } from './executionContext.js'
 import { enrichRowContentForRag } from '../../libShared/knowledgeRowFormat.js'
 import { searchKnowledgeBase } from './knowledgeSearch.js'
+import { userAsksCourseMoreDetails } from '../../libShared/courseMoreInfo.js'
 import {
   runEnviarFormSumarInscricao,
   runRegistrarPoloInscricao,
@@ -229,13 +230,26 @@ function absorbToolMeta(ctx, raw) {
  */
 export function buildToolExecutors(env, ctx, flowCtx = {}) {
   const safeCtx = ctx || createNoopExecutionContext()
+  const wantsMoreFromFlow =
+    flowCtx.wantsCourseMoreDetails === true ||
+    userAsksCourseMoreDetails(flowCtx.userMessage || '')
+  const knowledgeOpts = (toolName, extra = {}) => ({
+    toolName,
+    wantsCourseMoreDetails: wantsMoreFromFlow,
+    ...extra,
+  })
   return {
     buscar_conhecimento: async ({ query }) =>
-      searchKnowledgeBase(env, safeCtx, query, { toolName: 'buscar_conhecimento' }),
+      searchKnowledgeBase(env, safeCtx, query, knowledgeOpts('buscar_conhecimento')),
     buscar_precos: async ({ query }) =>
-      searchKnowledgeBase(env, safeCtx, query, { toolName: 'buscar_precos', intentHint: 'preco' }),
+      searchKnowledgeBase(env, safeCtx, query, knowledgeOpts('buscar_precos', { intentHint: 'preco' })),
     buscar_informacoes: async ({ query }) =>
-      searchKnowledgeBase(env, safeCtx, query, { toolName: 'buscar_informacoes', levelHint: 'grad', intentHint: 'info' }),
+      searchKnowledgeBase(
+        env,
+        safeCtx,
+        query,
+        knowledgeOpts('buscar_informacoes', { levelHint: 'grad', intentHint: 'info' }),
+      ),
     buscar_pos: async ({ query }) =>
       searchKnowledgeBase(env, safeCtx, query, { toolName: 'buscar_pos', levelHint: 'pos', intentHint: 'info' }),
     buscar_perguntas: async ({ query }) => {

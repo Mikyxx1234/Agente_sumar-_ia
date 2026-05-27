@@ -8,6 +8,7 @@ import { resolveModel } from './modelRegistry.js'
 import { rewriteSearchQuery } from './queryRewrite.js'
 import { classifyKnowledgeQuery, planKnowledgeRpcs } from '../../libShared/queryClassifier.js'
 import { enrichRowContentForRag } from '../../libShared/knowledgeRowFormat.js'
+import { COURSE_MORE_INFO_REPLY_RULES, userAsksCourseMoreDetails } from '../../libShared/courseMoreInfo.js'
 
 const INSTITUTION = 'Faculdade Sumaré'
 
@@ -130,10 +131,12 @@ export async function searchKnowledgeBase(env, ctx, question, opts = {}) {
   const q0 = String(question || '').trim()
   const legacyInQuestion = legacyBrandHitInText(q0)
 
+  const wantsCourseMoreDetails =
+    opts.wantsCourseMoreDetails === true || userAsksCourseMoreDetails(q0)
   const classified = classifyKnowledgeQuery(q0)
   const plan = planKnowledgeRpcs(classified, {
     levelHint: opts.levelHint ?? null,
-    intentHint: opts.intentHint ?? null,
+    intentHint: wantsCourseMoreDetails && !opts.intentHint ? 'mista' : opts.intentHint ?? null,
   })
 
   console.log(`[knowledgeSearch] pergunta="${q0.slice(0, 200)}${q0.length > 200 ? '…' : ''}"`)
@@ -215,7 +218,10 @@ export async function searchKnowledgeBase(env, ctx, question, opts = {}) {
   }
 
   const block = buildContextBlock(top)
-  return [block, SUMARÉ_REPLY_RULES].join('\n')
+  const rules = wantsCourseMoreDetails
+    ? [SUMARÉ_REPLY_RULES, COURSE_MORE_INFO_REPLY_RULES].join('\n')
+    : SUMARÉ_REPLY_RULES
+  return [block, rules].join('\n')
 }
 
 /**

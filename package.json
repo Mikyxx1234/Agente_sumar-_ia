@@ -19,7 +19,8 @@
     "test:outbound-dedupe-race": "node scripts/test-outbound-dedupe-race.mjs",
     "test:funnel-gate": "node scripts/test-kommo-agent-funnel-gate.mjs",
     "update:precos-rag": "node --env-file=.env scripts/update-precos-sumare-rag.mjs",
-    "audit:precos": "node --env-file=.env scripts/audit-precos-sumare.mjs"
+    "audit:precos": "node --env-file=.env scripts/audit-precos-sumare.mjs",
+    "build:curso-perfil-grad": "node --env-file=.env scripts/build-curso-perfil-grad.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.103.3",

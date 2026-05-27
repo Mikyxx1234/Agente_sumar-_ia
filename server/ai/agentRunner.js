@@ -75,6 +75,7 @@ import {
   messageAsksCoursePrice,
   sanitizeLeadInboundMessage,
 } from '../../libShared/inboundMessageSanitize.js'
+import { userAsksCourseMoreDetails } from '../../libShared/courseMoreInfo.js'
 import { isAtendimentoIaPaused } from '../dadosClienteStore.js'
 import { validateReplyAgainstActions } from '../replyGuard.js'
 
@@ -886,6 +887,24 @@ export async function runAgent(env, input) {
       }
     : null
 
+  const discussedForMore =
+    extractDiscussedCourseFromHistory(historyMessages) ||
+    extractCursoAreaFromText(userMessage) ||
+    ''
+  const courseMoreDetailsHint =
+    userAsksCourseMoreDetails(userMessage) && !messageAsksCoursePrice(userMessage)
+      ? {
+          role: 'system',
+          content:
+            'PEDIDO DE MAIS INFORMAÇÕES SOBRE O CURSO: o lead quer detalhes além de repetir duração/preço. ' +
+            `OBRIGATÓRIO neste turno: chame buscar_conhecimento com query explícita incluindo o curso (ex.: "${discussedForMore || 'nome do curso em pauta'} graduação EAD perfil mercado funções") ` +
+            'e buscar_precos se ainda não informou valores nesta conversa. ' +
+            'Na resposta ao lead, entregue resumo com: área de interesse, áreas de trabalho, funções/atuações, modalidade, duração e mensalidade — usando SOMENTE o CONTEXT (bloco PERFIL DO CURSO quando existir). ' +
+            'Não repita a mesma frase da mensagem anterior; aprofunde com os campos do PERFIL. ' +
+            'PROIBIDO encerrar só perguntando sobre matrícula sem o resumo.',
+        }
+      : null
+
   const frustrationHint =
     frustrationAlreadySaid && !messageAsksCoursePrice(userMessage)
       ? {
@@ -918,6 +937,7 @@ export async function runAgent(env, input) {
     ...(courseInterestHint ? [courseInterestHint] : []),
     ...(activeFlowHint ? [activeFlowHint] : []),
     ...(priceQueryHint ? [priceQueryHint] : []),
+    ...(courseMoreDetailsHint ? [courseMoreDetailsHint] : []),
     ...(enrollmentConfirmHint ? [enrollmentConfirmHint] : []),
     ...(frustrationHint ? [frustrationHint] : []),
     ...(noContextWarning ? [noContextWarning] : []),
@@ -935,6 +955,8 @@ export async function runAgent(env, input) {
     executionId,
     model,
     t0,
+    userMessage,
+    wantsCourseMoreDetails: userAsksCourseMoreDetails(userMessage),
   })
   const toolTrace = []
   const usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
