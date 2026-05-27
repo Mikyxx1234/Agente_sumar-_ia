@@ -7,7 +7,7 @@
 
 import { loadPrompts, buildSystemMessage } from './promptsLoader.js'
 import { classifyMessageScope } from './scopeClassifier.js'
-import { getToolDefinitions } from './toolDefinitions.js'
+import { getToolDefinitions, isInscricaoActionTool } from './toolDefinitions.js'
 import { buildToolExecutors } from './toolExecutorsServer.js'
 import { runBuscarHistorico } from '../memoryTool.js'
 import { readChatMessages } from '../historyStore.js'
@@ -76,6 +76,7 @@ import {
   sanitizeLeadInboundMessage,
 } from '../../libShared/inboundMessageSanitize.js'
 import { isAtendimentoIaPaused } from '../dadosClienteStore.js'
+import { validateReplyAgainstActions } from '../replyGuard.js'
 
 const MAX_TOOL_ROUNDS = 5
 const CHAT_URL = 'https://api.openai.com/v1/chat/completions'
@@ -208,6 +209,11 @@ async function callOpenAI(env, apiMessages, model, tools) {
 
 async function executeToolCalls(executors, toolCalls, trace, ctx) {
   const results = []
+  /**
+   * Tools de ação de inscrição retornam `{ ok, code, text, replyOverride, ctxSnapshot, steps }`.
+   * Coletamos aqui para o orquestrador encerrar o loop e usar `replyOverride` como reply final.
+   */
+  const actionResults = []
   for (const tc of toolCalls) {
     const fn = tc.function
     const step = { tool: fn.name, args: {}, result: null, error: null, durationMs: 0 }
@@ -223,9 +229,25 @@ async function executeToolCalls(executors, toolCalls, trace, ctx) {
       const args = JSON.parse(fn.arguments || '{}')
       step.args = args
       const result = await executor(args)
-      step.result = result || 'Nenhum resultado encontrado na base.'
       step.durationMs = Date.now() - t0
-      results.push({ tool_call_id: tc.id, role: 'tool', content: String(step.result) })
+      const isActionTool = isInscricaoActionTool(fn.name)
+      const isStructured = result && typeof result === 'object' && !Array.isArray(result)
+      if (isActionTool && isStructured) {
+        step.result = result.text || result.code || 'ok'
+        step.actionOk = Boolean(result.ok)
+        step.actionCode = result.code || null
+        step.replyOverride = result.replyOverride || null
+        step.ctxSnapshot = result.ctxSnapshot || null
+        actionResults.push({ tool: fn.name, result })
+        results.push({
+          tool_call_id: tc.id,
+          role: 'tool',
+          content: String(result.text || result.code || 'ok'),
+        })
+      } else {
+        step.result = result || 'Nenhum resultado encontrado na base.'
+        results.push({ tool_call_id: tc.id, role: 'tool', content: String(step.result) })
+      }
     } catch (e) {
       step.error = e.message
       step.durationMs = Date.now() - t0
@@ -240,7 +262,7 @@ async function executeToolCalls(executors, toolCalls, trace, ctx) {
     }
     trace.push(step)
   }
-  return results
+  return { results, actionResults }
 }
 
 /**
@@ -688,6 +710,48 @@ export async function runAgent(env, input) {
   if (telefone) contextLines.push(`- Telefone do lead: ${telefone}`)
   if (leadId) contextLines.push(`- id_lead (Kommo): ${leadId}`)
   if (input?.pushName) contextLines.push(`- Nome (pushName): ${input.pushName}`)
+
+  // Estado da máquina de inscrição: lido do Supabase e injetado no preâmbulo
+  // para o LLM saber EXATAMENTE qual tool de ação chamar (se alguma).
+  // Mantemos também em `formFlowCtx.stageBefore` para telemetria de transição.
+  let inscricaoStageInfo = null
+  if (telefone) {
+    try {
+      const stageRow = inscRow ||
+        (await fetchDadosClienteByTelefone(
+          env,
+          telefone,
+          DADOS_CLIENTE_INSCRICAO_SELECT,
+        ))
+      const stage = String(stageRow?.inscricao_form_status || '').trim() || null
+      const poloNome = String(stageRow?.polo_inscricao_escolhido || '').trim() || null
+      const captacaoCandidatoId = stageRow?.captacao_candidato_id ?? null
+      inscricaoStageInfo = { stage, poloNome, captacaoCandidatoId }
+      formFlowCtx.stageBefore = stage
+      if (stage) {
+        let descr = stage
+        if (stage === 'aguardando_escolha_polo_pre_form') {
+          descr += ' (lead confirmou matrícula — chame registrar_polo_inscricao com o polo que ele responder)'
+        } else if (stage === 'aguardando_form_sumar') {
+          descr += ' (Form Sumar já enviado — quando o lead disser "pronto" / "preenchi", chame confirmar_recebimento_formulario)'
+        } else if (stage === 'aguardando_distribuicao_form') {
+          descr += ' (Form recebido, distribuindo)'
+        } else if (stage === 'aguardando_aceite_contrato') {
+          descr += ' (lead já tem link do contrato — NÃO reenvie formulário)'
+        } else if (stage === 'form_sumar_concluido') {
+          descr += ' (inscrição finalizada — NÃO disparar formulário/polo novamente)'
+        }
+        contextLines.push(`- Estado da inscrição: ${descr}`)
+      } else {
+        contextLines.push('- Estado da inscrição: nenhum (lead ainda não confirmou matrícula)')
+      }
+      if (poloNome) contextLines.push(`- Polo escolhido: ${poloNome}`)
+      if (captacaoCandidatoId) contextLines.push(`- Captação Sumaré: candidato ${captacaoCandidatoId}`)
+    } catch {
+      /* sem stage não bloqueia o turno */
+    }
+  }
+
   const contextPreamble = contextLines.length > 0 ? `Contexto do atendimento:\n${contextLines.join('\n')}` : ''
 
   // BACKSTOP CRÍTICO — sem histórico + msg ambígua ("Sim", "Ok", "?")
@@ -762,11 +826,28 @@ export async function runAgent(env, input) {
           content:
             'CONFIRMAÇÃO DE MATRÍCULA: o lead respondeu de forma afirmativa após você perguntar sobre inscrição/matrícula no curso em pauta. ' +
             `Curso em discussão: ${extractDiscussedCourseFromHistory(historyMessages) || 'ver sum_Curso/histórico'}. ` +
-            'OBRIGATÓRIO neste turno: seguir inscrição — primeiro perguntar em qual dos 5 polos EAD o lead quer se cadastrar (São Miguel, Barra Funda, Tatuapé, Santana, Pinheiros); só após confirmação do polo enviar o Formulário Sumar. ' +
-            'Se pedir outra cidade/polo fora da lista, informe que por este WhatsApp só há esses 5 polos. ' +
-            'PROIBIDO enviar formulário antes do polo. PROIBIDO aceitar contrato pelo lead — só enviar o link para o candidato aceitar no portal.',
+            'OBRIGATÓRIO neste turno: chame a tool enviar_form_sumar_inscricao com o curso confirmado. ' +
+            'Se o polo ainda não foi escolhido, o servidor automaticamente pedirá polo ao lead — você não precisa narrar isso, apenas chame a tool. ' +
+            'Quando o lead responder polo (1-5 ou nome), chame registrar_polo_inscricao com o polo_id correspondente. ' +
+            'Polos válidos: São Miguel (sao_miguel), Barra Funda (barra_funda), Tatuapé (tatuape), Santana (santana), Pinheiros (pinheiros). ' +
+            'Se pedir outro polo fora da lista, NÃO chame tool — apenas informe que por este WhatsApp só há esses 5 polos.',
         }
       : null
+
+  // Hint sempre injetado: ensina o LLM a usar as 3 tools de ação ao invés
+  // de "narrar" o envio do formulário/polo/inscrição. O reply guard
+  // bloqueia qualquer texto que afirme essas ações sem a tool correspondente.
+  const inscricaoToolsHint = telefone
+    ? {
+        role: 'system',
+        content:
+          'TOOLS DE INSCRIÇÃO — você NUNCA pode dizer que "enviou", "vai enviar", "registrou polo" ou "fez a inscrição" sem ter chamado a tool correspondente neste turno. Tools disponíveis:\n' +
+          '- enviar_form_sumar_inscricao(telefone, curso[, polo_id]): chame quando o lead confirma matrícula em um curso específico. Se o polo ainda não foi escolhido, o servidor pede polo automaticamente.\n' +
+          '- registrar_polo_inscricao(telefone, polo_id): chame quando o lead responde polo (1-5 ou nome). polo_id ∈ {sao_miguel, barra_funda, tatuape, santana, pinheiros}.\n' +
+          '- confirmar_recebimento_formulario(telefone): chame quando o lead diz "pronto", "preenchi", "feito", "ok" após o estado aguardando_form_sumar.\n' +
+          'Se nenhuma tool se aplica, apenas conduza a conversa (explique cursos, peça polo, peça confirmação) — SEM narrar ações que não aconteceram.',
+      }
+    : null
 
   const priceQueryHint = messageAsksCoursePrice(userMessage)
     ? {
@@ -806,6 +887,7 @@ export async function runAgent(env, input) {
   const apiMessages = [
     { role: 'system', content: systemMessage },
     ...(contextPreamble ? [{ role: 'system', content: contextPreamble }] : []),
+    ...(inscricaoToolsHint ? [inscricaoToolsHint] : []),
     ...(commercialHint ? [commercialHint] : []),
     ...(courseInterestHint ? [courseInterestHint] : []),
     ...(activeFlowHint ? [activeFlowHint] : []),
@@ -820,7 +902,14 @@ export async function runAgent(env, input) {
     `[${executionId}] MONTOU_PROMPT promptsLoaded=${prompts.length} systemChars=${systemMessage.length} historyMsgs=${historyMessages.length} ambiguousNoContext=${ambiguousNoContext} enrollmentContinuation=${enrollmentContinuation} model=${model}`,
   )
 
-  const executors = buildToolExecutors(env, ctx)
+  const executors = buildToolExecutors(env, ctx, {
+    telefone,
+    leadId,
+    pushName: input?.pushName,
+    executionId,
+    model,
+    t0,
+  })
   const toolTrace = []
   const usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
 
@@ -913,8 +1002,63 @@ export async function runAgent(env, input) {
 
       if (wantsTools) {
         apiMessages.push(msg)
-        const toolResults = await executeToolCalls(executors, msg.tool_calls, toolTrace, ctx)
+        const { results: toolResults, actionResults } = await executeToolCalls(
+          executors,
+          msg.tool_calls,
+          toolTrace,
+          ctx,
+        )
         apiMessages.push(...toolResults)
+
+        // Tool de ação de inscrição retornou texto fixo? → encerra o loop e
+        // usa o `replyOverride` como reply final. O LLM NÃO é chamado de
+        // novo, e qualquer `msg.content` é descartado: o que vai pro lead
+        // é o texto do servidor — a única fonte da verdade do estado.
+        const actionOverride = actionResults.find(
+          (a) => a.result && typeof a.result.replyOverride === 'string' && a.result.replyOverride.trim().length > 0,
+        )
+        if (actionOverride) {
+          const ar = actionOverride.result
+          const stageBefore = formFlowCtx.stageBefore || null
+          const stageAfter = ar.ctxSnapshot?.inscricaoForm || null
+          console.log(
+            `[${executionId}] TOOL_ACTION_REPLY_OVERRIDE tool=${actionOverride.tool} code=${ar.code} ok=${ar.ok} stage=${stageBefore || '?'}→${stageAfter || '?'}`,
+          )
+          orchestratorSteps.push({
+            type: 'tool_action_reply_override',
+            tool: actionOverride.tool,
+            code: ar.code,
+            ok: Boolean(ar.ok),
+            stage_before: stageBefore,
+            stage_after: stageAfter,
+            durationMs: Date.now() - roundT0,
+          })
+          for (const s of ar.steps || []) orchestratorSteps.push(s)
+          return {
+            ok: ar.ok !== false,
+            reply: ar.replyOverride,
+            toolCalls: toolTrace,
+            orchestratorSteps,
+            ctxSnapshot: {
+              ...ctxSnapshot,
+              ...(ar.ctxSnapshot || {}),
+              replySource: 'tool_action_override',
+              actionTool: actionOverride.tool,
+              actionCode: ar.code,
+              acao_inscricao_tomada: actionOverride.tool,
+              stage_before: stageBefore,
+              stage_after: stageAfter,
+            },
+            usage,
+            durationMs: Date.now() - t0,
+            historyLoaded: historyMessages.length,
+            executionId,
+            model,
+            aiMeta: ctx.toAiMeta(),
+            inscricaoActionHandled: true,
+          }
+        }
+
         round++
         continue
       }
@@ -961,18 +1105,55 @@ export async function runAgent(env, input) {
           }
         }
       }
+
+      // Guard de saída — bloqueia reply que mente sobre ação não executada.
+      // Roda em TODOS os turnos que produziram texto (até quando uma tool de
+      // busca foi chamada): só compara fato (tool de ação chamada?) vs narrativa.
+      let guardViolation = null
+      const guardVerdict = validateReplyAgainstActions({
+        reply,
+        toolCalls: toolTrace,
+        stage: formFlowCtx.stageBefore || null,
+      })
+      if (guardVerdict.violation) {
+        console.warn(
+          `[${executionId}] REPLY_GUARD violacao=${guardVerdict.code} stage=${formFlowCtx.stageBefore || 'n/a'} originalLen=${(reply || '').length}`,
+        )
+        guardViolation = {
+          code: guardVerdict.code,
+          stage: formFlowCtx.stageBefore || null,
+          originalReply: guardVerdict.original,
+        }
+        orchestratorSteps.push({
+          type: 'reply_guard',
+          violation: true,
+          code: guardVerdict.code,
+          stage_before: formFlowCtx.stageBefore || null,
+          originalReplyPreview: String(guardVerdict.original || '').slice(0, 200),
+          replacementApplied: true,
+        })
+        reply = guardVerdict.safeReply
+      }
+
       return {
         ok: true,
         reply,
         toolCalls: toolTrace,
         orchestratorSteps,
-        ctxSnapshot,
+        ctxSnapshot: {
+          ...ctxSnapshot,
+          stage_before: formFlowCtx.stageBefore || null,
+          acao_inscricao_tomada: null,
+          guard_violation: guardViolation?.code || null,
+          replySource: guardViolation ? 'reply_guard_override' : 'llm',
+        },
         usage,
         durationMs: Date.now() - t0,
         historyLoaded: historyMessages.length,
         executionId,
         model,
         aiMeta: ctx.toAiMeta(),
+        guardViolation,
       }
     }
     return {

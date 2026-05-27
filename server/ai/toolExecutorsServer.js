@@ -19,6 +19,11 @@ import { rewriteSearchQuery } from './queryRewrite.js'
 import { createNoopExecutionContext } from './executionContext.js'
 import { enrichRowContentForRag } from '../../libShared/knowledgeRowFormat.js'
 import { searchKnowledgeBase } from './knowledgeSearch.js'
+import {
+  runEnviarFormSumarInscricao,
+  runRegistrarPoloInscricao,
+  runConfirmarRecebimentoFormulario,
+} from '../inscricaoActionTools.js'
 
 async function getEmbedding(env, text, ctx, toolName) {
   const apiKey = env.OPENAI_API_KEY || env.VITE_OPENAI_API_KEY
@@ -217,8 +222,12 @@ function absorbToolMeta(ctx, raw) {
  * @param {ReturnType<typeof import('./executionContext.js').createExecutionContext>} [ctx]
  *   Opcional. Quando passado, sub-usages (query rewrite, embeddings,
  *   resumos de tools) são acumulados pra dashboard. Sem ctx, vira no-op.
+ * @param {object} [flowCtx]
+ *   Contexto da execução atual repassado às tools de ação de inscrição
+ *   (telefone, leadId, pushName, executionId, model, t0). Permite ao
+ *   executor reusar dados que o orquestrador já resolveu, sem refazer lookups.
  */
-export function buildToolExecutors(env, ctx) {
+export function buildToolExecutors(env, ctx, flowCtx = {}) {
   const safeCtx = ctx || createNoopExecutionContext()
   return {
     buscar_conhecimento: async ({ query }) =>
@@ -294,5 +303,11 @@ export function buildToolExecutors(env, ctx) {
         body,
       ].join('\n')
     },
+    enviar_form_sumar_inscricao: async (args) =>
+      runEnviarFormSumarInscricao(env, args, flowCtx),
+    registrar_polo_inscricao: async (args) =>
+      runRegistrarPoloInscricao(env, args, flowCtx),
+    confirmar_recebimento_formulario: async (args) =>
+      runConfirmarRecebimentoFormulario(env, args, flowCtx),
   }
 }

@@ -258,6 +258,25 @@ export async function sendMessageWithNote(env, { telefone, text, leadId, executi
 
     const dedupe = await shouldSkipDuplicateOutbound(env, telefone, text)
     if (dedupe.skip) {
+      // Race do lock in-memory (tryReserveOutboundSync falhou) NÃO é
+      // dedupe: a mensagem precisa ir. Retornamos ok:false para o caller
+      // (webhookEvolution.js) tratar como erro e não marcar cooldown nem
+      // gravar o hash do buffer — o próximo tick do scheduler reprocessa.
+      if (dedupe.race) {
+        console.warn(
+          `[WhatsApp] outbound race to=${String(telefone || '').slice(0, 20)} reason=${dedupe.reason}`,
+        )
+        return {
+          ok: false,
+          race: true,
+          code: 'OUTBOUND_INFLIGHT_RACE',
+          reason: dedupe.reason,
+          error: `Envio bloqueado por race (${dedupe.reason})`,
+          total: parts.length,
+          sent: 0,
+          steps: [{ step: 'dedupe', race: true, reason: dedupe.reason }],
+        }
+      }
       console.log(
         `[WhatsApp] outbound dedupe skip to=${String(telefone || '').slice(0, 20)} reason=${dedupe.reason}`,
       )

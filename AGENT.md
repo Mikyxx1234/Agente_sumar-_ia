@@ -6,6 +6,134 @@ complexas devem ser registradas aqui após aprovação do usuário.
 
 ---
 
+### 2026-05-27 — Gate outbound: separar race condition de dedupe legítimo
+
+**Decisão.** O retorno de `shouldSkipDuplicateOutbound` (`server/outboundDedupe.js`)
+passa a distinguir dois cenários que antes eram colapsados em
+`{ skip: true, deduped: true, sent: 0 }`:
+
+1. **Race condition** (`outbound_inflight_sync`): outro envio para o mesmo
+   telefone está em curso no mesmo processo. Sinalizado com
+   `{ skip: true, race: true, reason: 'outbound_inflight_sync' }` e
+   propagado por `sendMessageWithNote` como
+   `{ ok: false, race: true, sent: 0, code: 'OUTBOUND_INFLIGHT_RACE' }`.
+2. **Dedupe legítimo** (identical/prefix/similar match em
+   `chat_messages`): mensagem idêntica já foi enviada recentemente.
+   Mantém `{ ok: true, deduped: true, sent: 0 }`.
+
+Em `webhookEvolution.js` o cálculo de `sentOk` passa a excluir o race
+(`sendResult.race === true` nunca conta como envio bem-sucedido) e o
+`recordBufferFlushHash` só grava o hash quando **`sent > 0`** — nunca
+mais quando o envio foi pulado.
+
+**Contexto.** Lead `#23841399` em 26/05 às 17:23 BRT:
+- Execução `EX-260526-2023-190-4e43` salvou `response` correto e `error: null`,
+  mas o step `whatsapp.sendMessageWithNote` registrou `{ ok: true, sent: 0,
+  total: 1 }` — envio nunca chegou ao cliente.
+- A causa foi `tryReserveOutboundSync` retornando `false` (lock in-memory
+  de 120s ocupado por outra chamada concorrente — provável race entre
+  webhook Evolution e `KOMMO_INBOUND_POLL_ENABLED=true`).
+- Como `sendResult.deduped === true`, o código tratava `sentOk = true`,
+  marcava `replyCooldown` e gravava `recordBufferFlushHash` (TTL 1h).
+- Quando o cliente repetiu "boa tarde" às 17:25, `shouldSkipStaleBufferFlush`
+  casou o hash e `clearBufferIfStaleRepush` esvaziou o buffer sem chamar a IA.
+- Resultado: 2 "boa tarde" engolidos, nenhum sinal de erro no painel.
+
+**Alternativas descartadas.**
+- *Re-empurrar mensagens no buffer em race.* Race é rara (<120s); confiar
+  no próximo tick do scheduler é mais simples. O cliente ou o
+  `KOMMO_INBOUND_POLL` repropagam a mensagem; o que importa é não gravar
+  o hash que bloqueia a próxima tentativa.
+- *Aumentar TTL do `inflightOutbound` ou usar Redis distribuído.* Não
+  resolve: o problema não é o lock acertar, é a falha do lock ser
+  silenciada como dedupe.
+- *Remover o lock in-memory.* Aumenta risco de envio duplicado real.
+
+**Impacto.**
+- `server/outboundDedupe.js`: `shouldSkipDuplicateOutbound` retorna
+  `race: true` quando `tryReserveOutboundSync` falha.
+- `server/whatsappSender.js`: `sendMessageWithNote` propaga
+  `{ ok: false, race: true, code: 'OUTBOUND_INFLIGHT_RACE' }` em vez
+  de mascarar como dedupe; dedupe legítimo segue retornando `ok: true`.
+- `server/evolution/webhookEvolution.js`: `sentOk` ignora `race`; só
+  grava `recordBufferFlushHash` quando `sent > 0`; race gera
+  `executionError` legível no painel (`WhatsApp race: ... — mensagem
+  permanecerá no buffer para o próximo tick`).
+- Cobertura: `scripts/test-outbound-dedupe-race.mjs` (npm
+  `test:outbound-dedupe-race`) valida os 3 branches (race, dedupe
+  legítimo, sucesso).
+
+---
+
+### 2026-05-26 — Ações de inscrição só via tool, nunca por texto
+
+**Decisão.** Toda ação de inscrição (envio do formulário Form Sumar,
+registro de polo, confirmação de recebimento do formulário e disparo da
+API Captação Sumaré) **só pode acontecer por chamada explícita de tool**
+pelo LLM. O servidor responde com **texto canônico** (`replyOverride`),
+descartando qualquer `msg.content` do LLM nesse turno. Um `replyGuard`
+roda em todos os turnos: bloqueia respostas que afirmam essas ações sem
+a tool correspondente e substitui pelo texto seguro do estado atual.
+
+**Contexto.** Regressões `EX-1654`, `EX-1657`, `EX-1659`, `EX-1737`,
+`EX-1739`, `EX-1813` compartilhavam o mesmo padrão: o LLM "narrava" uma
+ação (ex.: "acabei de enviar o formulário"), mas o servidor não havia
+disparado o salesbot Kommo nem gravado o estado em Supabase. Heurísticas
+de texto (`messageConfirmsProceedToInscricaoForm`,
+`assistantInEnrollmentStep`, `assistantAskedPoloPreFormChoice` etc.)
+tentavam adivinhar a intenção e quebravam a cada fraseado novo. A
+correção definitiva é desacoplar narração de execução: o LLM **pede**
+via tool, o servidor **executa e responde**.
+
+**Alternativas descartadas.**
+- *Mais heurísticas de texto.* Caminho que originou as 6 regressões;
+  cada novo fraseado do LLM ou do lead exige outro detector.
+- *Apenas guard de saída.* Bloquearia narrativas erradas mas não
+  enviaria o formulário — lead receberia mensagem fria do servidor sem
+  ação real.
+- *Tool única `inscricao(...)` agregada.* Esconde o estado e gera
+  ambiguidade sobre quando chamar — preferimos 3 tools com nome
+  imperativo e propósito único.
+
+**Impacto.**
+- Novas tools no LLM: `enviar_form_sumar_inscricao`,
+  `registrar_polo_inscricao`, `confirmar_recebimento_formulario`
+  (`server/ai/toolDefinitions.js` + `server/inscricaoActionTools.js`).
+- `server/ai/agentRunner.js`:
+  - encerra o loop de rounds quando uma tool de ação retorna
+    `{ ok, replyOverride }` e usa esse texto como reply final;
+  - injeta o estado de inscrição (`inscricao_form_status`) no
+    `contextPreamble` para o LLM saber qual tool chamar;
+  - injeta o hint `TOOLS DE INSCRIÇÃO` em todos os turnos;
+  - aplica `validateReplyAgainstActions` (`server/replyGuard.js`) antes
+    do return final.
+- Telemetria em `mensagens_ia.steps`: `tool_action_reply_override`,
+  `reply_guard` (com `code`/`stage_before`), e em `ctxSnapshot`:
+  `acao_inscricao_tomada`, `stage_before`, `stage_after`,
+  `guard_violation`, `replySource`.
+- Fixtures E2E: `scripts/test-inscricao-flow.mjs` (npm
+  `test:inscricao-flow`) com 6 cenários canônicos. Pre-deploy em
+  `scripts/easypanel-deploy-agente-sumare.ps1` aborta o deploy se o
+  teste falhar.
+- Heurísticas legadas (`tryEnsureInscricaoFormSent`,
+  `llmReplyImpliesPendingFormSend`, `messageConfirmsProceedToInscricaoForm`,
+  `assistantAskedPoloPreFormChoice`, `messageLooksLikeFormSumarResponse`)
+  permanecem como **fallback** em caso de regressão; não disparam mais
+  ações isoladamente — a defesa primária é o trio (tool → reply
+  override → guard).
+
+**Padrão para tarefas futuras.** Qualquer nova ação que altere estado
+externo (Kommo, Sumaré, Supabase) deve seguir esta arquitetura:
+1. Definir uma tool com nome imperativo em `server/ai/toolDefinitions.js`.
+2. Implementar executor que retorna `{ ok, code, text, replyOverride, ctxSnapshot, steps }`.
+3. Gravar o novo estado em Supabase **antes** do disparo externo (transição atômica).
+4. Adicionar regex/regra no `replyGuard.js` se o LLM puder "narrar"
+   essa ação sem chamá-la.
+5. Cobertura E2E em `scripts/test-inscricao-flow.mjs` (ou script irmão).
+6. Documentar a decisão neste arquivo.
+
+---
+
 ### 2026-05-22 — Polo EAD pós Form Sumar antes da API Captação
 
 **Decisão.** Após detectar o Form Sumar preenchido, o agente pergunta em

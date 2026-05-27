@@ -14,7 +14,9 @@
     "db:ensure-captacao-curso": "node --env-file=.env scripts/ensureSumareCaptacaoCursoTable.mjs",
     "db:import-captacao-curso": "node --env-file=.env scripts/importSumareCaptacaoCurso.mjs",
     "db:seed-captacao-curso": "node --env-file=.env scripts/ensureSumareCaptacaoCursoTable.mjs && node --env-file=.env scripts/importSumareCaptacaoCurso.mjs",
-    "db:ensure-feedback-job-runs": "node --env-file=.env scripts/ensureFeedbackJobRunsTable.mjs"
+    "db:ensure-feedback-job-runs": "node --env-file=.env scripts/ensureFeedbackJobRunsTable.mjs",
+    "test:inscricao-flow": "node scripts/test-inscricao-flow.mjs",
+    "test:outbound-dedupe-race": "node scripts/test-outbound-dedupe-race.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.103.3",

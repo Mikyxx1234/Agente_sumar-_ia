@@ -671,16 +671,22 @@ async function flushSessionInner(env, sessionId, opts = {}) {
     }
   }
 
-  // O erro a registrar precisa cobrir 3 cenários distintos pra o
+  // O erro a registrar precisa cobrir 4 cenários distintos pra o
   // operador conseguir diagnosticar pelo painel:
   //  1. agente nem rodou / falhou → out?.error
-  //  2. agente rodou mas envio do WhatsApp falhou → ainda mostra
+  //  2. envio bloqueado por race (outbound_inflight_sync) → marcamos
+  //     como erro pra não passar por "sucesso silencioso"; a próxima
+  //     passada do scheduler reprocessa naturalmente.
+  //  3. agente rodou mas envio do WhatsApp falhou → ainda mostra
   //     "Sucesso" no badge se a gente não setar error aqui (foi o
   //     bug que motivou esta mudança).
-  //  3. tudo ok → null
+  //  4. tudo ok (sent>0 ou deduped legítimo) → null.
   let executionError = null
   if (!out?.ok) {
     executionError = out?.error || 'runAgent retornou null'
+  } else if (out.reply && sendResult?.race) {
+    executionError = `WhatsApp race: ${sendResult.reason || 'outbound_inflight_sync'} — mensagem permanecerá no buffer para o próximo tick`
+    console.warn(`[${executionId}] envio WhatsApp bloqueado por race — registrando como erro: ${executionError}`)
   } else if (out.reply && sendResult && !sendResult.ok) {
     executionError = `WhatsApp falhou: ${sendResult.error || sendResult.code || 'erro desconhecido'} (enviou ${sendResult.sent || 0}/${sendResult.total || 0} partes)`
     console.error(`[${executionId}] envio WhatsApp falhou — registrando como erro: ${executionError}`)
@@ -709,15 +715,33 @@ async function flushSessionInner(env, sessionId, opts = {}) {
     if (!r.ok) console.warn(`[${executionId}] saveExecution falhou: ${r.error}`)
   }).catch((err) => console.error(`[${executionId}] saveExecution exception:`, err.message))
 
-    const sentOk = Boolean(
-      sendResult?.ok &&
-        ((sendResult.sent || 0) > 0 || sendResult.deduped),
+    // Distinção semântica para evitar "engolir" mensagens silenciosamente:
+    //  - `sent > 0`     → mensagem realmente saiu pela Cloud/Evolution API.
+    //  - `deduped` true sem race → resposta idêntica enviada antes (dedupe
+    //    legítimo de `chat_messages`); contamos como "tratado" e damos
+    //    cooldown, mas NÃO gravamos o hash do inbound (pra não esconder
+    //    futuras mensagens iguais do cliente).
+    //  - `race` true    → lock in-memory ocupou; NÃO é envio, vira erro e
+    //    a próxima passada do scheduler reprocessa.
+    const sendRace = Boolean(sendResult?.race)
+    const sentReal = (sendResult?.sent || 0) > 0
+    const dedupedLegit = Boolean(
+      sendResult?.ok && sendResult?.deduped && !sendRace,
     )
+    const sentOk = Boolean(sendResult?.ok && (sentReal || dedupedLegit))
     if (telefone && sentOk) {
       markReplyCooldown(env, telefone)
-      await recordBufferFlushHash(env, sessionId, itens)
+      if (sentReal) {
+        // Hash do inbound só faz sentido após envio confirmado — gravar
+        // antes (em dedupe ou race) descarta o próximo turno do cliente.
+        await recordBufferFlushHash(env, sessionId, itens)
+      }
     }
-    if (out?.reply && !sentOk && !out?.iaPaused && !out.inscricaoFormHandled && !out.distribuirHumanoHandled) {
+    if (sendRace) {
+      console.warn(
+        `[${executionId}] WhatsApp race (${sendResult?.reason || 'outbound_inflight_sync'}) — mensagens permanecem no buffer para o próximo tick`,
+      )
+    } else if (out?.reply && !sentOk && !out?.iaPaused && !out.inscricaoFormHandled && !out.distribuirHumanoHandled) {
       console.warn(
         `[${executionId}] envio não confirmado após drain — mensagens não reenfileiradas (${itens.length} turno(s))`,
       )

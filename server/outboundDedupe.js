@@ -71,11 +71,20 @@ export function releaseOutboundSync(telefone) {
 }
 
 /**
- * @returns {{ skip: boolean, reason?: string }}
+ * Resultado do gate de envio.
+ *
+ * - `race: true` significa que `tryReserveOutboundSync` falhou (outro envio
+ *   concorrente para o mesmo telefone no mesmo processo). NÃO é uma
+ *   duplicata — a mensagem ainda precisa ir; o caller deve registrar erro
+ *   e deixar o próximo tick do scheduler reprocessar.
+ * - `race: false` (default) com `skip: true` é dedupe legítimo (mensagem
+ *   idêntica/similar já enviada no `chat_messages` recente).
+ *
+ * @returns {{ skip: boolean, reason?: string, race?: boolean }}
  */
 export async function shouldSkipDuplicateOutbound(env, telefone, text) {
   if (!tryReserveOutboundSync(telefone)) {
-    return { skip: true, reason: 'outbound_inflight_sync' }
+    return { skip: true, reason: 'outbound_inflight_sync', race: true }
   }
   const body = normalizeOutboundText(text)
   if (!body || body.length < 12) return { skip: false }

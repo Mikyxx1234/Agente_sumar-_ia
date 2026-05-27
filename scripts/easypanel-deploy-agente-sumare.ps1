@@ -175,6 +175,31 @@ function Set-EnvKey([string]$text, [string]$key, [string]$value) {
 
 Write-Host "=== Deploy EasyPanel | target=$Target | service=$Service | project=$Project ==="
 
+# Pré-deploy: testes E2E do fluxo de inscrição (tools de ação + reply guard).
+# Aborta se algum cenário falhar — evita subir regressão para staging/prod.
+if (-not $SkipDeploy) {
+  Write-Host "[pre-deploy] rodando test:inscricao-flow..."
+  Push-Location $projectRoot
+  try {
+    & node scripts/test-inscricao-flow.mjs
+    if ($LASTEXITCODE -ne 0) {
+      Write-Error "test:inscricao-flow FALHOU (exit=$LASTEXITCODE). Corrija antes do deploy."
+      exit 1
+    }
+    Write-Host "[pre-deploy] test:inscricao-flow OK"
+
+    Write-Host "[pre-deploy] rodando test:outbound-dedupe-race..."
+    & node scripts/test-outbound-dedupe-race.mjs
+    if ($LASTEXITCODE -ne 0) {
+      Write-Error "test:outbound-dedupe-race FALHOU (exit=$LASTEXITCODE). Corrija antes do deploy."
+      exit 1
+    }
+    Write-Host "[pre-deploy] test:outbound-dedupe-race OK"
+  } finally {
+    Pop-Location
+  }
+}
+
 $loginBody = @{ json = @{ email = $Email; password = $Password } } | ConvertTo-Json -Compress
 $login = Invoke-RestMethod -Uri "$BaseUrl/api/trpc/auth.login" -Method POST -ContentType 'application/json' -Body $loginBody -TimeoutSec 20
 $token = $login.result.data.json.token

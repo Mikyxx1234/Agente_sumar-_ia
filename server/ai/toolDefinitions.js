@@ -131,6 +131,71 @@ export const TOOL_DEFINITIONS = [
   {
     type: 'function',
     function: {
+      name: 'enviar_form_sumar_inscricao',
+      description:
+        'Envia o formulário de inscrição (Form Sumar) pelo WhatsApp via salesbot Kommo. ' +
+        'CHAME quando o lead confirmar explicitamente que quer se inscrever em um curso específico ' +
+        '(ex.: "quero me inscrever em administração", "quero seguir com a matrícula"). ' +
+        'NÃO chame se o lead só pediu informações sobre cursos ou valores. ' +
+        'Se o polo ainda não foi escolhido, o servidor pede polo antes de enviar — passe polo_id apenas se o lead já tiver citado o polo nesta conversa.',
+      parameters: {
+        type: 'object',
+        properties: {
+          telefone: { type: 'string', description: 'Telefone do lead (Contexto do atendimento).' },
+          curso: { type: 'string', description: 'Curso confirmado pelo lead.' },
+          polo_id: {
+            type: 'string',
+            enum: ['sao_miguel', 'barra_funda', 'tatuape', 'santana', 'pinheiros'],
+            description: 'OPCIONAL — só informe se o lead já citou o polo nessa conversa.',
+          },
+        },
+        required: ['telefone', 'curso'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'registrar_polo_inscricao',
+      description:
+        'Registra o polo escolhido pelo lead (após você ter pedido escolha entre os 5 polos EAD) e dispara o Form Sumar em seguida. ' +
+        'CHAME quando o lead responder com número (1-5) ou nome do polo (São Miguel, Barra Funda, Tatuapé, Santana, Pinheiros). ' +
+        'NÃO chame se o lead pediu polo fora dessa lista — apenas conduza a conversa.',
+      parameters: {
+        type: 'object',
+        properties: {
+          telefone: { type: 'string', description: 'Telefone do lead (Contexto do atendimento).' },
+          polo_id: {
+            type: 'string',
+            enum: ['sao_miguel', 'barra_funda', 'tatuape', 'santana', 'pinheiros'],
+            description: 'ID do polo escolhido pelo lead.',
+          },
+        },
+        required: ['telefone', 'polo_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'confirmar_recebimento_formulario',
+      description:
+        'Confirma o recebimento do formulário preenchido e dispara a inscrição na API Captação Sumaré (gera link de aceite do contrato). ' +
+        'CHAME quando o lead sinalizar que terminou de preencher o formulário ("pronto", "preenchi", "feito", "ok"), ' +
+        'OU quando o sistema indicar que o Flow do WhatsApp recebeu as respostas. ' +
+        'NÃO chame antes de o lead confirmar o envio.',
+      parameters: {
+        type: 'object',
+        properties: {
+          telefone: { type: 'string', description: 'Telefone do lead (Contexto do atendimento).' },
+        },
+        required: ['telefone'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'distribuir_humano',
       description:
         'Encaminha o lead para um consultor humano. Use SOMENTE quando: (1) o lead pedir EXPLICITAMENTE humano/atendente/consultor; ' +
@@ -166,4 +231,19 @@ export const TOOL_DEFINITIONS = [
 export function getToolDefinitions(env = process.env) {
   if (isInscricaoAutomaticaEnabled(env)) return TOOL_DEFINITIONS
   return TOOL_DEFINITIONS.filter((t) => t.function?.name !== 'inscricao')
+}
+
+/**
+ * Tools de "ação de inscrição" — quando o LLM chama uma destas e o executor retorna
+ * `{ ok: true }`, o orquestrador descarta `msg.content` do LLM e usa o `text` da tool
+ * como reply final. Garantia de que a narrativa do LLM nunca diverge do que o servidor fez.
+ */
+export const INSCRICAO_ACTION_TOOLS = new Set([
+  'enviar_form_sumar_inscricao',
+  'registrar_polo_inscricao',
+  'confirmar_recebimento_formulario',
+])
+
+export function isInscricaoActionTool(name) {
+  return INSCRICAO_ACTION_TOOLS.has(String(name || ''))
 }
