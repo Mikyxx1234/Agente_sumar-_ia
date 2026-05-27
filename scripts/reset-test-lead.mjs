@@ -10,6 +10,7 @@ import { updateDadosCliente, telefoneToWhatsAppJid } from '../server/dadosClient
 import { clearAgentConversationMemory } from '../server/historyStore.js'
 import { getLeadSummary } from '../server/kommoClient.js'
 import { resetKommoInboundPollStateForLead } from '../server/kommoInboundPoll.js'
+import { phoneToWhatsAppSessionId } from '../server/phoneWhatsApp.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..')
@@ -96,8 +97,11 @@ async function main() {
   }
 
   const { telefone, idLead } = await resolveTelefoneAndLead(env, telefoneArg, leadIdArg)
-  const sessionId = `${telefone}@s.whatsapp.net`
-  const jid = `${telefone}@s.whatsapp.net`
+  // O backend usa JID com DDI Brasil (55 + DDD + número), gerado por
+  // `phoneToWhatsAppSessionId`. Reset que ignora o DDI deixa órfãos.
+  const sessionIdCanonical = phoneToWhatsAppSessionId(telefone) || `${telefone}@s.whatsapp.net`
+  const sessionIdLegacy = `${telefone}@s.whatsapp.net`
+  const jid = sessionIdCanonical
 
   const memoryTable = env.N8N_MEMORY_TABLE || 'n8n_chat_histories'
   const messagesTable = env.SUPABASE_CHAT_MESSAGES_TABLE || 'chat_messages_sum'
@@ -110,24 +114,41 @@ async function main() {
     process.exit(1)
   }
 
-  console.log('Reset lead teste:', { telefone, idLead, sessionId, dadosTable, messagesTable, memoryTable })
+  console.log('Reset lead teste:', {
+    telefone,
+    idLead,
+    sessionIdCanonical,
+    sessionIdLegacy,
+    dadosTable,
+    messagesTable,
+    memoryTable,
+  })
 
   const results = []
-  const phoneOr = `or=(phone.eq.${encodeURIComponent(telefone)},phone.eq.${encodeURIComponent(jid)})`
+  // Telefone pode estar gravado como dígitos puros OU como JID — em duas
+  // formas: com DDI 55 (canônico) e sem DDI (legado).
+  const telefoneCanonical = sessionIdCanonical.split('@')[0]
+  const phoneOr =
+    `or=(phone.eq.${encodeURIComponent(telefone)}` +
+    `,phone.eq.${encodeURIComponent(telefoneCanonical)}` +
+    `,phone.eq.${encodeURIComponent(sessionIdCanonical)}` +
+    `,phone.eq.${encodeURIComponent(sessionIdLegacy)})`
+  const telefoneMensagensIa =
+    `or=(usage->>telefone.eq.${encodeURIComponent(telefone)}` +
+    `,usage->>telefone.eq.${encodeURIComponent(telefoneCanonical)})`
 
   for (const [table, q] of [
-    [memoryTable, `session_id=eq.${encodeURIComponent(sessionId)}`],
+    [memoryTable, `session_id=eq.${encodeURIComponent(sessionIdCanonical)}`],
+    [memoryTable, `session_id=eq.${encodeURIComponent(sessionIdLegacy)}`],
     [messagesTable, phoneOr],
     [messagesTable, `id_lead=eq.${encodeURIComponent(idLead)}`],
+    [chatsTable, `phone=eq.${telefoneCanonical}`],
     [chatsTable, `phone=eq.${telefone}`],
-    [chatsTable, `phone=eq.${encodeURIComponent(jid)}`],
-    [bufferTable, `session_id=eq.${encodeURIComponent(sessionId)}`],
-    ['chat_messages_sum', phoneOr],
-    ['chat_messages_sum', `id_lead=eq.${encodeURIComponent(idLead)}`],
-    ['chats_sum', `phone=eq.${telefone}`],
-    ['n8n_chat_histories', `session_id=eq.${encodeURIComponent(sessionId)}`],
+    [chatsTable, `phone=eq.${encodeURIComponent(sessionIdCanonical)}`],
+    [bufferTable, `session_id=eq.${encodeURIComponent(sessionIdCanonical)}`],
+    [bufferTable, `session_id=eq.${encodeURIComponent(sessionIdLegacy)}`],
     ['mensagens_ia', `usage->>lead_id=eq.${encodeURIComponent(idLead)}`],
-    ['mensagens_ia', `usage->>telefone=eq.${encodeURIComponent(telefone)}`],
+    ['mensagens_ia', telefoneMensagensIa],
   ]) {
     const before = await sb(env, 'GET', table, `${q}&select=id&limit=1`)
     const del = await sb(env, 'DELETE', table, q)
@@ -149,7 +170,8 @@ async function main() {
   }
   const patch = await updateDadosCliente(env, { telefone, fields: resetFields })
 
-  const memAfter = await sb(env, 'GET', memoryTable, `session_id=eq.${encodeURIComponent(sessionId)}&select=id&limit=3`)
+  const memAfterCanonical = await sb(env, 'GET', memoryTable, `session_id=eq.${encodeURIComponent(sessionIdCanonical)}&select=id&limit=3`)
+  const memAfterLegacy = await sb(env, 'GET', memoryTable, `session_id=eq.${encodeURIComponent(sessionIdLegacy)}&select=id&limit=3`)
   const msgAfter = await sb(env, 'GET', messagesTable, `${phoneOr}&select=id&limit=3`)
 
   console.log(
@@ -159,14 +181,16 @@ async function main() {
         memoryClear: memClear,
         pollStateResetLeadId: Number(idLead) || null,
         patch,
-        sessionId,
+        sessionIdCanonical,
+        sessionIdLegacy,
         jid: telefoneToWhatsAppJid(telefone),
         verify: {
-          memoryRemaining: memAfter.range || '0',
+          memoryRemainingCanonical: memAfterCanonical.range || '0',
+          memoryRemainingLegacy: memAfterLegacy.range || '0',
           messagesRemaining: msgAfter.range || '0',
         },
         hint:
-          'Histórico Supabase + memória IA limpos. Reinicie agente_sumare no EasyPanel se o poll Kommo ainda usar cursor antigo em RAM. Chat no Kommo não é apagado.',
+          'Histórico Supabase + memória IA limpos (canonical 55... e legacy sem DDI). Reinicie agente_sumare no EasyPanel se o poll Kommo ainda usar cursor antigo em RAM. Chat no Kommo não é apagado. Hash do buffer no Redis tem TTL 1h (AGENT_FLUSH_HASH_TTL_SEC).',
       },
       null,
       2,
