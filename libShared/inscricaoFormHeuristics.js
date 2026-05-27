@@ -374,11 +374,27 @@ export function messageLooksLikePaymentProof(text) {
   return false
 }
 
-/** Mensagem após inscrição na API Sumaré — link do portal de aceite do contrato. */
+/** Mensagem após inscrição na API Sumaré — link do portal (contrato ou pagamento). */
 export function buildContratoAceiteLinkReply(opts = {}) {
   const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
   const link = String(opts.contractUrl || '').trim()
   if (!link) return buildInscricaoFormCompleteReply({ pushName: opts.pushName, ok: false })
+
+  const phase =
+    opts.portalPhase === 'pagamento' || /meiopagamento/i.test(link) ? 'pagamento' : 'contrato'
+
+  if (phase === 'pagamento') {
+    return (
+      `Ótimo${nameBit}! Sua inscrição foi registrada na Faculdade Sumaré.\n\n` +
+      `Seu cadastro já está na etapa de *pagamento da matrícula*. Acesse o link abaixo para escolher ` +
+      `PIX, boleto ou cartão:\n\n` +
+      `${link}\n\n` +
+      `Depois que concluir o pagamento, envie aqui no WhatsApp um *print ou foto do comprovante* ` +
+      `para darmos continuidade aos próximos passos da sua matrícula.\n\n` +
+      `Qualquer dúvida, é só responder por aqui.`
+    )
+  }
+
   return (
     `Ótimo${nameBit}! Sua inscrição foi registrada na Faculdade Sumaré.\n\n` +
     `Para concluir a matrícula, acesse o link abaixo:\n\n` +
@@ -398,6 +414,15 @@ export function buildContratoLinkResendReply(opts = {}) {
   if (!link) {
     return (
       `Claro${nameBit}! Um consultor da Faculdade Sumaré vai te enviar o link do contrato em instantes por aqui, tudo bem?`
+    )
+  }
+  const phase =
+    opts.portalPhase === 'pagamento' || /meiopagamento/i.test(link) ? 'pagamento' : 'contrato'
+  if (phase === 'pagamento') {
+    return (
+      `Sem problema${nameBit}! Segue novamente o link para *pagamento da matrícula* (PIX, boleto ou cartão):\n\n` +
+      `${link}\n\n` +
+      `Após pagar, envie o *print do comprovante* aqui no WhatsApp para seguirmos com sua matrícula.`
     )
   }
   return (

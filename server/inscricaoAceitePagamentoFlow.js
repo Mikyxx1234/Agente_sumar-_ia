@@ -21,6 +21,11 @@ import {
 import { runDistribuirHumano, formatDistribuirHumanoReply } from './distribuirHumanoTool.js'
 import { createLeadNote } from './kommoClient.js'
 import { fetchCandidatoStatus } from './matriculaCaptacaoPipeline.js'
+import {
+  consultarStatusCandidato,
+  extractCandidatoStatusString,
+  resolvePortalUrlForCandidato,
+} from './sumareCaptacaoClient.js'
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
 
@@ -130,6 +135,11 @@ export async function tryHandleMatriculaAceitePagamentoFlow(env, input) {
 
   if (messageAsksContratoLinkResend(userMessage)) {
     if (candidatoId) {
+      const statusRes = await consultarStatusCandidato(env, candidatoId)
+      const statusStr = extractCandidatoStatusString(statusRes.data)
+      const portal = resolvePortalUrlForCandidato(env, candidatoId, statusStr)
+      if (portal.url) contractUrl = portal.url
+
       const apiStatus = await fetchCandidatoStatus(env, candidatoId)
       if (apiStatus.alreadyEnrolled) {
         return {
@@ -147,7 +157,8 @@ export async function tryHandleMatriculaAceitePagamentoFlow(env, input) {
         }
       }
     }
-    const reply = buildContratoLinkResendReply({ pushName, contractUrl })
+    const portalPhase = /meiopagamento/i.test(contractUrl) ? 'pagamento' : 'contrato'
+    const reply = buildContratoLinkResendReply({ pushName, contractUrl, portalPhase })
     return {
       handled: true,
       result: buildAgentReturn({

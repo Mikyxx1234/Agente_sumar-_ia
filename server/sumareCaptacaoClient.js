@@ -13,6 +13,25 @@ import { getDefaultTipoIngresso } from './inscricaoConfig.js'
 import { matchPoloFromUserMessage, resolvePoloUnidadeCode } from '../libShared/sumarePoloCatalog.js'
 import { resolveCursoCodigoFromDb } from './sumareCaptacaoCursoStore.js'
 
+// #region agent log
+function debugCaptacaoLog(hypothesisId, message, data) {
+  const payload = {
+    sessionId: 'c24a25',
+    hypothesisId,
+    location: 'sumareCaptacaoClient.js',
+    message,
+    data,
+    timestamp: Date.now(),
+  }
+  console.warn('[debug-c24a25]', JSON.stringify(payload))
+  fetch('http://127.0.0.1:7506/ingest/d74cf096-e5fa-4366-8f23-c524c6e6c8fd', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'c24a25' },
+    body: JSON.stringify(payload),
+  }).catch(() => {})
+}
+// #endregion
+
 export function isSumareCaptacaoEnabled(env = process.env) {
   if (String(env.SUMARE_CAPTACAO_ENABLED || '').trim().toLowerCase() === 'false') {
     return false
@@ -218,6 +237,42 @@ export function buildContratoPortalUrl(env, candidatoId) {
   return `${base}?id=${encodeURIComponent(id)}`
 }
 
+/** URL do portal na etapa de pagamento (meioPagamento). */
+export function buildMeioPagamentoPortalUrl(env, candidatoId) {
+  const id = String(candidatoId || '').trim()
+  if (!id) return ''
+  const contratoBase = getConfig(env).portalBase.replace(/\/+$/, '')
+  const vestibularBase = contratoBase.replace(/\/contrato\/?$/i, '')
+  return `${vestibularBase}/meioPagamento?id=${encodeURIComponent(id)}`
+}
+
+export function extractCandidatoStatusString(statusPayload) {
+  if (!statusPayload || typeof statusPayload !== 'object') return null
+  const raw = statusPayload.status ?? statusPayload.candidato?.status ?? null
+  const s = raw != null ? String(raw).trim() : ''
+  return s || null
+}
+
+/** Candidato já passou da etapa de aceite no portal (API status). */
+export function statusImpliesPagamentoPhase(statusStr) {
+  const s = String(statusStr || '').toLowerCase()
+  if (!s) return false
+  return s.includes('meiopagamento') || s === 'pagamento' || s.includes('pagamento')
+}
+
+/**
+ * Escolhe URL do portal conforme status do candidato na API Sumaré.
+ * @returns {{ url: string, phase: 'contrato'|'pagamento' }}
+ */
+export function resolvePortalUrlForCandidato(env, candidatoId, statusStr) {
+  const id = String(candidatoId || '').trim()
+  if (!id) return { url: '', phase: 'contrato' }
+  if (statusImpliesPagamentoPhase(statusStr)) {
+    return { url: buildMeioPagamentoPortalUrl(env, id), phase: 'pagamento' }
+  }
+  return { url: buildContratoPortalUrl(env, id), phase: 'contrato' }
+}
+
 function extractUrlFromPayload(payload) {
   if (!payload || typeof payload !== 'object') return ''
   const urls = [
@@ -370,18 +425,68 @@ export async function runCaptacaoContratoWorkflow(env, { snapshot, telefone }) {
     }
   }
 
-  const status = await consultarStatusCandidato(env, candidatoId)
-  steps.push({ step: 'status_candidato', ok: status.ok, status: status.status, candidatoId })
+  const statusAfterGerar = await consultarStatusCandidato(env, candidatoId)
+  const statusStrGerar = extractCandidatoStatusString(statusAfterGerar.data)
+  steps.push({
+    step: 'status_candidato',
+    ok: statusAfterGerar.ok,
+    status: statusAfterGerar.status,
+    candidatoId,
+    apiStatus: statusStrGerar,
+  })
 
-  const aceite = await solicitarAceiteContrato(env, candidatoId)
-  steps.push({ step: 'aceite_contrato', ok: aceite.ok, status: aceite.status })
+  // #region agent log
+  debugCaptacaoLog('H4', 'status after gerar', { candidatoId, statusStrGerar })
+  // #endregion
 
+  let aceite = { ok: true, skipped: true, data: null, status: null }
+  if (!statusImpliesPagamentoPhase(statusStrGerar)) {
+    aceite = await solicitarAceiteContrato(env, candidatoId)
+    steps.push({ step: 'aceite_contrato', ok: aceite.ok, status: aceite.status })
+  } else {
+    steps.push({
+      step: 'aceite_contrato',
+      ok: true,
+      skipped: true,
+      reason: 'already_meio_pagamento_after_gerar',
+    })
+    // #region agent log
+    debugCaptacaoLog('H2', 'skipped aceite API — already payment phase', { candidatoId, statusStrGerar })
+    // #endregion
+  }
+
+  const statusFinal = await consultarStatusCandidato(env, candidatoId)
+  const statusStrFinal =
+    extractCandidatoStatusString(statusFinal.data) || statusStrGerar || null
+  steps.push({
+    step: 'status_pos_aceite',
+    ok: statusFinal.ok,
+    apiStatus: statusStrFinal,
+  })
+
+  const portalResolved = resolvePortalUrlForCandidato(env, candidatoId, statusStrFinal)
   let contractUrl = extractUrlFromPayload(aceite.data)
-  if (!contractUrl) contractUrl = buildContratoPortalUrl(env, candidatoId)
+  if (!contractUrl || !/^https?:\/\//i.test(contractUrl)) {
+    contractUrl = portalResolved.url
+  } else if (portalResolved.phase === 'pagamento' && !/meiopagamento/i.test(contractUrl)) {
+    contractUrl = portalResolved.url
+  }
 
-  if (!aceite.ok) {
+  // #region agent log
+  debugCaptacaoLog('H1', 'portal url resolved', {
+    candidatoId,
+    statusStrGerar,
+    statusStrFinal,
+    portalPhase: portalResolved.phase,
+    contractUrl: contractUrl?.slice(0, 120),
+    aceiteOk: aceite.ok,
+    aceiteSkipped: Boolean(aceite.skipped),
+  })
+  // #endregion
+
+  if (!aceite.ok && !aceite.skipped) {
     console.warn(
-      `[sumareCaptacao] aceite HTTP ${aceite.status} — usando link portal fallback candidato=${candidatoId}`,
+      `[sumareCaptacao] aceite HTTP ${aceite.status} — usando link portal fallback candidato=${candidatoId} phase=${portalResolved.phase}`,
     )
   }
 
@@ -389,9 +494,11 @@ export async function runCaptacaoContratoWorkflow(env, { snapshot, telefone }) {
     ok: true,
     candidatoId,
     contractUrl,
+    portalPhase: portalResolved.phase,
+    candidatoStatus: statusStrFinal,
     steps,
     gerar: gerar.data,
-    status: status.data,
+    status: statusFinal.data,
     aceite: aceite.data,
   }
 }

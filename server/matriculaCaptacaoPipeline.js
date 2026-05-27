@@ -39,9 +39,7 @@ export async function fetchCandidatoStatus(env, candidatoId) {
     const alreadyEnrolled =
       !!status &&
       (status.includes('matricul') ||
-        status.includes('aceite') ||
-        status.includes('contrato') ||
-        status.includes('pagamento'))
+        (status.includes('pagamento') && !status.includes('meio')))
     return { status, alreadyEnrolled }
   } catch {
     return { status: null, alreadyEnrolled: false }
@@ -174,10 +172,10 @@ export async function runMatriculaCaptacaoAfterForm(env, ctx) {
     }
   }
 
-  const { candidatoId, contractUrl } = workflow
+  const { candidatoId, contractUrl, portalPhase } = workflow
   await persistCaptacaoResult(env, telefone, { candidatoId, contractUrl })
 
-  const reply = buildContratoAceiteLinkReply({ pushName, contractUrl })
+  const reply = buildContratoAceiteLinkReply({ pushName, contractUrl, portalPhase })
   let sendRes = await sendMessageWithNote(env, {
     telefone,
     text: reply,
