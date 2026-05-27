@@ -9,7 +9,10 @@ ALTER TABLE public.dados_cliente_sum
   ADD COLUMN IF NOT EXISTS captacao_candidato_id text,
   ADD COLUMN IF NOT EXISTS captacao_contrato_link text,
   ADD COLUMN IF NOT EXISTS captacao_contrato_link_at timestamptz,
-  ADD COLUMN IF NOT EXISTS captacao_comprovante_at timestamptz;
+  ADD COLUMN IF NOT EXISTS captacao_comprovante_at timestamptz,
+  ADD COLUMN IF NOT EXISTS captacao_curso_codigo text,
+  ADD COLUMN IF NOT EXISTS captacao_curso_nome text,
+  ADD COLUMN IF NOT EXISTS captacao_pending_candidato_id text;
 
 COMMENT ON COLUMN public.dados_cliente_sum.inscricao_form_status IS
-  'aguardando_form_sumar | aguardando_distribuicao_form | form_sumar_concluido | aguardando_aceite_contrato | comprovante_pagamento_recebido';
+  'aguardando_form_sumar | aguardando_distribuicao_form | form_sumar_concluido | aguardando_aceite_contrato | aguardando_confirm_nova_inscricao | comprovante_pagamento_recebido';

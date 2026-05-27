@@ -8,6 +8,7 @@ import {
   INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
   INSCRICAO_FORM_STATUS_CONCLUIDO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_NOVA_INSCRICAO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM,
   INSCRICAO_FORM_STATUS_AGUARDANDO_POLO,
   messageLooksLikeFormSumarResponse,
@@ -381,6 +382,8 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
       pushName,
       executionId,
       snapshotOverride,
+      confirmedNovaInscricao: Boolean(ctx.confirmedNovaInscricao),
+      useCandidatoId: ctx.useCandidatoId,
     })
     steps.push({
       type: 'sumare_captacao',
@@ -391,7 +394,15 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
       code: cap.code,
       error: cap.error,
     })
-    if (cap.ok && !cap.skipped && cap.contractUrl) {
+    if (cap.code === 'NEEDS_CONFIRM_NOVA_INSCRICAO' && cap.ok) {
+      ctxForm = INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_NOVA_INSCRICAO
+      reply = cap.reply || reply
+      if (cap.whatsappOk) {
+        skipSchedulerWhatsapp = true
+        contratoWhatsappSent = true
+      }
+      matriculaOk = true
+    } else if (cap.ok && !cap.skipped && (cap.contractUrl || cap.reply)) {
       matriculaOk = true
       ctxForm = INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE
       reply = cap.reply || reply

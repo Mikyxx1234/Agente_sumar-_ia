@@ -12,25 +12,12 @@
 import { getDefaultTipoIngresso } from './inscricaoConfig.js'
 import { matchPoloFromUserMessage, resolvePoloUnidadeCode } from '../libShared/sumarePoloCatalog.js'
 import { resolveCursoCodigoFromDb } from './sumareCaptacaoCursoStore.js'
+import {
+  parseGerarCandidatoPayload,
+  classifyGerarCandidatoOutcome,
+} from '../libShared/captacaoGerarOutcome.js'
 
-// #region agent log
-function debugCaptacaoLog(hypothesisId, message, data) {
-  const payload = {
-    sessionId: 'c24a25',
-    hypothesisId,
-    location: 'sumareCaptacaoClient.js',
-    message,
-    data,
-    timestamp: Date.now(),
-  }
-  console.warn('[debug-c24a25]', JSON.stringify(payload))
-  fetch('http://127.0.0.1:7506/ingest/d74cf096-e5fa-4366-8f23-c524c6e6c8fd', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'c24a25' },
-    body: JSON.stringify(payload),
-  }).catch(() => {})
-}
-// #endregion
+export { parseGerarCandidatoPayload, classifyGerarCandidatoOutcome } from '../libShared/captacaoGerarOutcome.js'
 
 export function isSumareCaptacaoEnabled(env = process.env) {
   if (String(env.SUMARE_CAPTACAO_ENABLED || '').trim().toLowerCase() === 'false') {
@@ -386,10 +373,14 @@ export async function solicitarAceiteContrato(env, candidatoId) {
 /**
  * Fluxo completo: gerar → status → aceite → URL do portal.
  */
-export async function runCaptacaoContratoWorkflow(env, { snapshot, telefone }) {
+export async function runCaptacaoContratoWorkflow(env, { snapshot, telefone, captacaoContext = {} }) {
   const steps = []
   const params = await buildGerarCandidatoQueryAsync(snapshot, telefone, env)
   const missing = validateGerarCandidatoParams(params)
+  const requestedCurso = {
+    nome: String(snapshot?.curso_inscricao || '').trim(),
+    codigo: params.curso,
+  }
   if (missing.length) {
     return {
       ok: false,
@@ -400,21 +391,56 @@ export async function runCaptacaoContratoWorkflow(env, { snapshot, telefone }) {
     }
   }
 
-  const gerar = await gerarCandidatoIngresso(env, params)
-  steps.push({ step: 'gerar_candidato', ok: gerar.ok, status: gerar.status })
-  if (!gerar.ok) {
+  const priorCandidatoId = String(captacaoContext.priorCandidatoId || '').trim()
+  const priorCursoCodigo = String(captacaoContext.priorCursoCodigo || '').trim().toUpperCase()
+  const confirmedNovaInscricao = Boolean(captacaoContext.confirmedNovaInscricao)
+  const useCandidatoId = String(captacaoContext.useCandidatoId || '').trim()
+
+  if (
+    priorCandidatoId &&
+    priorCursoCodigo &&
+    params.curso &&
+    priorCursoCodigo !== params.curso.toUpperCase() &&
+    !confirmedNovaInscricao &&
+    !useCandidatoId
+  ) {
     return {
       ok: false,
-      code: 'GERAR_FAILED',
+      code: 'NEEDS_CONFIRM_NOVA_INSCRICAO',
       steps,
-      error: gerar.error || gerar.raw || `HTTP ${gerar.status}`,
+      priorCandidatoId,
+      priorCursoCodigo,
+      priorCursoNome: captacaoContext.priorCursoNome || null,
+      requestedCurso,
+      error: 'Candidato já possui inscrição em outro curso — confirmação necessária',
     }
   }
 
-  let candidatoId = extractCandidatoId(gerar.data)
-  if (!candidatoId && typeof gerar.data === 'string') {
-    candidatoId = extractCandidatoId(gerar.data.trim())
+  let candidatoId = useCandidatoId || null
+  let gerar = { ok: true, data: null, status: null, skipped: Boolean(useCandidatoId) }
+
+  if (!candidatoId) {
+    gerar = await gerarCandidatoIngresso(env, params)
+    steps.push({ step: 'gerar_candidato', ok: gerar.ok, status: gerar.status })
+    if (!gerar.ok) {
+      return {
+        ok: false,
+        code: 'GERAR_FAILED',
+        steps,
+        error: gerar.error || gerar.raw || `HTTP ${gerar.status}`,
+        priorCandidatoId: priorCandidatoId || null,
+        requestedCurso,
+      }
+    }
+
+    candidatoId = extractCandidatoId(gerar.data)
+    if (!candidatoId && typeof gerar.data === 'string') {
+      candidatoId = extractCandidatoId(gerar.data.trim())
+    }
+  } else {
+    steps.push({ step: 'gerar_candidato', ok: true, skipped: true, candidatoId })
   }
+
   if (!candidatoId) {
     return {
       ok: false,
@@ -422,6 +448,49 @@ export async function runCaptacaoContratoWorkflow(env, { snapshot, telefone }) {
       steps,
       error: 'API gerar candidato não retornou id do candidato',
       raw: gerar.raw,
+    }
+  }
+
+  const gerarParsed = parseGerarCandidatoPayload(gerar.data)
+  const gerarOutcome = classifyGerarCandidatoOutcome(gerarParsed, requestedCurso)
+  steps.push({
+    step: 'gerar_outcome',
+    kind: gerarOutcome.kind,
+    pagina: gerarParsed?.pagina,
+    sameCourse: gerarOutcome.sameCourse,
+    cursoApi: gerarParsed?.cursoCodigo,
+  })
+
+  if (gerarOutcome.kind === 'multiple_inscricoes_portal') {
+    return {
+      ok: false,
+      code: 'MULTIPLE_INSCRICOES_PORTAL',
+      steps,
+      candidatoId,
+      gerarOutcome,
+      requestedCurso,
+      portalCandidatoUrl: buildPortalCandidatoSelecaoUrl(env),
+      error: 'Várias inscrições existentes — confirmação no portal',
+    }
+  }
+
+  if (
+    gerarOutcome.kind === 'different_course_new' &&
+    priorCandidatoId &&
+    priorCandidatoId !== candidatoId &&
+    !confirmedNovaInscricao
+  ) {
+    return {
+      ok: false,
+      code: 'NEEDS_CONFIRM_NOVA_INSCRICAO',
+      steps,
+      candidatoId,
+      priorCandidatoId,
+      priorCursoCodigo,
+      priorCursoNome: captacaoContext.priorCursoNome || null,
+      requestedCurso,
+      gerarOutcome,
+      error: 'Nova inscrição criada em curso diferente — aguardando confirmação do lead',
     }
   }
 
@@ -435,12 +504,10 @@ export async function runCaptacaoContratoWorkflow(env, { snapshot, telefone }) {
     apiStatus: statusStrGerar,
   })
 
-  // #region agent log
-  debugCaptacaoLog('H4', 'status after gerar', { candidatoId, statusStrGerar })
-  // #endregion
+  const sameCourseInProgress = gerarOutcome.kind === 'same_course_in_progress'
 
   let aceite = { ok: true, skipped: true, data: null, status: null }
-  if (!statusImpliesPagamentoPhase(statusStrGerar)) {
+  if (!statusImpliesPagamentoPhase(statusStrGerar) && !sameCourseInProgress) {
     aceite = await solicitarAceiteContrato(env, candidatoId)
     steps.push({ step: 'aceite_contrato', ok: aceite.ok, status: aceite.status })
   } else {
@@ -448,11 +515,10 @@ export async function runCaptacaoContratoWorkflow(env, { snapshot, telefone }) {
       step: 'aceite_contrato',
       ok: true,
       skipped: true,
-      reason: 'already_meio_pagamento_after_gerar',
+      reason: sameCourseInProgress
+        ? 'same_course_already_in_payment'
+        : 'already_meio_pagamento_after_gerar',
     })
-    // #region agent log
-    debugCaptacaoLog('H2', 'skipped aceite API — already payment phase', { candidatoId, statusStrGerar })
-    // #endregion
   }
 
   const statusFinal = await consultarStatusCandidato(env, candidatoId)
@@ -472,18 +538,6 @@ export async function runCaptacaoContratoWorkflow(env, { snapshot, telefone }) {
     contractUrl = portalResolved.url
   }
 
-  // #region agent log
-  debugCaptacaoLog('H1', 'portal url resolved', {
-    candidatoId,
-    statusStrGerar,
-    statusStrFinal,
-    portalPhase: portalResolved.phase,
-    contractUrl: contractUrl?.slice(0, 120),
-    aceiteOk: aceite.ok,
-    aceiteSkipped: Boolean(aceite.skipped),
-  })
-  // #endregion
-
   if (!aceite.ok && !aceite.skipped) {
     console.warn(
       `[sumareCaptacao] aceite HTTP ${aceite.status} — usando link portal fallback candidato=${candidatoId} phase=${portalResolved.phase}`,
@@ -496,9 +550,21 @@ export async function runCaptacaoContratoWorkflow(env, { snapshot, telefone }) {
     contractUrl,
     portalPhase: portalResolved.phase,
     candidatoStatus: statusStrFinal,
+    gerarOutcome,
+    sameCourseInProgress,
+    requestedCurso,
+    cursoCodigo: gerarParsed?.cursoCodigo || params.curso,
+    cursoNome: gerarParsed?.nomeCurso || requestedCurso.nome,
     steps,
     gerar: gerar.data,
     status: statusFinal.data,
     aceite: aceite.data,
   }
+}
+
+/** URL do portal quando há várias inscrições (tela "Gostaria de continuar?"). */
+export function buildPortalCandidatoSelecaoUrl(env) {
+  const contratoBase = getConfig(env).portalBase.replace(/\/+$/, '')
+  const vestibularBase = contratoBase.replace(/\/contrato\/?$/i, '')
+  return `${vestibularBase.replace(/\/vestibular\/?$/i, '')}/candidato`
 }

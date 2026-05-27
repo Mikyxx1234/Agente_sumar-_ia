@@ -45,6 +45,7 @@ import {
 } from '../inscricaoFormFlow.js'
 import { filterHistoryMessagesForAgent } from '../../libShared/historySanitize.js'
 import { detectFormSumarRecebidoNoKommo } from '../inscricaoPostFormPipeline.js'
+import { tryHandleCaptacaoInscricaoExistenteFlow } from '../captacaoInscricaoExistenteFlow.js'
 import { tryHandlePoloPreFormFlow, tryHandlePoloEscolhaFlow } from '../inscricaoPoloFlow.js'
 import {
   messageExpressesCourseInterestOnly,
@@ -318,6 +319,18 @@ export async function runAgent(env, input) {
   const formFlowCtx = { telefone, userMessage, historyMessages: [], executionId, model, leadId, pushName: input?.pushName, t0 }
 
   if (telefone) {
+    const inscricaoExistenteFlow = await tryHandleCaptacaoInscricaoExistenteFlow(env, formFlowCtx)
+    if (inscricaoExistenteFlow?.handled) {
+      console.log(
+        `[${executionId}] CAPTACAO_INSCRICAO_EXISTENTE status=${inscricaoExistenteFlow.result?.ctxSnapshot?.inscricaoForm ?? 'n/a'}`,
+      )
+      return {
+        ...inscricaoExistenteFlow.result,
+        historyLoaded: 0,
+        aiMeta: ctx.toAiMeta(),
+      }
+    }
+
     const aceiteFlow = await tryHandleMatriculaAceitePagamentoFlow(env, formFlowCtx)
     if (aceiteFlow?.handled) {
       console.log(

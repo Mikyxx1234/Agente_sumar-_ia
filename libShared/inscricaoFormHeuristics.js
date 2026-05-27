@@ -19,6 +19,8 @@ export const INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM = 'aguardando_escolh
 export const INSCRICAO_FORM_STATUS_AGUARDANDO_POLO = 'aguardando_escolha_polo'
 /** Inscrição na API Sumaré feita; aguardando aceite do contrato no portal. */
 export const INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE = 'aguardando_aceite_contrato'
+/** Lead já tem outra candidatura — aguardando confirmar nova inscrição em outro curso. */
+export const INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_NOVA_INSCRICAO = 'aguardando_confirm_nova_inscricao'
 /** Comprovante de pagamento recebido — consultor segue o atendimento. */
 export const INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO = 'comprovante_pagamento_recebido'
 
@@ -372,6 +374,50 @@ export function messageLooksLikePaymentProof(text) {
   if (/\b(paguei|pagamento\s+feito|j[aá]\s+paguei|efetuei\s+o\s+pagamento|transferi)\b/i.test(t)) return true
   if (/\b(pix|boleto|transfer[eê]ncia)\b/i.test(t) && /\b(pag|feito|confirmad|realizad)\b/i.test(t)) return true
   return false
+}
+
+/** Mesmo curso já em andamento na Sumaré (pagamento / matrícula pendente). */
+export function buildSameCourseInProgressReply(opts = {}) {
+  const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
+  const curso = String(opts.cursoNome || 'seu curso').trim()
+  const link = String(opts.contractUrl || '').trim()
+  let body =
+    `Perfeito${nameBit}! Identificamos que você já possui uma *candidatura em andamento* para *${curso}* na Faculdade Sumaré.\n\n` +
+    `Não é necessário fazer uma nova inscrição para o mesmo curso. Para concluir a matrícula e iniciar as aulas, ` +
+    `acesse o link abaixo e finalize o *pagamento da matrícula* (PIX, boleto ou cartão):\n\n`
+  if (link) body += `${link}\n\n`
+  body +=
+    `Depois do pagamento, envie aqui no WhatsApp o *print do comprovante* para seguirmos com os próximos passos.\n\n` +
+    `Qualquer dúvida, é só responder por aqui.`
+  return body
+}
+
+/** Pergunta se deseja nova inscrição quando já existe candidatura em outro curso. */
+export function buildConfirmNovaInscricaoReply(opts = {}) {
+  const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
+  const cursoNovo = String(opts.cursoNovo || 'o novo curso').trim()
+  const cursoExistente = String(opts.cursoExistente || 'outro curso').trim()
+  return (
+    `Olá${nameBit}! Identificamos que você já possui *inscrição em andamento* na Faculdade Sumaré ` +
+    `(curso: *${cursoExistente}*).\n\n` +
+    `Você solicitou matrícula em *${cursoNovo}*, que é um *curso diferente*.\n\n` +
+    `Deseja realizar uma *nova inscrição* para *${cursoNovo}*? Responda *sim* para continuar com a nova inscrição ` +
+    `ou *não* para seguir com a candidatura que já está em andamento.`
+  )
+}
+
+/** Lead escolheu não abrir nova inscrição — reenvia link da candidatura atual. */
+export function buildMantemInscricaoExistenteReply(opts = {}) {
+  const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
+  const curso = String(opts.cursoNome || 'sua candidatura atual').trim()
+  const link = String(opts.contractUrl || '').trim()
+  let body =
+    `Sem problema${nameBit}! Vamos seguir com a candidatura que você já tem em andamento para *${curso}*.\n\n`
+  if (link) {
+    body += `Acesse o link para concluir a matrícula (pagamento ou contrato, conforme sua etapa):\n\n${link}\n\n`
+  }
+  body += `Se precisar de ajuda, é só responder por aqui.`
+  return body
 }
 
 /** Mensagem após inscrição na API Sumaré — link do portal (contrato ou pagamento). */

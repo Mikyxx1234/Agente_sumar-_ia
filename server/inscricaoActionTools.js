@@ -423,6 +423,8 @@ export async function runConfirmarRecebimentoFormulario(env, args = {}, ctx = {}
     pushName,
     t0: ctx.t0 || Date.now(),
     snapshotOverride,
+    confirmedNovaInscricao: Boolean(ctx.confirmedNovaInscricao),
+    useCandidatoId: ctx.useCandidatoId,
   })
 
   if (cap.ok) {

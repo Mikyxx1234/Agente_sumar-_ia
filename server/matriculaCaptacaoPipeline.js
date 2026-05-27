@@ -6,17 +6,22 @@
 
 import {
   INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_NOVA_INSCRICAO,
   INSCRICAO_FORM_STATUS_CONCLUIDO,
   buildContratoAceiteLinkReply,
+  buildSameCourseInProgressReply,
+  buildConfirmNovaInscricaoReply,
 } from '../libShared/inscricaoFormHeuristics.js'
 import { fetchLeadFormSnapshot } from './inscricaoKommoFields.js'
-import { updateDadosCliente, normalizeTelefone } from './dadosClienteStore.js'
+import { updateDadosCliente, normalizeTelefone, fetchDadosClienteByTelefone } from './dadosClienteStore.js'
 import { sendMessageWithNote } from './whatsappSender.js'
 import { createLeadNote } from './kommoClient.js'
 import {
   isSumareCaptacaoEnabled,
   runCaptacaoContratoWorkflow,
   consultarStatusCandidato,
+  resolvePortalUrlForCandidato,
+  extractCandidatoStatusString,
 } from './sumareCaptacaoClient.js'
 
 const DEDUPE_MS = 6 * 60 * 60 * 1000
@@ -98,13 +103,13 @@ async function getCaptacaoDedupe(env, telefone) {
   return { skip: false }
 }
 
-async function persistCaptacaoResult(env, telefone, { candidatoId, contractUrl }) {
+async function persistCaptacaoResult(env, telefone, fieldsExtra = {}) {
   const fields = {
-    captacao_candidato_id: String(candidatoId),
-    captacao_contrato_link: contractUrl,
     captacao_contrato_link_at: new Date().toISOString(),
     inscricao_form_status: INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
     inscricao_form_recebido_at: new Date().toISOString(),
+    captacao_pending_candidato_id: null,
+    ...fieldsExtra,
   }
   let upd = await updateDadosCliente(env, { telefone, fields })
   if (!upd.ok && upd.status === 400) {
@@ -154,10 +159,60 @@ export async function runMatriculaCaptacaoAfterForm(env, ctx) {
     ...(ctx.snapshotOverride && typeof ctx.snapshotOverride === 'object' ? ctx.snapshotOverride : {}),
   }
 
+  let priorRow = await fetchDadosClienteByTelefone(
+    env,
+    telefone,
+    'captacao_candidato_id,captacao_curso_codigo,captacao_curso_nome',
+  )
+  if (!priorRow) {
+    priorRow = await fetchDadosClienteByTelefone(env, telefone, 'captacao_candidato_id')
+  }
+
   const workflow = await runCaptacaoContratoWorkflow(env, {
     snapshot,
     telefone,
+    captacaoContext: {
+      priorCandidatoId: priorRow?.captacao_candidato_id,
+      priorCursoCodigo: priorRow?.captacao_curso_codigo,
+      priorCursoNome: priorRow?.captacao_curso_nome,
+      confirmedNovaInscricao: Boolean(ctx.confirmedNovaInscricao),
+      useCandidatoId: ctx.useCandidatoId,
+    },
   })
+
+  if (!workflow.ok && workflow.code === 'NEEDS_CONFIRM_NOVA_INSCRICAO') {
+    const pendingId = workflow.candidatoId || null
+    await persistCaptacaoResult(env, telefone, {
+      captacao_candidato_id: String(workflow.priorCandidatoId || priorRow?.captacao_candidato_id || ''),
+      captacao_curso_codigo: workflow.priorCursoCodigo || priorRow?.captacao_curso_codigo || null,
+      captacao_curso_nome: workflow.priorCursoNome || priorRow?.captacao_curso_nome || null,
+      captacao_pending_candidato_id: pendingId ? String(pendingId) : null,
+      inscricao_form_status: INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_NOVA_INSCRICAO,
+      captacao_contrato_link: null,
+    })
+    const reply = buildConfirmNovaInscricaoReply({
+      pushName,
+      cursoNovo: workflow.requestedCurso?.nome || snapshot.curso_inscricao,
+      cursoExistente: workflow.priorCursoNome || 'outro curso',
+    })
+    let sendRes = await sendMessageWithNote(env, { telefone, text: reply, leadId, executionId })
+    if (!sendRes?.ok && !(sendRes?.skipped && sendRes?.deduped)) {
+      await new Promise((r) => setTimeout(r, 1500))
+      sendRes = await sendMessageWithNote(env, {
+        telefone,
+        text: reply,
+        leadId,
+        executionId: `${executionId || 'cap'}-retry`,
+      })
+    }
+    return {
+      ok: true,
+      code: 'NEEDS_CONFIRM_NOVA_INSCRICAO',
+      reply,
+      whatsappOk: Boolean(sendRes?.ok && (sendRes.sent || 0) > 0),
+      steps: workflow.steps,
+    }
+  }
 
   if (!workflow.ok) {
     console.warn(
@@ -172,10 +227,22 @@ export async function runMatriculaCaptacaoAfterForm(env, ctx) {
     }
   }
 
-  const { candidatoId, contractUrl, portalPhase } = workflow
-  await persistCaptacaoResult(env, telefone, { candidatoId, contractUrl })
+  const { candidatoId, contractUrl, portalPhase, sameCourseInProgress, cursoCodigo, cursoNome } =
+    workflow
+  await persistCaptacaoResult(env, telefone, {
+    captacao_candidato_id: String(candidatoId),
+    captacao_contrato_link: contractUrl,
+    captacao_curso_codigo: cursoCodigo || null,
+    captacao_curso_nome: cursoNome || snapshot.curso_inscricao || null,
+  })
 
-  const reply = buildContratoAceiteLinkReply({ pushName, contractUrl, portalPhase })
+  const reply = sameCourseInProgress
+    ? buildSameCourseInProgressReply({
+        pushName,
+        contractUrl,
+        cursoNome: cursoNome || snapshot.curso_inscricao,
+      })
+    : buildContratoAceiteLinkReply({ pushName, contractUrl, portalPhase })
   let sendRes = await sendMessageWithNote(env, {
     telefone,
     text: reply,
@@ -214,6 +281,41 @@ export async function runMatriculaCaptacaoAfterForm(env, ctx) {
     steps: workflow.steps,
     runSalesbot49813: shouldRunSalesbot49813(env),
   }
+}
+
+/**
+ * Finaliza captação após lead confirmar nova inscrição (candidato já gerado).
+ */
+export async function finalizeCaptacaoForCandidato(env, ctx) {
+  const { telefone, leadId, pushName, executionId, candidatoId, snapshot } = ctx
+  const statusRes = await consultarStatusCandidato(env, candidatoId)
+  const statusStr = extractCandidatoStatusString(statusRes.data)
+  const portal = resolvePortalUrlForCandidato(env, candidatoId, statusStr)
+
+  await persistCaptacaoResult(env, telefone, {
+    captacao_candidato_id: String(candidatoId),
+    captacao_contrato_link: portal.url,
+    captacao_curso_codigo: ctx.cursoCodigo || null,
+    captacao_curso_nome: ctx.cursoNome || snapshot?.curso_inscricao || null,
+    captacao_pending_candidato_id: null,
+    inscricao_form_status: INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
+  })
+
+  const sameCourseInProgress = portal.phase === 'pagamento'
+  const reply = sameCourseInProgress
+    ? buildSameCourseInProgressReply({
+        pushName,
+        contractUrl: portal.url,
+        cursoNome: ctx.cursoNome || snapshot?.curso_inscricao,
+      })
+    : buildContratoAceiteLinkReply({
+        pushName,
+        contractUrl: portal.url,
+        portalPhase: portal.phase,
+      })
+
+  const sendRes = await sendMessageWithNote(env, { telefone, text: reply, leadId, executionId })
+  return { ok: true, reply, contractUrl: portal.url, whatsappOk: Boolean(sendRes?.ok && (sendRes.sent || 0) > 0) }
 }
 
 export { shouldRunSalesbot49813, INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE, INSCRICAO_FORM_STATUS_CONCLUIDO }
