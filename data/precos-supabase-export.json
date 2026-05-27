@@ -1,0 +1,335 @@
+{
+  "pos": [
+    {
+      "id": 124,
+      "content": "chave: Psicopedagogia com Ênfase em PsicomotricidadeEAD | curso: Pós-Graduação em Psicopedagogia com Ênfase em Psicomotricidade | preco cheio: 623 | preco com desconto: 33 | grad ou pos: 187 | col6: POS"
+    },
+    {
+      "id": 125,
+      "content": "chave: Pós-Graduação em Deficiência Auditiva (LIBRAS)EAD | curso: Pós-Graduação em Deficiência Auditiva (LIBRAS) | preco cheio: 623 | preco com desconto: 33 | grad ou pos: 187 | col6: POS"
+    },
+    {
+      "id": 126,
+      "content": "chave: Pós-Graduação em Gestão Escolar com foco em Recursos HumanosEAD | curso: Pós-Graduação em Gestão Escolar com foco em Recursos Humanos | preco cheio: 623 | preco com desconto: 33 | grad ou pos: 187 | col6: POS"
+    },
+    {
+      "id": 127,
+      "content": "chave: Pós-Graduação em Educação Infantil e Desenvolvimento da LinguagemEAD | curso: Pós-Graduação em Educação Infantil e Desenvolvimento da Linguagem | preco cheio: 623 | preco com desconto: 33 | grad ou pos: 187 | col6: POS"
+    },
+    {
+      "id": 128,
+      "content": "chave: Pós-Graduação em Ensino LúdicoEAD | curso: Pós-Graduação em Ensino Lúdico | preco cheio: 623 | preco com desconto: 33 | grad ou pos: 187 | col6: POS"
+    },
+    {
+      "id": 129,
+      "content": "chave: Pós-Graduação em Administração de Empresas para EngenheirosEAD | curso: Pós-Graduação em Administração de Empresas para Engenheiros | preco cheio: 756 | preco com desconto: 65 | grad ou pos: 227 | col6: POS"
+    },
+    {
+      "id": 130,
+      "content": "chave: Pós-Graduação em Serviços e Sistemas de SaúdeEAD | curso: Pós-Graduação em Serviços e Sistemas de Saúde | preco cheio: 623 | preco com desconto: 33 | grad ou pos: 187 | col6: POS"
+    },
+    {
+      "id": 131,
+      "content": "chave: MBA em Gestão EmpresarialEAD | curso: MBA em Gestão Empresarial | preco cheio: 623 | preco com desconto: 33 | grad ou pos: 187 | col6: POS"
+    },
+    {
+      "id": 132,
+      "content": "chave: MBA em Gestão de ProjetoEAD | curso: MBA em Gestão de Projeto | preco cheio: 623 | preco com desconto: 33 | grad ou pos: 187 | col6: POS"
+    },
+    {
+      "id": 133,
+      "content": "chave: MBA em Liderança e Gestão de PessoasEAD | curso: MBA em Liderança e Gestão de Pessoas | preco cheio: 623 | preco com desconto: 33 | grad ou pos: 187 | col6: POS"
+    },
+    {
+      "id": 134,
+      "content": "chave: MBA em Finanças CorporativasEAD | curso: MBA em Finanças Corporativas | preco cheio: 623 | preco com desconto: 33 | grad ou pos: 187 | col6: POS"
+    },
+    {
+      "id": 135,
+      "content": "chave: MBA em Negócios e VendasEAD | curso: MBA em Negócios e Vendas | preco cheio: 623 | preco com desconto: 33 | grad ou pos: 187 | col6: POS"
+    },
+    {
+      "id": 136,
+      "content": "chave: MBA em Gestão da QualidadeEAD | curso: MBA em Gestão da Qualidade | preco cheio: 623 | preco com desconto: 33 | grad ou pos: 187 | col6: POS"
+    },
+    {
+      "id": 137,
+      "content": "chave: MBA em Operações e LogísticaEAD | curso: MBA em Operações e Logística | preco cheio: 623 | preco com desconto: 33 | grad ou pos: 187 | col6: POS"
+    },
+    {
+      "id": 138,
+      "content": "chave: Pós-Graduação em Psicologia Organizacional e do TrabalhoEAD | curso: Pós-Graduação em Psicologia Organizacional e do Trabalho | preco cheio: 623 | preco com desconto: 33 | grad ou pos: 187 | col6: POS"
+    },
+    {
+      "id": 139,
+      "content": "chave: Pós-Graduação em Fiscalização UrbanaEAD | curso: Pós-Graduação em Fiscalização Urbana | preco cheio: 997 | preco com desconto: 5 | grad ou pos: 399 | col6: POS"
+    },
+    {
+      "id": 140,
+      "content": "chave: Pós-Graduação em Análise e Projeto de SistemasEAD | curso: Pós-Graduação em Análise e Projeto de Sistemas | preco cheio: 623 | preco com desconto: 33 | grad ou pos: 187 | col6: POS"
+    },
+    {
+      "id": 141,
+      "content": "chave: Pós-Graduação em Ciência de DadosEAD | curso: Pós-Graduação em Ciência de Dados | preco cheio: 623 | preco com desconto: 33 | grad ou pos: 187 | col6: POS"
+    },
+    {
+      "id": 142,
+      "content": "chave: Pós-Graduação em Segurança da InformaçãoEAD | curso: Pós-Graduação em Segurança da Informação | preco cheio: 623 | preco com desconto: 33 | grad ou pos: 187 | col6: POS"
+    },
+    {
+      "id": 143,
+      "content": "chave: Pós-Graduação em Educação Especial e InclusivaEAD | curso: Pós-Graduação em Educação Especial e Inclusiva | preco cheio: 636 | preco com desconto: 65 | grad ou pos: 191 | col6: POS"
+    },
+    {
+      "id": 144,
+      "content": "chave: Pós-Graduação em Alfabetização e LetramentoEAD | curso: Pós-Graduação em Alfabetização e Letramento | preco cheio: 636 | preco com desconto: 65 | grad ou pos: 191 | col6: POS"
+    },
+    {
+      "id": 145,
+      "content": "chave: Pós-Graduação em NeuropsicopedagogiaEAD | curso: Pós-Graduação em Neuropsicopedagogia | preco cheio: 636 | preco com desconto: 65 | grad ou pos: 191 | col6: POS"
+    },
+    {
+      "id": 146,
+      "content": "chave: Pós-Graduação em Coordenação Pedagógica e Gestão Estratégica de Instituições de EnsinoEAD | curso: Pós-Graduação em Coordenação Pedagógica e Gestão Estratégica de Instituições de Ensino | preco cheio: 636 | preco com desconto: 65 | grad ou pos: 191 | col6: POS"
+    },
+    {
+      "id": 147,
+      "content": "chave: Pós-Graduação em Educação Digital | curso: Tecnologias e Metodologias Ativas para o Ensino a DistânciaEAD | preco cheio: Pós-Graduação em Educação Digital | preco com desconto: Tecnologias e Metodologias Ativas para o Ensino a Distância | grad ou pos: 636 | col6: 65 | col7: 191 | col8: POS"
+    },
+    {
+      "id": 148,
+      "content": "chave: Pós-Graduação em Educação para o Transtorno do Espectro Autista (TEA)EAD | curso: Pós-Graduação em Educação para o Transtorno do Espectro Autista (TEA) | preco cheio: 636 | preco com desconto: 65 | grad ou pos: 191 | col6: POS"
+    },
+    {
+      "id": 149,
+      "content": "chave: Pós-Graduação em Psicopedagogia Institucional e ClínicaEAD | curso: Pós-Graduação em Psicopedagogia Institucional e Clínica | preco cheio: 636 | preco com desconto: 65 | grad ou pos: 191 | col6: POS"
+    },
+    {
+      "id": 150,
+      "content": "chave: Pós-Graduação em Engenharia da Produção e ManutençãoEAD | curso: Pós-Graduação em Engenharia da Produção e Manutenção | preco cheio: 636 | preco com desconto: 65 | grad ou pos: 191 | col6: POS"
+    },
+    {
+      "id": 151,
+      "content": "chave: Pós-Graduação em Engenharia da Qualidade Lean Six SigmaEAD | curso: Pós-Graduação em Engenharia da Qualidade Lean Six Sigma | preco cheio: 636 | preco com desconto: 65 | grad ou pos: 191 | col6: POS"
+    },
+    {
+      "id": 152,
+      "content": "chave: Pós-Graduação em Engenharia da Segurança do TrabalhoEAD | curso: Pós-Graduação em Engenharia da Segurança do Trabalho | preco cheio: 636 | preco com desconto: 65 | grad ou pos: 191 | col6: POS"
+    },
+    {
+      "id": 153,
+      "content": "chave: Pós-Graduação em Psicologia | curso: Neurociências e ComportamentoEAD | preco cheio: Pós-Graduação em Psicologia | preco com desconto: Neurociências e Comportamento | grad ou pos: 636 | col6: 65 | col7: 191 | col8: POS"
+    },
+    {
+      "id": 154,
+      "content": "chave: Pós-Graduação em Business Partner para a Gestão Estratégica de RHEAD | curso: Pós-Graduação em Business Partner para a Gestão Estratégica de RH | preco cheio: 636 | preco com desconto: 65 | grad ou pos: 191 | col6: POS"
+    },
+    {
+      "id": 155,
+      "content": "chave: Pós-Graduação em Psicologia Positiva e Desenvolvimento do Capital Humano nas OrganizaçõesEAD | curso: Pós-Graduação em Psicologia Positiva e Desenvolvimento do Capital Humano nas Organizações | preco cheio: 636 | preco com desconto: 65 | grad ou pos: 191 | col6: POS"
+    },
+    {
+      "id": 156,
+      "content": "chave: Pós-Graduação em Gestão Estratégica de Pessoas: liderança de alta performance e coachingEAD | curso: Pós-Graduação em Gestão Estratégica de Pessoas: liderança de alta performance e coaching | preco cheio: 636 | preco com desconto: 65 | grad ou pos: 191 | col6: POS"
+    },
+    {
+      "id": 157,
+      "content": "chave: Pós-Graduação em Gestão Fiscal e Planejamento TributárioEAD | curso: Pós-Graduação em Gestão Fiscal e Planejamento Tributário | preco cheio: 636 | preco com desconto: 65 | grad ou pos: 191 | col6: POS"
+    },
+    {
+      "id": 158,
+      "content": "chave: MBA Executivo em Corporate Finance | curso: Controller e Auditoria FinanceiraEAD | preco cheio: MBA Executivo em Corporate Finance | preco com desconto: Controller e Auditoria Financeira | grad ou pos: 636 | col6: 65 | col7: 191 | col8: POS"
+    },
+    {
+      "id": 159,
+      "content": "chave: MBA Em Controladoria e Contabilidade gerencialEAD | curso: MBA Em Controladoria e Contabilidade gerencial | preco cheio: 636 | preco com desconto: 65 | grad ou pos: 191 | col6: POS"
+    },
+    {
+      "id": 160,
+      "content": "chave: MBA em Marketing e Negócios em Mídias DigitaisEAD | curso: MBA em Marketing e Negócios em Mídias Digitais | preco cheio: 636 | preco com desconto: 65 | grad ou pos: 191 | col6: POS"
+    },
+    {
+      "id": 161,
+      "content": "chave: MBA Gestão Comercial | curso: Negociação e Inteligência de MercadoEAD | preco cheio: MBA Gestão Comercial | preco com desconto: Negociação e Inteligência de Mercado | grad ou pos: 636 | col6: 65 | col7: 191 | col8: POS"
+    },
+    {
+      "id": 162,
+      "content": "chave: MBA Executivo em Gestão de Negócios e Estratégia CorporativaEAD | curso: MBA Executivo em Gestão de Negócios e Estratégia Corporativa | preco cheio: 636 | preco com desconto: 65 | grad ou pos: 191 | col6: POS"
+    },
+    {
+      "id": 163,
+      "content": "chave: MBA em gerência de Projetos e Processos OrganizacionaisEAD | curso: MBA em gerência de Projetos e Processos Organizacionais | preco cheio: 636 | preco com desconto: 65 | grad ou pos: 191 | col6: POS"
+    },
+    {
+      "id": 164,
+      "content": "chave: MBA em Logística | curso: Lean Supply Chain e Gestão Estratégica de ComprasEAD | preco cheio: MBA em Logística | preco com desconto: Lean Supply Chain e Gestão Estratégica de Compras | grad ou pos: 636 | col6: 65 | col7: 191 | col8: POS"
+    }
+  ],
+  "grad": [
+    {
+      "id": 128,
+      "content": "chave: AdministraçãoEADBacharelado | nome_curso: Graduação - Administração | preco cheio: 357 | preco com desconto: 107 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 129,
+      "content": "chave: Análise e Desenvolvimento de SistemasEADTecnólogo | nome_curso: Graduação - Análise e Desenvolvimento de Sistemas | preco cheio: 323 | preco com desconto: 97 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 130,
+      "content": "chave: Arquitetura e UrbanismoEADBacharelado | nome_curso: Graduação - Arquitetura e Urbanismo | preco cheio: 860 | preco com desconto: 257 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 131,
+      "content": "chave: Banco de DadosEADTecnólogo | nome_curso: Graduação - Banco de Dados | preco cheio: 290 | preco com desconto: 87 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 132,
+      "content": "chave: BiomedicinaEADBacharelado | nome_curso: Graduação - Biomedicina | preco cheio: 790 | preco com desconto: 237 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 133,
+      "content": "chave: Ciência da ComputaçãoEADBacharelado | nome_curso: Graduação - Ciência da Computação | preco cheio: 323 | preco com desconto: 97 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 134,
+      "content": "chave: Ciências ContábeisEADBacharelado | nome_curso: Graduação - Ciências Contábeis | preco cheio: 323 | preco com desconto: 107 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 135,
+      "content": "chave: Ciências econômicasEADBacharelado | nome_curso: Graduação - Ciências econômicas | preco cheio: 323 | preco com desconto: 97 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 136,
+      "content": "chave: Educação Física - BachareladoEADBacharelado | nome_curso: Graduação - Educação Física - Bacharelado | preco cheio: 590 | preco com desconto: 177 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 137,
+      "content": "chave: Educação Física - LicenciaturaEADLicenciatura | nome_curso: Graduação - Educação Física - Licenciatura | preco cheio: 590 | preco com desconto: 149 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 138,
+      "content": "chave: Engenharia CivilEADBacharelado | nome_curso: Graduação - Engenharia Civil | preco cheio: 790 | preco com desconto: 237 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 139,
+      "content": "chave: Engenharia de ProduçãoEADBacharelado | nome_curso: Graduação - Engenharia de Produção | preco cheio: 790 | preco com desconto: 237 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 140,
+      "content": "chave: Engenharia ElétricaEADBacharelado | nome_curso: Graduação - Engenharia Elétrica | preco cheio: 790 | preco com desconto: 237 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 141,
+      "content": "chave: Engenharia MecânicaEADBacharelado | nome_curso: Graduação - Engenharia Mecânica | preco cheio: 790 | preco com desconto: 237 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 142,
+      "content": "chave: FarmáciaEADBacharelado | nome_curso: Graduação - Farmácia | preco cheio: 757 | preco com desconto: 227 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 143,
+      "content": "chave: FisioterapiaEADBacharelado | nome_curso: Graduação - Fisioterapia | preco cheio: 790 | preco com desconto: 227 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 144,
+      "content": "chave: GastronomiaEADTecnólogo | nome_curso: Graduação - Gastronomia | preco cheio: 290 | preco com desconto: 87 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 145,
+      "content": "chave: GeografiaEADLicenciatura | nome_curso: Graduação - Geografia | preco cheio: 357 | preco com desconto: 107 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 146,
+      "content": "chave: Gestão ComercialEADTecnólogo | nome_curso: Graduação - Gestão Comercial | preco cheio: 290 | preco com desconto: 87 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 147,
+      "content": "chave: Gestão de QualidadeEADTecnólogo | nome_curso: Graduação - Gestão de Qualidade | preco cheio: 290 | preco com desconto: 87 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 148,
+      "content": "chave: Gestão da Tecnologia da InformaçãoEADTecnólogo | nome_curso: Graduação - Gestão da Tecnologia da Informação | preco cheio: 290 | preco com desconto: 87 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 149,
+      "content": "chave: Recursos HumanosEADTecnólogo | nome_curso: Graduação - Recursos Humanos | preco cheio: 323 | preco com desconto: 97 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 150,
+      "content": "chave: Gestão de Segurança PrivadaEADTecnólogo | nome_curso: Graduação - Gestão de Segurança Privada | preco cheio: 290 | preco com desconto: 87 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 151,
+      "content": "chave: Gestão FinanceiraEADTecnólogo | nome_curso: Graduação - Gestão Financeira | preco cheio: 290 | preco com desconto: 87 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 152,
+      "content": "chave: Gestão PúblicaEADTecnólogo | nome_curso: Graduação - Gestão Pública | preco cheio: 290 | preco com desconto: 87 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 153,
+      "content": "chave: HistóriaEADLicenciatura | nome_curso: Graduação - História | preco cheio: 357 | preco com desconto: 107 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 154,
+      "content": "chave: Jogos DigitaisEADTecnólogo | nome_curso: Graduação - Jogos Digitais | preco cheio: 290 | preco com desconto: 57 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 155,
+      "content": "chave: JornalismoEADBacharelado | nome_curso: Graduação - Jornalismo | preco cheio: 290 | preco com desconto: 87 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 156,
+      "content": "chave: Letras Habilitação Língua PortuguesaEADLicenciatura | nome_curso: Graduação - Letras Habilitação Língua Portuguesa | preco cheio: 357 | preco com desconto: 107 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 157,
+      "content": "chave: LogísticaEADTecnólogo | nome_curso: Graduação - Logística | preco cheio: 323 | preco com desconto: 97 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 158,
+      "content": "chave: MarketingEADTecnólogo | nome_curso: Graduação - Marketing | preco cheio: 323 | preco com desconto: 97 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 159,
+      "content": "chave: MatemáticaEADLicenciatura | nome_curso: Graduação - Matemática | preco cheio: 357 | preco com desconto: 107 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 160,
+      "content": "chave: NutriçãoEADBacharelado | nome_curso: Graduação - Nutrição | preco cheio: 790 | preco com desconto: 237 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 161,
+      "content": "chave: PedagogiaEADLicenciatura | nome_curso: Graduação - Pedagogia | preco cheio: 390 | preco com desconto: 117 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 162,
+      "content": "chave: Processos GerenciaisEADTecnólogo | nome_curso: Graduação - Processos Gerenciais | preco cheio: 290 | preco com desconto: 87 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 163,
+      "content": "chave: Sistemas Para InternetEADTecnólogo | nome_curso: Graduação - Sistemas Para Internet | preco cheio: 290 | preco com desconto: 87 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 164,
+      "content": "chave: Publicidade e PropagandaEADBacharelado | nome_curso: Graduação - Publicidade e Propaganda | preco cheio: 290 | preco com desconto: 87 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 165,
+      "content": "chave: Redes de ComputadoresEADTecnólogo | nome_curso: Graduação - Redes de Computadores | preco cheio: 290 | preco com desconto: 87 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 166,
+      "content": "chave: Saneamento AmbientalEADTecnólogo | nome_curso: Graduação - Saneamento Ambiental | preco cheio: 490 | preco com desconto: 147 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 167,
+      "content": "chave: Superior em Serviço SocialEADBacharelado | nome_curso: Graduação - Superior em Serviço Social | preco cheio: 557 | preco com desconto: 167 | grad ou pos: GRADUACAO"
+    },
+    {
+      "id": 168,
+      "content": "chave: Sistemas de Informação | nome_curso: Graduação - Sistemas Para Internet | preco cheio: 323 | preco com desconto: 97 | grad ou pos: GRADUACAO"
+    }
+  ],
+  "exportedAt": "2026-05-27T13:08:07.292Z"
+}
