@@ -148,6 +148,22 @@ export async function findLeadByPhone(env, telefone) {
  *
  * @returns {Promise<{ ok: boolean, leadId?: number, name?: string|null, error?: string }>}
  */
+/**
+ * Lead Kommo por id (pipeline_id, status_id, etc.).
+ * @returns {Promise<{ ok: boolean, lead?: object, status?: number, error?: string }>}
+ */
+export async function getLeadById(env, leadId) {
+  const id = Number(leadId)
+  if (!Number.isFinite(id) || id <= 0) {
+    return { ok: false, code: 'MISSING_LEAD_ID', error: 'leadId inválido' }
+  }
+  const r = await kommoFetch(env, `/api/v4/leads/${id}`)
+  if (!r.ok) {
+    return { ok: false, code: r.code || 'KOMMO_ERROR', status: r.status, error: summarizeError(r) }
+  }
+  return { ok: true, lead: r.data, status: r.status }
+}
+
 export async function getLeadSummary(env, leadId) {
   const id = Number(leadId)
   if (!Number.isFinite(id) || id <= 0) {

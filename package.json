@@ -16,7 +16,10 @@
     "db:seed-captacao-curso": "node --env-file=.env scripts/ensureSumareCaptacaoCursoTable.mjs && node --env-file=.env scripts/importSumareCaptacaoCurso.mjs",
     "db:ensure-feedback-job-runs": "node --env-file=.env scripts/ensureFeedbackJobRunsTable.mjs",
     "test:inscricao-flow": "node scripts/test-inscricao-flow.mjs",
-    "test:outbound-dedupe-race": "node scripts/test-outbound-dedupe-race.mjs"
+    "test:outbound-dedupe-race": "node scripts/test-outbound-dedupe-race.mjs",
+    "test:funnel-gate": "node scripts/test-kommo-agent-funnel-gate.mjs",
+    "update:precos-rag": "node --env-file=.env scripts/update-precos-sumare-rag.mjs",
+    "audit:precos": "node --env-file=.env scripts/audit-precos-sumare.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.103.3",

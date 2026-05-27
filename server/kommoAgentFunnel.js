@@ -1,39 +1,28 @@
 /**
- * Funil do agente — um ou vários status_id no mesmo pipeline.
+ * Listagem de leads na fila do agente (Kommo).
  *
- * KOMMO_AGENT_STATUS_ID          status principal (obrig. no scheduler)
- * KOMMO_AGENT_STATUS_IDS         CSV opcional — ex: 106140284,106377088
- *                                (Atendimento + Aguardando resposta). Evita
- *                                encerrar sessão quando o Kommo só troca etapa
- *                                dentro da fila do agente.
+ * IDs fixos em kommoAgentFunnelGate.js:
+ *   pipeline 13756724 (Agente-Sumaré)
+ *   status   106140284 (Atendimento)
+ *
+ * KOMMO_AGENT_PIPELINE_ID / KOMMO_AGENT_STATUS_ID no .env são apenas
+ * referência — se divergirem, o gate ignora e usa os fixos.
  */
 
 import { listLeadsByStatus } from './kommoClient.js'
+import { resolveAgentFunnelFromEnv } from './kommoAgentFunnelGate.js'
 
-/**
- * @returns {number[]}
- */
+/** @deprecated Use resolveAgentFunnelFromEnv — mantido para imports legados. */
 export function parseAgentStatusIds(env) {
-  const primary = Number(env.KOMMO_AGENT_STATUS_ID)
-  const raw = String(env.KOMMO_AGENT_STATUS_IDS || '').trim()
-  const fromCsv = raw
-    ? raw
-        .split(/[,\s;]+/)
-        .map((s) => Number(String(s).trim()))
-        .filter((n) => Number.isFinite(n) && n > 0)
-    : []
-  const set = new Set(fromCsv)
-  if (Number.isFinite(primary) && primary > 0) set.add(primary)
-  return [...set]
+  return resolveAgentFunnelFromEnv(env).statusIds
 }
 
 /**
- * Lista leads em qualquer status configurado (dedupe por lead id).
+ * Lista leads na fila fixa do agente.
  * @returns {Promise<{ ok: boolean, leads: object[], statusIds: number[], error?: string }>}
  */
 export async function listLeadsInAgentQueue(env) {
-  const pipelineId = Number(env.KOMMO_AGENT_PIPELINE_ID)
-  const statusIds = parseAgentStatusIds(env)
+  const { pipelineId, statusIds } = resolveAgentFunnelFromEnv(env)
   if (!statusIds.length) {
     return { ok: false, leads: [], statusIds: [], error: 'missing_status_ids' }
   }

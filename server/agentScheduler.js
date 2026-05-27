@@ -54,7 +54,12 @@ import {
   extractContactPhone,
   extractLeadPhone,
 } from './kommoClient.js'
-import { listLeadsInAgentQueue, parseAgentStatusIds } from './kommoAgentFunnel.js'
+import { listLeadsInAgentQueue } from './kommoAgentFunnel.js'
+import {
+  assertLeadInAgentFunnel,
+  describeLeadFunnel,
+  resolveAgentFunnelFromEnv,
+} from './kommoAgentFunnelGate.js'
 import { phoneToWhatsAppSessionId } from './phoneWhatsApp.js'
 import { getMessages, getLastTouchedAt, listSessionsWithPendingMessages } from './evolution/messageBuffer.js'
 import { clearBufferIfStaleRepush } from './sessionFlushDedupe.js'
@@ -147,8 +152,21 @@ async function tryFlushWebhookOrphanSessions(env, { debounceMs, stats }) {
         stats.skippedDebounce += 1
         continue
       }
-      console.log(`[scheduler] flush órfão ${sessionId} (${messages.length} msgs, idade=${Math.round(ageMs / 1000)}s)`)
-      await flushSession(env, sessionId, { leadIdHint: null })
+      const telefone = String(sessionId).split('@')[0].replace(/[^0-9]/g, '')
+      const funnel = await assertLeadInAgentFunnel(env, { telefone })
+      if (!funnel.ok) {
+        stats.skippedFunnelGate = (stats.skippedFunnelGate || 0) + 1
+        console.log(
+          `[scheduler] flush órfão ${sessionId} BLOQUEADO funnel_gate reason=${funnel.reason} ` +
+            `(kommo ${describeLeadFunnel(funnel.lead || { pipeline_id: funnel.pipeline_id, status_id: funnel.status_id })})`,
+        )
+        continue
+      }
+      const leadId = Number(funnel.lead?.id)
+      console.log(
+        `[scheduler] flush órfão ${sessionId} lead=${leadId} (${messages.length} msgs, idade=${Math.round(ageMs / 1000)}s)`,
+      )
+      await flushSession(env, sessionId, { leadIdHint: leadId })
       stats.processed += 1
     } catch (err) {
       stats.errors += 1
@@ -172,8 +190,6 @@ function getDebounceMs(env) {
 function isEnabled(env) {
   const flag = String(env.KOMMO_SCHEDULER_ENABLED || '').trim().toLowerCase()
   if (flag === 'false' || flag === '0' || flag === 'no') return false
-  // Sem pipeline/status configurados não tem como filtrar — desabilita.
-  if (!env.KOMMO_AGENT_PIPELINE_ID || !env.KOMMO_AGENT_STATUS_ID) return false
   if (!env.KOMMO_BASE_URL || !env.KOMMO_ACCESS_TOKEN) return false
   return true
 }
@@ -201,8 +217,7 @@ export async function runSchedulerTick(env) {
   const stats = { leadsInFunnel: 0, processed: 0, skippedDebounce: 0, skippedNoMessages: 0, skippedNotInWhitelist: 0, errors: 0 }
   if (!isEnabled(env)) return stats
 
-  const pipelineId = Number(env.KOMMO_AGENT_PIPELINE_ID)
-  const statusIds = parseAgentStatusIds(env)
+  const { pipelineId, statusIds } = resolveAgentFunnelFromEnv(env)
   const debounceMs = getDebounceMs(env)
   const whitelist = getTestLeadWhitelist(env)
 
@@ -256,8 +271,7 @@ export async function runSchedulerTick(env) {
       console.warn(
         `[scheduler] nenhum lead em pipeline_id=${pipelineId} status_ids=[${statusIds.join(',')}]. ` +
           'O poll de notas/eventos NAO roda para leads fora dessas etapas. ' +
-          'Inclua "Aguardando resposta" em KOMMO_AGENT_STATUS_IDS se o Kommo alterna entre etapas da fila. ' +
-          'Ajuste KOMMO_AGENT_PIPELINE_ID / KOMMO_AGENT_STATUS_ID(S) ou realoque o lead.',
+          'A fila da IA é fixa: pipeline 13756724 + status 106140284 (Atendimento). Realoque o lead nessa etapa.',
       )
     }
     await tryFlushWebhookOrphanSessions(env, { debounceMs, stats })
@@ -472,6 +486,15 @@ export async function runSchedulerTick(env) {
         return
       }
 
+      const funnel = await assertLeadInAgentFunnel(env, { leadId: Number(lead.id), lead })
+      if (!funnel.ok) {
+        stats.skippedFunnelGate = (stats.skippedFunnelGate || 0) + 1
+        console.warn(
+          `[scheduler] lead=${lead.id} flush omitido funnel_gate reason=${funnel.reason} ` +
+            describeLeadFunnel(funnel.lead || lead),
+        )
+        return
+      }
       console.log(`[scheduler] flush ${sessionId} lead=${lead.id} (${messages.length} msgs, idade=${Math.round(ageMs / 1000)}s)`)
       await flushSession(env, sessionId, { leadIdHint: lead.id })
       stats.processed += 1
@@ -497,7 +520,7 @@ export async function runSchedulerTick(env) {
 export function startAgentScheduler(env) {
   if (intervalHandle) return { started: false, reason: 'already_running' }
   if (!isEnabled(env)) {
-    return { started: false, reason: 'disabled (faltam KOMMO_AGENT_PIPELINE_ID / KOMMO_AGENT_STATUS_ID / token)' }
+    return { started: false, reason: 'disabled (KOMMO_SCHEDULER_ENABLED=false ou falta KOMMO_BASE_URL/token)' }
   }
   const intervalMs = getIntervalMs(env)
   const tick = () => {

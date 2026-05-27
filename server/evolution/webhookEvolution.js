@@ -33,6 +33,7 @@ import { saveConversation } from '../historyStore.js'
 import { getLeadIdByTelefone, isAtendimentoIaPaused } from '../dadosClienteStore.js'
 import { seenMessage, withSessionLock } from './concurrency.js'
 import { findLeadByPhone } from '../kommoClient.js'
+import { assertLeadInAgentFunnel, describeLeadFunnel } from '../kommoAgentFunnelGate.js'
 import { sendMessageWithNote } from '../whatsappSender.js'
 import { generateExecutionId, saveExecution } from '../ai/executionTelemetry.js'
 import { rememberWamid, getWamids } from './sessionWamid.js'
@@ -514,6 +515,22 @@ async function flushSessionInner(env, sessionId, opts = {}) {
       return { skipped: 'ia_paused', pending }
     }
 
+    const leadIdHint = Number(opts.leadIdHint)
+    if (!opts.skipFunnelGate) {
+      const funnel = await assertLeadInAgentFunnel(env, {
+        leadId: Number.isFinite(leadIdHint) && leadIdHint > 0 ? leadIdHint : undefined,
+        telefone,
+      })
+      if (!funnel.ok) {
+        const pending = await peekPending()
+        console.log(
+          `[Evolution][flush] ${sessionId} held — funnel_gate (${funnel.reason}) ` +
+            `${describeLeadFunnel(funnel.lead || { pipeline_id: funnel.pipeline_id, status_id: funnel.status_id })} | pending: ${pending}`,
+        )
+        return { skipped: 'funnel_gate', reason: funnel.reason, pending }
+      }
+    }
+
     const itens = await drainMessages(env, sessionId)
     if (!itens.length) {
       console.log(`[Evolution][flush] ${sessionId} sem mensagens pendentes (drain vazio)`)
@@ -524,10 +541,10 @@ async function flushSessionInner(env, sessionId, opts = {}) {
 
     const executionId = opts.executionId || generateExecutionId()
     const startedAt = new Date().toISOString()
-    const leadIdHint = opts.leadIdHint != null ? Number(opts.leadIdHint) : null
+    const leadIdForAgent = Number.isFinite(leadIdHint) && leadIdHint > 0 ? leadIdHint : null
     console.log(`[${executionId}] flush ${sessionId} → "${mensagemCompleta}"`)
     console.log(
-      `[${executionId}] RECEBEU_MENSAGEM session=${sessionId} telefone=${telefone} leadIdHint=${leadIdHint ?? 'n/a'} itens=${itens.length} chars=${mensagemCompleta.length}`,
+      `[${executionId}] RECEBEU_MENSAGEM session=${sessionId} telefone=${telefone} leadIdHint=${leadIdForAgent ?? 'n/a'} itens=${itens.length} chars=${mensagemCompleta.length}`,
     )
 
   // "Digitando..." começa AQUI, depois do debounce. Caminho único:
@@ -562,12 +579,12 @@ async function flushSessionInner(env, sessionId, opts = {}) {
     // pode chamar tools como inscricao/distribuir_humano sem precisar
     // adivinhar o ID. Sem isso o LLM mandava `id_lead: 0` e a tool
     // caía em MISSING_CRM_FIELDS.
-    console.log(`[${executionId}] CHAMOU_IA telefone=${telefone} leadId=${leadIdHint ?? 'n/a'}`)
+    console.log(`[${executionId}] CHAMOU_IA telefone=${telefone} leadId=${leadIdForAgent ?? 'n/a'}`)
     out = await runAgent(env, {
       telefone,
       userMessage: mensagemCompleta,
       executionId,
-      leadId: Number.isFinite(leadIdHint) && leadIdHint > 0 ? leadIdHint : undefined,
+      leadId: leadIdForAgent ?? undefined,
       // Gate ia_paused já checado acima (antes do drain) — economiza round-trip.
       skipPauseCheck: true,
     })
@@ -586,8 +603,8 @@ async function flushSessionInner(env, sessionId, opts = {}) {
     if (out?.ok && out.reply) {
       // 1ª prioridade: leadId vindo do scheduler (já achou no Kommo p/
       // listar quem tá no funil). Evita chamar findLeadByPhone de novo.
-      if (Number.isFinite(leadIdHint) && leadIdHint > 0) {
-        idLead = leadIdHint
+      if (leadIdForAgent != null) {
+        idLead = leadIdForAgent
         console.log(`[${executionId}] kommo lead ${idLead} (hint do scheduler) p/ ${telefone}`)
       } else {
         try {

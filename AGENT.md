@@ -6,6 +6,32 @@ complexas devem ser registradas aqui após aprovação do usuário.
 
 ---
 
+### 2026-05-27 — Trinco fixo do funil Kommo (só pipeline 13756724 + status 106140284)
+
+**Decisão.** O atendimento automático via WhatsApp/scheduler só roda se o lead
+estiver em **pipeline_id 13756724** (Agente-Sumaré) e **status_id 106140284**
+(Atendimento). IDs fixos em `server/kommoAgentFunnelGate.js`; variáveis
+`KOMMO_AGENT_*` no `.env` que divergirem são ignoradas (warn no boot).
+
+**Contexto.** Lead `#23842805` no funil SUMARÉ-COMERCIAL / em atendimento
+recebeu resposta da IA (`EX-260526-1416-239-6d15`) após SalesBot mover a
+etapa — fora da fila Agente-Sumaré. Causas: env de produção possivelmente
+apontando para outro funil e/ou `WEBHOOK_ORPHAN_FLUSH` processando buffer
+sem checar etapa.
+
+**Implementação.**
+- `assertLeadInAgentFunnel` antes de `drainMessages` em `flushSessionInner`.
+- Scheduler: mesma checagem no flush normal e no flush órfão (por telefone).
+- `listLeadsInAgentQueue` lista só o par fixo de IDs.
+- Teste: `npm run test:funnel-gate`.
+
+**Impacto.** Leads em outros funis (ex.: SUMARÉ-COMERCIAL, tag Fora_Horário)
+podem ter mensagens no buffer, mas a IA **não responde** até estarem em
+13756724 / 106140284. Playground (`/api/playground/flush`, `/api/agent/run`)
+não passa pelo gate (teste manual).
+
+---
+
 ### 2026-05-27 — Gate outbound: separar race condition de dedupe legítimo
 
 **Decisão.** O retorno de `shouldSkipDuplicateOutbound` (`server/outboundDedupe.js`)
