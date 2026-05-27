@@ -12,6 +12,45 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-05-27 - Link enviado ao candidato sempre na tela `/contrato` (ASSINAR CONTRATO)
+
+- **Decisão**
+  - `resolvePortalUrlForCandidato` em [server/sumareCaptacaoClient.js](server/sumareCaptacaoClient.js)
+    passa a devolver **sempre** a URL `/vem-pra-sumare/vestibular/contrato?id=…`
+    (tela "Termos de Contrato → Clique para abrir → Li e concordo → ASSINAR
+    CONTRATO"), independentemente do `status` do candidato na API Sumaré.
+  - O campo `phase` (`'contrato' | 'pagamento'`) é mantido apenas como
+    telemetria — útil em logs/notas para entender em que fase a API estava,
+    mas não muda a URL enviada.
+  - O ponto de override do `extractUrlFromPayload` foi invertido: quando a
+    API devolve uma URL `meioPagamento` no payload de aceite, ela é
+    substituída pela URL `/contrato`.
+
+- **Contexto**
+  - Antes, quando o candidato voltava após já ter aceitado o contrato
+    (`status="meioPagamento"`), o agente enviava direto o link
+    `/meioPagamento?id=…`. Caso real lead #23841399 (notas 16:57 e 17:30).
+  - Negócio prefere fluxo único: o candidato sempre cai na tela "ASSINAR
+    CONTRATO", que **já redireciona** para pagamento quando o aceite está
+    OK. UX mais previsível e instruções padronizadas ("acesse o link, leia
+    e clique em ASSINAR CONTRATO").
+
+- **Alternativas descartadas**
+  - *Manter dois links*: aumentava bifurcação no prompt e nas mensagens —
+    cada caso exigia copy diferente; já tínhamos relatos de candidatos
+    "perdidos" ao receber `/meioPagamento` sem contexto.
+  - *Adicionar flag de env (`SUMARE_PORTAL_ALWAYS_CONTRATO`)*: optei por
+    fixar o comportamento direto, sem flag, porque é o caminho que o
+    negócio quer em 100% dos casos.
+
+- **Impacto**
+  - Toda mensagem com link de contrato (captacaoInscricaoExistenteFlow,
+    inscricaoAceitePagamentoFlow, matriculaCaptacaoPipeline) passa a usar
+    `/contrato?id=…`.
+  - Status persistido no Supabase (`captacao_contrato_link`) também passa
+    a guardar a URL canônica.
+  - Cobertura de testes: seção 9 em `scripts/test-inscricao-flow.mjs`.
+
 ### 2026-05-27 - Mirror obrigatório de `inscricao_form_status` a partir do reply do agente + fallback via notas Kommo
 
 - **Decisão**

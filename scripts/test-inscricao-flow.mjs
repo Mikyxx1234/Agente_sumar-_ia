@@ -43,6 +43,7 @@ import {
 import { isKommoSystemOrIntegrationNote } from '../libShared/inboundMessageSanitize.js'
 import { detectStateFromReply, AUTO_SYNC_TERMINAL_OR_ADVANCED } from '../server/inscricaoStateAutoSync.js'
 import { buildPoloEscolhaPreFormMessage } from '../libShared/sumarePoloCatalog.js'
+import { resolvePortalUrlForCandidato } from '../server/sumareCaptacaoClient.js'
 
 let passed = 0
 let failed = 0
@@ -383,6 +384,40 @@ section('8. Auto-sync de inscricao_form_status pelo reply do LLM (Fix 1)')
   assert(
     AUTO_SYNC_TERMINAL_OR_ADVANCED.has(INSCRICAO_FORM_STATUS_AGUARDANDO),
     '8.8 aguardando_form_sumar não regride para polo',
+  )
+}
+
+section('9. Link de contrato sempre na tela "ASSINAR CONTRATO" (/contrato)')
+
+{
+  const envPortal = {
+    SUMARE_CONTRATO_PORTAL_URL: 'https://sumare.edu.br/vem-pra-sumare/vestibular/contrato',
+  }
+  const id = '2026700000005585'
+
+  // Status sem fase de pagamento → contrato
+  const r1 = resolvePortalUrlForCandidato(envPortal, id, 'aceite_contrato')
+  assertEqual(r1.url, `https://sumare.edu.br/vem-pra-sumare/vestibular/contrato?id=${id}`, '9.1 status contrato → URL /contrato')
+  assertEqual(r1.phase, 'contrato', '9.1b phase=contrato')
+
+  // Status "meioPagamento" → MESMO ASSIM /contrato (UX: tela única)
+  const r2 = resolvePortalUrlForCandidato(envPortal, id, 'meioPagamento')
+  assertEqual(r2.url, `https://sumare.edu.br/vem-pra-sumare/vestibular/contrato?id=${id}`, '9.2 status meioPagamento → URL /contrato (forçado)')
+  assertEqual(r2.phase, 'pagamento', '9.2b phase=pagamento (telemetria preservada)')
+
+  // Status "pagamento" → também /contrato
+  const r3 = resolvePortalUrlForCandidato(envPortal, id, 'pagamento')
+  assertEqual(r3.url, `https://sumare.edu.br/vem-pra-sumare/vestibular/contrato?id=${id}`, '9.3 status pagamento → URL /contrato')
+
+  // candidatoId vazio → url vazio
+  const r4 = resolvePortalUrlForCandidato(envPortal, '', 'aceite_contrato')
+  assertEqual(r4.url, '', '9.4 candidatoId vazio → url vazio')
+
+  // Sem env explícito → usa default oficial Sumaré
+  const r5 = resolvePortalUrlForCandidato({}, id, null)
+  assert(
+    r5.url.startsWith('https://sumare.edu.br/vem-pra-sumare/vestibular/contrato?id='),
+    '9.5 default env → URL canônica /contrato',
   )
 }
 

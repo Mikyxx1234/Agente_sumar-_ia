@@ -248,16 +248,24 @@ export function statusImpliesPagamentoPhase(statusStr) {
 }
 
 /**
- * Escolhe URL do portal conforme status do candidato na API Sumaré.
+ * URL do portal a enviar ao candidato.
+ *
+ * SEMPRE devolve o link de `/contrato` — a página "Termos de Contrato" com
+ * "Clique para abrir", "Li e concordo" e "ASSINAR CONTRATO". Mesmo quando a
+ * API Sumaré reporta o candidato em fase de pagamento, mandamos a tela de
+ * contrato porque ela já redireciona para pagamento quando o aceite está OK
+ * (UX melhor: tela única coberta para qualquer estado do candidato).
+ *
+ * O campo `phase` é mantido para telemetria/log: indica se a API estava em
+ * pagamento ou contrato, mas a URL devolvida é sempre `/contrato`.
+ *
  * @returns {{ url: string, phase: 'contrato'|'pagamento' }}
  */
 export function resolvePortalUrlForCandidato(env, candidatoId, statusStr) {
   const id = String(candidatoId || '').trim()
   if (!id) return { url: '', phase: 'contrato' }
-  if (statusImpliesPagamentoPhase(statusStr)) {
-    return { url: buildMeioPagamentoPortalUrl(env, id), phase: 'pagamento' }
-  }
-  return { url: buildContratoPortalUrl(env, id), phase: 'contrato' }
+  const phase = statusImpliesPagamentoPhase(statusStr) ? 'pagamento' : 'contrato'
+  return { url: buildContratoPortalUrl(env, id), phase }
 }
 
 function extractUrlFromPayload(payload) {
@@ -534,7 +542,10 @@ export async function runCaptacaoContratoWorkflow(env, { snapshot, telefone, cap
   let contractUrl = extractUrlFromPayload(aceite.data)
   if (!contractUrl || !/^https?:\/\//i.test(contractUrl)) {
     contractUrl = portalResolved.url
-  } else if (portalResolved.phase === 'pagamento' && !/meiopagamento/i.test(contractUrl)) {
+  } else if (/meiopagamento/i.test(contractUrl)) {
+    // Política: enviar SEMPRE o link `/contrato` (tela "ASSINAR CONTRATO"),
+    // mesmo quando a API devolveu `/meioPagamento`. A tela de contrato já
+    // redireciona pro pagamento quando o aceite está OK.
     contractUrl = portalResolved.url
   }
 
