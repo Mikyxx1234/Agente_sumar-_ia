@@ -81,6 +81,7 @@ import {
 import { userAsksCourseMoreDetails } from '../../libShared/courseMoreInfo.js'
 import { isAtendimentoIaPaused } from '../dadosClienteStore.js'
 import { validateReplyAgainstActions } from '../replyGuard.js'
+import { autoSyncInscricaoStateFromReply } from '../inscricaoStateAutoSync.js'
 
 const MAX_TOOL_ROUNDS = 5
 const CHAT_URL = 'https://api.openai.com/v1/chat/completions'
@@ -417,6 +418,26 @@ export async function runAgent(env, input) {
   })
 
   formFlowCtx.historyMessages = historyMessages
+
+  // Fix 4 — Log de contexto inicial: estado, histórico e sinais críticos. Sem
+  // isso, era cego entender por que tryHandlePoloPreFormFlow retornava null.
+  if (telefone) {
+    try {
+      const ctxRow = await fetchDadosClienteByTelefone(env, telefone, 'inscricao_form_status,polo_inscricao_escolhido')
+      const ctxStage = ctxRow?.inscricao_form_status ?? null
+      const ctxPolo = ctxRow?.polo_inscricao_escolhido ?? null
+      const lastA = lastAssistantText(historyMessages)
+      const lastALen = lastA.length
+      const poloSig = lastALen > 0 ? Boolean((lastA.match(/em qual|qual.*polo|somente.*estes polos/i))) : false
+      console.log(
+        `[${executionId}] INSCRICAO_CTX stage=${ctxStage || 'null'} polo=${ctxPolo || 'null'} ` +
+          `historyLen=${historyMessages.length} historySource=${historySource} ` +
+          `lastAssistLen=${lastALen} polo_signal_in_lastAssist=${poloSig} userMsgLen=${(userMessage || '').length}`,
+      )
+    } catch (err) {
+      console.warn(`[${executionId}] INSCRICAO_CTX log_err:`, err?.message || err)
+    }
+  }
 
   if (telefone) {
     const poloPreFlow = await tryHandlePoloPreFormFlow(env, formFlowCtx)
@@ -1205,6 +1226,32 @@ export async function runAgent(env, input) {
         reply = guardVerdict.safeReply
       }
 
+      // Fix 1 — Auto-sync de inscricao_form_status quando o REPLY final
+      // contém texto canônico de transição (ex.: pergunta de polo) mas o
+      // estado no Supabase ficou para trás. Sem isso, o próximo turno do
+      // lead (ex.: "5") fica órfão se o histórico vier vazio.
+      let autoSyncResult = null
+      if (telefone) {
+        autoSyncResult = await autoSyncInscricaoStateFromReply(env, {
+          telefone,
+          leadId,
+          reply,
+          currentStage: formFlowCtx.stageBefore || null,
+          executionId,
+        }).catch((err) => {
+          console.warn(`[${executionId}] auto_sync_state catch:`, err?.message || err)
+          return null
+        })
+        if (autoSyncResult?.synced) {
+          orchestratorSteps.push({
+            type: 'inscricao_state_auto_sync',
+            signal: autoSyncResult.signal,
+            stage_before: autoSyncResult.previous || null,
+            stage_after: autoSyncResult.target,
+          })
+        }
+      }
+
       return {
         ok: true,
         reply,
@@ -1213,6 +1260,7 @@ export async function runAgent(env, input) {
         ctxSnapshot: {
           ...ctxSnapshot,
           stage_before: formFlowCtx.stageBefore || null,
+          stage_after_auto_sync: autoSyncResult?.synced ? autoSyncResult.target : null,
           acao_inscricao_tomada: null,
           guard_violation: guardViolation?.code || null,
           replySource: guardViolation ? 'reply_guard_override' : 'llm',

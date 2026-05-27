@@ -310,11 +310,45 @@ export async function appendChatMemory(env, { telefone, userMessage, botMessage 
   }
 
   const path = encodeURIComponent(cfg.memoryTable)
-  const r = await sbRequest(cfg.url, cfg.key, 'POST', path, rows)
+  const r = await postWithRetry(cfg.url, cfg.key, path, rows)
   if (!r.ok) {
-    return { ok: false, code: 'SUPABASE_INSERT_FAILED', status: r.status, error: summarizeError(r) }
+    return {
+      ok: false,
+      code: 'SUPABASE_INSERT_FAILED',
+      status: r.status,
+      error: summarizeError(r),
+      attempts: r.attempts,
+    }
   }
-  return { ok: true, inserted: rows.length, session_id: sessionId }
+  return { ok: true, inserted: rows.length, session_id: sessionId, attempts: r.attempts }
+}
+
+/**
+ * Fix 3 — POST com até 3 tentativas e backoff exponencial para Supabase.
+ * Cobre falhas transitórias (429, 5xx, ECONNRESET, AbortError) que estavam
+ * deixando o `n8n_chat_histories` vazio em produção. Tentativas espaçadas
+ * 200ms / 600ms para não atrasar muito o flush do agente.
+ */
+async function postWithRetry(url, key, pathAndQuery, body) {
+  const RETRYABLE = new Set([408, 425, 429, 500, 502, 503, 504])
+  const delays = [200, 600]
+  let last = null
+  for (let attempt = 1; attempt <= delays.length + 1; attempt += 1) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const r = await sbRequest(url, key, 'POST', pathAndQuery, body)
+      last = { ...r, attempts: attempt }
+      if (r.ok) return last
+      if (!RETRYABLE.has(r.status)) return last
+    } catch (err) {
+      last = { ok: false, status: 0, raw: String(err?.message || err), attempts: attempt }
+    }
+    if (attempt > delays.length) break
+    const wait = delays[attempt - 1]
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((resolve) => setTimeout(resolve, wait))
+  }
+  return last || { ok: false, status: 0, raw: 'unknown error', attempts: 0 }
 }
 
 /**

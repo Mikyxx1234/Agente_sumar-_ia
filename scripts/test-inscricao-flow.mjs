@@ -35,8 +35,14 @@ import {
   messageSignalsFormSubmissionAck,
   inboundTextForFormFlowCompletion,
   historyIndicatesFormSumarCompleted,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM,
+  INSCRICAO_FORM_STATUS_AGUARDANDO,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
+  INSCRICAO_FORM_STATUS_CONCLUIDO,
 } from '../libShared/inscricaoFormHeuristics.js'
 import { isKommoSystemOrIntegrationNote } from '../libShared/inboundMessageSanitize.js'
+import { detectStateFromReply, AUTO_SYNC_TERMINAL_OR_ADVANCED } from '../server/inscricaoStateAutoSync.js'
+import { buildPoloEscolhaPreFormMessage } from '../libShared/sumarePoloCatalog.js'
 
 let passed = 0
 let failed = 0
@@ -333,6 +339,50 @@ section('7. Flow responses received (WhatsApp Flow / Kommo)')
   assert(
     !historyIndicatesFormSumarCompleted([{ role: 'user', content: 'oi' }]),
     '7.6 saudação isolada não indica form',
+  )
+}
+
+section('8. Auto-sync de inscricao_form_status pelo reply do LLM (Fix 1)')
+
+{
+  // Reply canônico do agente perguntando polo → deve sinalizar transição.
+  const poloMsg = buildPoloEscolhaPreFormMessage({})
+  assertEqual(
+    detectStateFromReply(poloMsg),
+    INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM,
+    '8.1 reply canônico de polo → AGUARDANDO_POLO_PRE_FORM',
+  )
+
+  // Variação com sufixo EX-…
+  assertEqual(
+    detectStateFromReply(poloMsg + ' - EX-260527-2025-001-abcd'),
+    INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM,
+    '8.2 reply com sufixo EX ainda é detectado',
+  )
+
+  // Reply genérico (não fala de polo) → nenhuma transição
+  assertEqual(
+    detectStateFromReply('Posso te dar mais detalhes sobre o curso de Nutrição?'),
+    null,
+    '8.3 reply neutro → null',
+  )
+
+  // Reply vazio → null
+  assertEqual(detectStateFromReply(''), null, '8.4 reply vazio → null')
+  assertEqual(detectStateFromReply(null), null, '8.5 reply null → null')
+
+  // Estados terminais/avançados não devem ser regredidos
+  assert(
+    AUTO_SYNC_TERMINAL_OR_ADVANCED.has(INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE),
+    '8.6 aceite_contrato marcado como terminal/avançado',
+  )
+  assert(
+    AUTO_SYNC_TERMINAL_OR_ADVANCED.has(INSCRICAO_FORM_STATUS_CONCLUIDO),
+    '8.7 form_concluido marcado como terminal/avançado',
+  )
+  assert(
+    AUTO_SYNC_TERMINAL_OR_ADVANCED.has(INSCRICAO_FORM_STATUS_AGUARDANDO),
+    '8.8 aguardando_form_sumar não regride para polo',
   )
 }
 

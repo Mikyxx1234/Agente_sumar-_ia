@@ -31,6 +31,7 @@ import {
 import { DADOS_CLIENTE_INSCRICAO_SELECT } from './dadosClienteInscricaoFields.js'
 import { executeCaptacaoAfterFormResolved } from './inscricaoPostFormPipeline.js'
 import { deliverInscricaoForm } from './inscricaoFormFlow.js'
+import { listLeadNotes } from './kommoClient.js'
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
 
@@ -57,6 +58,32 @@ async function resolveLeadId(env, telefone, leadIdHint) {
 }
 
 /**
+ * Fallback (Fix 2): quando histórico está vazio e status no Supabase é null,
+ * consulta as notas recentes do Kommo procurando uma resposta canônica do
+ * próprio agente que tenha pedido escolha de polo. Cobre o caso em que o
+ * `n8n_chat_histories` veio vazio por race/falha de gravação/reset.
+ *
+ * @param {Record<string,string>} env
+ * @param {number|string|null} leadId
+ * @returns {Promise<boolean>} true se uma das últimas notas pedia polo.
+ */
+async function recentKommoNoteAskedPoloPreForm(env, leadId) {
+  if (!leadId) return false
+  try {
+    const r = await listLeadNotes(env, leadId, { limit: 6, order: 'desc' })
+    const notes = Array.isArray(r?.notes) ? r.notes : []
+    for (const n of notes) {
+      const text = String(n?.params?.text || n?.text || '')
+      if (!text) continue
+      if (assistantAskedPoloPreFormChoice(text)) return true
+    }
+  } catch {
+    // notas indisponíveis — falha silenciosa, mantém comportamento anterior
+  }
+  return false
+}
+
+/**
  * Lead confirmou matrícula → escolhe polo (1–5) → dispara Formulario_Sum.
  */
 export async function tryHandlePoloPreFormFlow(env, input) {
@@ -68,8 +95,25 @@ export async function tryHandlePoloPreFormFlow(env, input) {
 
   const row = await fetchDadosClienteByTelefone(env, telefone, DADOS_CLIENTE_INSCRICAO_SELECT)
   const status = row?.[FORM_STATUS_FIELD] ?? null
-  const inPoloChoiceStep =
+  let inPoloChoiceStep =
     status === INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM || assistantAskedPoloPreFormChoice(lastAssist)
+
+  // Fix 2 — fallback de contexto via notas Kommo quando histórico veio vazio.
+  // Só ativa se a mensagem do lead "parece polo" (número ou nome), para não
+  // engatilhar em mensagens não relacionadas.
+  let kommoFallbackUsed = false
+  if (!inPoloChoiceStep && !status && matchPoloFromUserMessage(userMessage)) {
+    const leadIdForCheck = await resolveLeadId(env, telefone, leadIdHint)
+    const recentlyAsked = await recentKommoNoteAskedPoloPreForm(env, leadIdForCheck)
+    if (recentlyAsked) {
+      inPoloChoiceStep = true
+      kommoFallbackUsed = true
+      console.log(
+        `[${executionId || 'inscricaoPolo'}] POLO_PRE_FORM kommo_fallback=true lead=${leadIdForCheck ?? 'n/a'} ` +
+          `historyLen=${historyMessages.length} status=null`,
+      )
+    }
+  }
 
   if (!inPoloChoiceStep) return null
 
