@@ -58,6 +58,10 @@ import {
   isKommoSystemOrIntegrationNote,
   isLikelyAgentEcho,
 } from '../libShared/inboundMessageSanitize.js'
+import {
+  inboundTextForFormFlowCompletion,
+  messageIsFlowResponsesReceived,
+} from '../libShared/inscricaoFormHeuristics.js'
 
 /** @type {Map<number, { warmed: boolean, lastNoteId: number }>} */
 const noteState = new Map()
@@ -302,6 +306,13 @@ function stripExecutionSuffix(text) {
   return s.trim()
 }
 
+/** Normaliza texto para o buffer; Flow concluído vira marcador interno do pós-form. */
+function bufferTextFromInboundRaw(rawText) {
+  const stripped = stripExecutionSuffix(String(rawText || '').trim())
+  if (!stripped) return ''
+  return inboundTextForFormFlowCompletion(stripped)
+}
+
 /**
  * Classifica uma nota do Kommo para o mesmo critério do loop de poll (inbound vs skip).
  * @returns {{ kind: 'push', text: string, nid: number } | { kind: 'skip', reason: string, advance: boolean, nid: number }}
@@ -318,13 +329,21 @@ function classifyInboundNote(n, env, contactDigits, types) {
   if (!rawText) {
     return { kind: 'skip', reason: 'empty', advance: true, nid }
   }
+  if (messageIsFlowResponsesReceived(rawText)) {
+    const flowText = bufferTextFromInboundRaw(rawText)
+    if (flowText) return { kind: 'push', text: flowText, nid }
+  }
   if (isAgentOutboundEcho(rawText) || isLikelyAgentEcho(rawText) || isKommoSystemOrIntegrationNote(rawText)) {
     return { kind: 'skip', reason: 'echo', advance: true, nid }
   }
-  if (noteTypeMayCarryIntegrationSummary(n.note_type) && isLikelyCrmSummaryCommonNote(rawText, env)) {
+  if (
+    noteTypeMayCarryIntegrationSummary(n.note_type) &&
+    isLikelyCrmSummaryCommonNote(rawText, env) &&
+    !messageIsFlowResponsesReceived(rawText)
+  ) {
     return { kind: 'skip', reason: 'crm_summary', advance: true, nid }
   }
-  const text = stripExecutionSuffix(rawText)
+  const text = bufferTextFromInboundRaw(rawText)
   if (!text) {
     return { kind: 'skip', reason: 'strip_empty', advance: true, nid }
   }
@@ -932,11 +951,15 @@ async function resolveWabaStubViaLeadNotes(env, ev, leadId, sessionId) {
     if (nt === 'common' && !isCommonInboundEnabled(env)) continue
     const raw = extractNoteText(n, env)
     if (!raw) continue
+    if (messageIsFlowResponsesReceived(raw)) {
+      const flowText = bufferTextFromInboundRaw(raw)
+      if (flowText) return flowText
+    }
     if (nt === 'common' && (isAgentOutboundEcho(raw) || isLikelyAgentEcho(raw) || isKommoSystemOrIntegrationNote(raw))) {
       continue
     }
     if (noteTypeMayCarryIntegrationSummary(nt) && isLikelyCrmSummaryCommonNote(raw, env)) continue
-    const text = stripExecutionSuffix(raw)
+    const text = bufferTextFromInboundRaw(raw)
     if (!text) continue
     if (nt === 'sms_in' && contactDigits) {
       const np = normalizeDigits(n.params?.phone || '')
@@ -1178,6 +1201,27 @@ async function pollEvents(env, leadId, sessionId, contactId) {
       continue
     }
 
+    if (messageIsFlowResponsesReceived(text)) {
+      const flowText = bufferTextFromInboundRaw(text)
+      if (flowText) {
+        try {
+          await pushMessage(env, sessionId, flowText, { skipDedupe: true })
+          pushed += 1
+          if (evId) {
+            st.seenIds.add(evId)
+            st.emptyIncomingNoText.delete(evId)
+          }
+          maxAt = Math.max(maxAt, at)
+          console.log(
+            `[kommo-poll][events] +1 flow_form lead=${lid} session=${sessionId} eventId=${evId} text="${flowText}"`,
+          )
+          continue
+        } catch (pushErr) {
+          console.warn(`[kommo-poll][events] flow push falhou lead=${lid}:`, pushErr.message)
+        }
+      }
+    }
+
     if (isAgentOutboundEcho(text) || isLikelyAgentEcho(text) || isKommoSystemOrIntegrationNote(text)) {
       filteredOutbound += 1
       if (evId) st.seenIds.add(evId)
@@ -1185,7 +1229,7 @@ async function pollEvents(env, leadId, sessionId, contactId) {
       continue
     }
 
-    const cleaned = stripExecutionSuffix(text)
+    const cleaned = bufferTextFromInboundRaw(text)
     if (!cleaned) {
       filteredEmpty += 1
       if (evId) st.seenIds.add(evId)
@@ -1193,7 +1237,7 @@ async function pollEvents(env, leadId, sessionId, contactId) {
       continue
     }
 
-    if (isLikelyCrmSummaryCommonNote(cleaned, env)) {
+    if (isLikelyCrmSummaryCommonNote(cleaned, env) && !messageIsFlowResponsesReceived(text)) {
       filteredCrmSummaryEvents += 1
       if (evId) {
         st.seenIds.add(evId)
@@ -1599,6 +1643,24 @@ async function pollDispatcher(env, leadId, sessionId) {
       continue
     }
 
+    if (messageIsFlowResponsesReceived(text)) {
+      const flowText = bufferTextFromInboundRaw(text)
+      if (flowText) {
+        try {
+          await pushMessage(env, sessionId, flowText, { skipDedupe: true })
+          pushed += 1
+          st.seenIds.add(mid)
+          maxApplied = Math.max(maxApplied, mid)
+          console.log(
+            `[kommo-poll][dispatcher] +1 flow_form lead=${lid} msgId=${mid} text="${flowText}"`,
+          )
+          continue
+        } catch (pushErr) {
+          console.warn(`[kommo-poll][dispatcher] flow push falhou lead=${lid}:`, pushErr.message)
+        }
+      }
+    }
+
     if (isAgentOutboundEcho(text) || isLikelyAgentEcho(text) || isKommoSystemOrIntegrationNote(text)) {
       filteredOutbound += 1
       st.seenIds.add(mid)
@@ -1606,7 +1668,7 @@ async function pollDispatcher(env, leadId, sessionId) {
       continue
     }
 
-    const cleaned = stripExecutionSuffix(text)
+    const cleaned = bufferTextFromInboundRaw(text)
     if (!cleaned) {
       filteredEmpty += 1
       st.seenIds.add(mid)
@@ -1614,7 +1676,7 @@ async function pollDispatcher(env, leadId, sessionId) {
       continue
     }
 
-    if (isLikelyCrmSummaryCommonNote(cleaned, env)) {
+    if (isLikelyCrmSummaryCommonNote(cleaned, env) && !messageIsFlowResponsesReceived(text)) {
       filteredCrmSummaryDispatcher += 1
       st.seenIds.add(mid)
       maxApplied = Math.max(maxApplied, mid)

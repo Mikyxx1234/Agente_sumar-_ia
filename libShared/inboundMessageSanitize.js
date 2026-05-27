@@ -78,6 +78,9 @@ export function isKommoCaptacaoContratoSystemNote(text) {
 export function isKommoSystemOrIntegrationNote(text) {
   const low = String(text || '').toLowerCase()
   if (!low) return false
+  // Sinal do Meta/Kommo de Flow preenchido — deve acionar pós-form, não ser descartado.
+  if (/\bflow\s+responses\s+received\b/i.test(low)) return false
+  if (/\brespostas\s+recebidas\s+(no\s+)?flow\b/i.test(low)) return false
   if (isKommoCaptacaoContratoSystemNote(text)) return true
   if (/\bsalesbot\b/i.test(low)) return true
   if (/\bformulario_sum\b/i.test(low)) return true

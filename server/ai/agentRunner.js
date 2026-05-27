@@ -51,6 +51,7 @@ import {
   messageExpressesCourseInterestOnly,
   messageLooksLikeFormSumarResponse,
   messageIsFlowResponsesReceived,
+  messageIsFormularioSumarPreenchidoMarker,
   messageLooksLikeFormFollowUp,
   INSCRICAO_FORM_STATUS_AGUARDANDO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
@@ -59,6 +60,7 @@ import {
   isShortEnrollmentConfirmation,
   assistantInEnrollmentStep,
   messageSignalsFormSubmissionAck,
+  historyIndicatesFormSumarCompleted,
 } from '../../libShared/inscricaoFormHeuristics.js'
 import { fetchDadosClienteByTelefone } from '../dadosClienteStore.js'
 import { DADOS_CLIENTE_INSCRICAO_SELECT } from '../dadosClienteInscricaoFields.js'
@@ -515,7 +517,11 @@ export async function runAgent(env, input) {
     // Pós-form só quando a mensagem indica formulário respondido — evita pular
     // direto para "cadastro validado" em "sim"/"oi" com notas antigas no Kommo.
     const wantsNewForm = leadExplicitlyRequestsInscricaoForm(userMessage, historyMessages)
-    const formSubmissionAck = messageSignalsFormSubmissionAck(userMessage)
+    const historyFormCompleted = historyIndicatesFormSumarCompleted(historyMessages)
+    const formSubmissionAck =
+      messageSignalsFormSubmissionAck(userMessage) ||
+      messageIsFormularioSumarPreenchidoMarker(userMessage) ||
+      historyFormCompleted
     let matriculaJaProcessada = false
     let inscRow = null
     try {
@@ -547,7 +553,10 @@ export async function runAgent(env, input) {
       INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
     ].includes(formStatus)
     const flowTextInbound =
-      messageLooksLikeFormSumarResponse(userMessage) || messageIsFlowResponsesReceived(userMessage)
+      messageLooksLikeFormSumarResponse(userMessage) ||
+      messageIsFlowResponsesReceived(userMessage) ||
+      messageIsFormularioSumarPreenchidoMarker(userMessage) ||
+      historyFormCompleted
 
     let kommoFlowDetected = false
     if (

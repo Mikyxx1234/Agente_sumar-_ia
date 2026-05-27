@@ -29,6 +29,14 @@ import {
   runRegistrarPoloInscricao,
   runConfirmarRecebimentoFormulario,
 } from '../server/inscricaoActionTools.js'
+import {
+  FORM_SUMAR_FLOW_COMPLETED_MARKER,
+  messageIsFlowResponsesReceived,
+  messageSignalsFormSubmissionAck,
+  inboundTextForFormFlowCompletion,
+  historyIndicatesFormSumarCompleted,
+} from '../libShared/inscricaoFormHeuristics.js'
+import { isKommoSystemOrIntegrationNote } from '../libShared/inboundMessageSanitize.js'
 
 let passed = 0
 let failed = 0
@@ -292,6 +300,40 @@ section('6. Reply guard: LLM promete formulário sem chamar tool')
     stage: null,
   })
   assertEqual(v5.violation, false, '6.5 texto neutro não dispara guard')
+}
+
+section('7. Flow responses received (WhatsApp Flow / Kommo)')
+
+{
+  assert(messageIsFlowResponsesReceived('Flow responses received'), '7.1 detecta texto exato EN')
+  assert(
+    messageIsFlowResponsesReceived('Preencha o form.\nFlow responses received'),
+    '7.1b detecta flow embutido na nota',
+  )
+  assertEqual(
+    inboundTextForFormFlowCompletion('Flow responses received'),
+    FORM_SUMAR_FLOW_COMPLETED_MARKER,
+    '7.2 normaliza para marcador interno',
+  )
+  assert(
+    !isKommoSystemOrIntegrationNote('Flow responses received'),
+    '7.3 não classifica flow como nota de sistema',
+  )
+  assert(
+    messageSignalsFormSubmissionAck(FORM_SUMAR_FLOW_COMPLETED_MARKER),
+    '7.4 marcador dispara ack de formulário',
+  )
+  assert(
+    historyIndicatesFormSumarCompleted([
+      { role: 'user', content: FORM_SUMAR_FLOW_COMPLETED_MARKER },
+      { role: 'user', content: 'pronto' },
+    ]),
+    '7.5 histórico com flow + pronto indica form concluído',
+  )
+  assert(
+    !historyIndicatesFormSumarCompleted([{ role: 'user', content: 'oi' }]),
+    '7.6 saudação isolada não indica form',
+  )
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */

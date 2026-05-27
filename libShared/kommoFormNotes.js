@@ -22,13 +22,19 @@ function noteCreatedMs(n) {
   return Number.isNaN(t) ? 0 : t
 }
 
-/** Última ativação do salesbot Formulario_Sum (epoch ms). */
+/** Última ativação/envio do formulário Sumaré no Kommo (epoch ms). */
 export function findLastFormularioSumSentMs(notes) {
   let max = 0
   for (const n of notes || []) {
     const blob = noteBlob(n).toLowerCase()
-    if (!blob.includes('formulario_sum')) continue
-    if (!/\bativad[oa]\b|inscri[cç]/i.test(blob)) continue
+    const looksLikeFormSend =
+      blob.includes('formulario_sum') ||
+      /\bformul[aá]rio\b/.test(blob) ||
+      /\bformulario\b/.test(blob)
+    if (!looksLikeFormSend) continue
+    if (!/\bativad[oa]\b|inscri[cç]|enviad[oa]|envio\b|salesbot|dados b[aá]sicos/i.test(blob)) {
+      continue
+    }
     max = Math.max(max, noteCreatedMs(n))
   }
   return max

@@ -19,6 +19,9 @@ export const INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM = 'aguardando_escolh
 export const INSCRICAO_FORM_STATUS_AGUARDANDO_POLO = 'aguardando_escolha_polo'
 /** Inscrição na API Sumaré feita; aguardando aceite do contrato no portal. */
 export const INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE = 'aguardando_aceite_contrato'
+
+/** Marcador interno quando o WhatsApp Flow / Kommo sinaliza formulário preenchido. */
+export const FORM_SUMAR_FLOW_COMPLETED_MARKER = '[FORMULARIO_SUMAR_PREENCHIDO]'
 /** Lead já tem outra candidatura — aguardando confirmar nova inscrição em outro curso. */
 export const INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_NOVA_INSCRICAO = 'aguardando_confirm_nova_inscricao'
 /** Comprovante de pagamento recebido — consultor segue o atendimento. */
@@ -266,11 +269,34 @@ export function messageLooksLikeAgentOutboundEcho(text) {
 export function messageIsFlowResponsesReceived(text) {
   const raw = String(text || '').trim()
   if (!raw || raw.length < 8) return false
+  if (raw === FORM_SUMAR_FLOW_COMPLETED_MARKER) return true
   if (messageLooksLikeAgentOutboundEcho(raw)) return false
   const t = raw.toLowerCase()
   if (/^flow\s+responses\s+received\.?$/i.test(t)) return true
   if (/\bflow\s+responses\s+received\b/i.test(t)) return true
   if (/\brespostas\s+recebidas\s+(no\s+)?flow\b/i.test(t)) return true
+  if (/\brespostas?\s+do\s+flow\s+recebidas?\b/i.test(t)) return true
+  return false
+}
+
+export function messageIsFormularioSumarPreenchidoMarker(text) {
+  return String(text || '').trim() === FORM_SUMAR_FLOW_COMPLETED_MARKER
+}
+
+/** Texto normalizado para o buffer quando o Kommo/WhatsApp sinaliza Flow concluído. */
+export function inboundTextForFormFlowCompletion(text) {
+  if (messageIsFlowResponsesReceived(text)) return FORM_SUMAR_FLOW_COMPLETED_MARKER
+  return String(text || '').trim()
+}
+
+/** Histórico recente indica que o Form Sumar já foi preenchido (Flow ou confirmação do lead). */
+export function historyIndicatesFormSumarCompleted(historyMessages, windowSize = 12) {
+  const recent = (historyMessages || []).slice(-windowSize)
+  for (const m of recent) {
+    const content = String(m?.content || '').trim()
+    if (!content) continue
+    if (messageSignalsFormSubmissionAck(content)) return true
+  }
   return false
 }
 

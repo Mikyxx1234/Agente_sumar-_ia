@@ -161,14 +161,36 @@ async function main() {
   }
 
   env.SUPABASE_DADOS_CLIENTE_TABLE = dadosTable
-  const resetFields = {
+  const resetFieldsFull = {
     inscricao_form_status: null,
     inscricao_form_recebido_at: null,
     atendimento_ia: null,
     reativacao_ping_at: null,
     reativacao_moved_at: null,
+    polo_inscricao_escolhido: null,
+    captacao_unidade: null,
+    captacao_candidato_id: null,
+    captacao_contrato_link: null,
+    captacao_contrato_link_at: null,
+    captacao_comprovante_at: null,
+    captacao_curso_codigo: null,
+    captacao_curso_nome: null,
+    captacao_pending_candidato_id: null,
   }
-  const patch = await updateDadosCliente(env, { telefone, fields: resetFields })
+  const resetFieldsMinimal = {
+    inscricao_form_status: null,
+    inscricao_form_recebido_at: null,
+    atendimento_ia: null,
+    reativacao_ping_at: null,
+    reativacao_moved_at: null,
+    captacao_curso_codigo: null,
+    captacao_curso_nome: null,
+    captacao_pending_candidato_id: null,
+  }
+  let patch = await updateDadosCliente(env, { telefone, fields: resetFieldsFull })
+  if (!patch.ok && patch.status === 400) {
+    patch = await updateDadosCliente(env, { telefone, fields: resetFieldsMinimal })
+  }
 
   const memAfterCanonical = await sb(env, 'GET', memoryTable, `session_id=eq.${encodeURIComponent(sessionIdCanonical)}&select=id&limit=3`)
   const memAfterLegacy = await sb(env, 'GET', memoryTable, `session_id=eq.${encodeURIComponent(sessionIdLegacy)}&select=id&limit=3`)

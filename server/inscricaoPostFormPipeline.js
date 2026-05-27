@@ -12,6 +12,7 @@ import {
   INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM,
   INSCRICAO_FORM_STATUS_AGUARDANDO_POLO,
   messageLooksLikeFormSumarResponse,
+  messageIsFlowResponsesReceived,
   messageLooksLikeFormFollowUp,
   messageSignalsFormSubmissionAck,
   buildInscricaoFormCompleteReply,
@@ -252,8 +253,12 @@ export async function detectFormSumarRecebidoNoKommo(env, leadId, options = {}) 
     if (ts && now - ts > maxAgeMs) continue
     if (afterMs && ts && ts < afterMs) continue
     const blob = noteBlob(n)
-    if (messageLooksLikeFormSumarResponse(blob)) {
-      return { detected: true, source: 'kommo_note', sample: blob.slice(0, 120) }
+    if (messageLooksLikeFormSumarResponse(blob) || messageIsFlowResponsesReceived(blob)) {
+      return {
+        detected: true,
+        source: messageIsFlowResponsesReceived(blob) ? 'kommo_note_flow' : 'kommo_note',
+        sample: blob.slice(0, 120),
+      }
     }
   }
 
