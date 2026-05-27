@@ -3,39 +3,24 @@
  * Anexados ao CONTEXT do RAG quando o curso tem entrada em data/curso-perfil-grad.json.
  */
 
-import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
-
-const __dirname = dirname(fileURLToPath(import.meta.url))
-const PERFIL_PATH = join(__dirname, '..', 'data', 'curso-perfil-grad.json')
+import perfilGrad from '../data/curso-perfil-grad.json' with { type: 'json' }
 
 /** @type {Record<string, { nome: string, areaInteresse?: string, areasTrabalho?: string, funcoes?: string }>|null} */
 let cache = null
 
 function loadPerfilMap() {
   if (cache) return cache
-  try {
-    const raw = readFileSync(PERFIL_PATH, 'utf8')
-    const arr = JSON.parse(raw)
-    if (!Array.isArray(arr)) {
-      cache = {}
-      return cache
+  const arr = Array.isArray(perfilGrad) ? perfilGrad : []
+  /** @type {Record<string, typeof arr[0]>} */
+  const map = {}
+  for (const row of arr) {
+    if (!row?.nome) continue
+    for (const key of courseLookupKeys(row.nome)) {
+      map[key] = row
     }
-    /** @type {Record<string, typeof arr[0]>} */
-    const map = {}
-    for (const row of arr) {
-      if (!row?.nome) continue
-      for (const key of courseLookupKeys(row.nome)) {
-        map[key] = row
-      }
-    }
-    cache = map
-    return cache
-  } catch {
-    cache = {}
-    return cache
   }
+  cache = map
+  return cache
 }
 
 export function normalizeCourseLookupKey(name) {
