@@ -631,6 +631,58 @@ section('12. Desistência de inscrição — confirma, agradece e move fila 143'
     '12.3g shouldOffer não dispara em condicional com plano B',
   )
 
+  // Regressão crítica (lead #23841399 — print do CRM 16:46): "quero fazer um
+  // curso" foi tratado como desistência. NUNCA mais.
+  assert(
+    !messageExpressesEnrollmentDecline('quero fazer um curso', histCurso),
+    '12.3h "quero fazer um curso" NÃO é declínio (interesse positivo)',
+  )
+  assert(
+    !messageExpressesEnrollmentDecline('quero conhecer um curso', histCurso),
+    '12.3i "quero conhecer um curso" NÃO é declínio',
+  )
+  assert(
+    !messageExpressesEnrollmentDecline('quero me inscrever', histCurso),
+    '12.3j "quero me inscrever" NÃO é declínio',
+  )
+  assert(
+    !messageExpressesEnrollmentDecline('gostaria de me matricular', histCurso),
+    '12.3k "gostaria de me matricular" NÃO é declínio',
+  )
+  assert(
+    !messageExpressesEnrollmentDecline('vou fazer o vestibular', histCurso),
+    '12.3l "vou fazer o vestibular" NÃO é declínio',
+  )
+  assert(
+    !messageExpressesEnrollmentDecline('tenho interesse em estudar pedagogia', histCurso),
+    '12.3m "tenho interesse em estudar" NÃO é declínio',
+  )
+  assert(
+    !shouldOfferDesistenciaConfirm('quero fazer um curso', histCurso),
+    '12.3n shouldOffer NÃO dispara para interesse positivo (proteção em camadas)',
+  )
+
+  // Guard de "pergunta recente sobre inscrição/matrícula" — sem ela,
+  // shouldOffer NÃO dispara mesmo se o lead disser algo declínio-like.
+  const histSemPerguntaInscricao = [
+    { role: 'user', content: 'quero saber sobre pedagogia' },
+    {
+      role: 'assistant',
+      content:
+        'O curso de Pedagogia na Sumaré é EAD. A mensalidade é a partir de R$ 199. ' +
+        'A duração é de 4 anos.',
+    },
+    { role: 'user', content: 'entendi' },
+    {
+      role: 'assistant',
+      content: 'Mais alguma dúvida sobre o curso?',
+    },
+  ]
+  assert(
+    !shouldOfferDesistenciaConfirm('não quero me inscrever', histSemPerguntaInscricao),
+    '12.3o shouldOffer NÃO dispara sem pergunta recente sobre inscrição/matrícula',
+  )
+
   const confirmMsg = buildConfirmDesistenciaReply({ pushName: 'Gustavo' })
   assert(
     assistantAskedDesistenciaConfirm(confirmMsg),

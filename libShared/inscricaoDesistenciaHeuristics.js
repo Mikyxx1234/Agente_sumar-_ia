@@ -76,12 +76,39 @@ const NEGACAO_DIRETA_INSCRICAO_RE =
   /\bn[aã]o\s+(quero|vou|pretendo|desejo|tenho\s+interesse|posso|consigo)\s+(me\s+|de\s+|em\s+|com\s+a\s+|a\s+)?(inscrever|matricular|fazer\s+a\s+(inscri[cç][aã]o|matr[ií]cula)|seguir|prosseguir|continuar|avan[cç]ar)\b/i
 
 /**
+ * Interesse positivo EXPLÍCITO em curso/inscrição/matrícula — NUNCA pode ser
+ * tratado como declínio, mesmo se outras regras casarem por acidente.
+ *
+ * Exige: verbo positivo ("quero", "gostaria", "preciso", "vou", "tenho interesse",
+ * "vou fazer", "fazer") + alvo (curso, inscrição, matrícula, estudar, graduar,
+ * pós, EAD, vestibular) — SEM "não" antes do verbo.
+ */
+const INTERESSE_POSITIVO_INSCRICAO_RE =
+  /\b(quero|gostaria|preciso|vou|pretendo|desejo|tenho\s+interesse(?:\s+em)?|me\s+interesso|gostei|posso|adoraria|fazer)\b[\s\S]{0,30}\b(curso|inscri[cç][aã]o|matr[ií]cula|matricular|inscrever|estudar|graduar|gradua[cç][aã]o|p[oó]s|ead|vestibular|formar)\b/i
+
+function hasInteressePositivoNoNeg(t) {
+  if (!INTERESSE_POSITIVO_INSCRICAO_RE.test(t)) return false
+  // Bloqueia se houver "não" ANTES do verbo positivo (ex.: "não quero curso")
+  const m = t.match(INTERESSE_POSITIVO_INSCRICAO_RE)
+  if (!m) return false
+  const idx = t.indexOf(m[0])
+  const before = t.slice(Math.max(0, idx - 12), idx)
+  if (/\bn[aã]o\s*$/i.test(before.trim())) return false
+  return true
+}
+
+/**
  * Lead declarou que não quer seguir com a inscrição / matrícula.
  *
- * Heurística conservadora: para evitar falsos positivos, a negação precisa
- * estar adjacente ao verbo de inscrição/matrícula. Frases condicionais
- * ("se não tiver X, quero Y") e plano B ("ou administração predial")
- * são explicitamente excluídas.
+ * Heurística conservadora em camadas:
+ *  • Frases com interesse positivo explícito ("quero fazer um curso") nunca
+ *    são declínio — guard prioritário.
+ *  • A negação precisa estar adjacente ao verbo de inscrição/matrícula.
+ *  • Frases condicionais ("se não tiver X, quero Y") e plano B
+ *    ("ou administração predial") são explicitamente excluídas.
+ *  • Removidas regras genéricas ("agora não", "deixa pra lá", "não" puro)
+ *    que produziam falsos positivos. Esses casos ficam para o LLM ou
+ *    decisão humana.
  */
 export function messageExpressesEnrollmentDecline(text, historyMessages = []) {
   const t = normalizeMessageForScope(text).toLowerCase()
@@ -92,6 +119,10 @@ export function messageExpressesEnrollmentDecline(text, historyMessages = []) {
   if (t.split(/\s+/).filter(Boolean).length < 2 && !/\b(desisto|desistir|n[aã]o)\b/i.test(t)) {
     return false
   }
+
+  // GUARD PRIORITÁRIO: interesse positivo claro em curso/matrícula sem
+  // negação. Nunca pode virar declínio.
+  if (hasInteressePositivoNoNeg(t)) return false
 
   // 1) Negação direta sobre verbo de inscrição/matrícula PRECEDE o guard
   // de confirmação ("não quero me inscrever" contém "quero me inscrever").
@@ -111,9 +142,11 @@ export function messageExpressesEnrollmentDecline(text, historyMessages = []) {
     // ("se não der, deixa pra lá"); cai nos demais testes abaixo.
   }
 
-  // 2) "não tenho interesse" / "sem interesse" PROXIMO de inscrição/matrícula.
+  // 2) "não tenho interesse" / "sem interesse" PROXIMO de inscrição/matrícula/curso.
+  // Como esses prefixos JÁ contêm a negação, "curso" pode entrar sem causar
+  // falso positivo com "quero conhecer um curso".
   if (
-    /\b(n[aã]o\s+tenho\s+interesse|sem\s+interesse|n[aã]o\s+me\s+interess[ao])\b[\s\S]{0,40}\b(inscri[cç][aã]o|matr[ií]cula|curso|matricul|inscrever|seguir)\b/i.test(
+    /\b(n[aã]o\s+tenho\s+interesse|sem\s+interesse|n[aã]o\s+me\s+interess[ao])\b[\s\S]{0,40}\b(inscri[cç][aã]o|matr[ií]cula|matricul|inscrever|seguir|curso)\b/i.test(
       t,
     )
   ) {
@@ -127,20 +160,18 @@ export function messageExpressesEnrollmentDecline(text, historyMessages = []) {
     if (/^\s*desist[oe]\s*[.!?]*\s*$/i.test(t)) return true
   }
 
-  // 4) "agora não" + matrícula adjacente.
-  if (/\bagora\s+n[aã]o\b[\s\S]{0,20}\b(inscri|matricul|curso|fazer)\b/i.test(t)) return true
-
-  // 5) "deixa pra lá" + inscrição/matrícula.
-  if (/\bdeixa\s+(pra\s+l[aá]|quieto)\b/i.test(t) && /\b(inscri|matricul|curso)\b/i.test(t)) {
-    return true
-  }
-
-  // 6) "não" puro APENAS após o agente perguntar sobre matrícula explicitamente.
-  if (/^\s*n[aã]o\s*[.!?]*\s*$/i.test(t) && assistantAskedEnrollmentInLastReply(historyMessages)) {
-    return true
-  }
-
   return false
+}
+
+/** Assistente pediu explicitamente sobre inscrição/matrícula na última msg? */
+function assistantAskedEnrollmentRecently(historyMessages = []) {
+  const last = lastAssistantText(historyMessages) || ''
+  if (!last) return false
+  // Reaproveita o detector existente do scope; complementa com pergunta direta
+  if (assistantAskedEnrollmentInLastReply(historyMessages)) return true
+  return /\b(deseja\s+(seguir|prosseguir|fazer)\s+(com\s+a\s+)?(inscri[cç][aã]o|matr[ií]cula)|quer\s+(seguir|fazer)\s+a\s+(inscri[cç][aã]o|matr[ií]cula)|posso\s+te\s+ajudar\s+com\s+(a\s+)?(inscri[cç][aã]o|matr[ií]cula))\b/i.test(
+    last,
+  )
 }
 
 /** Lead confirmou a desistência após a pergunta canônica do agente. */
@@ -188,10 +219,19 @@ export function buildDesistenciaAgradecimentoReply(opts = {}) {
   )
 }
 
-/** Contexto mínimo para iniciar fluxo de desistência (sem status de matrícula ativo). */
+/**
+ * Contexto mínimo para iniciar fluxo de desistência. Requisitos cumulativos:
+ *  1. Houve engajamento sobre curso (assistente falou de curso + lead participou).
+ *  2. Mensagem do lead expressa declínio (heurística rígida).
+ *  3. O assistente perguntou recentemente sobre inscrição/matrícula — sem
+ *     essa pergunta o "declínio" perde contexto e vira falso positivo.
+ *  4. O assistente NÃO acabou de pedir confirmação de desistência (evita
+ *     repetir; nesse caso o flow entra em `inConfirmStep`).
+ */
 export function shouldOfferDesistenciaConfirm(userMessage, historyMessages) {
   if (!conversationHadCourseEngagement(historyMessages)) return false
   if (!messageExpressesEnrollmentDecline(userMessage, historyMessages)) return false
+  if (!assistantAskedEnrollmentRecently(historyMessages)) return false
   const lastAssist = lastAssistantText(historyMessages)
   if (assistantAskedDesistenciaConfirm(lastAssist)) return false
   return true

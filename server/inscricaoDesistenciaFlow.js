@@ -284,8 +284,14 @@ export async function tryHandleInscricaoDesistenciaFlow(env, input) {
 
   await setStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_DESISTENCIA, idLead)
 
+  // Log de auditoria: registra o que disparou a oferta de desistência. Útil
+  // para investigar falsos positivos sem precisar reproduzir o estado.
+  const lastAssist = lastAssistantText(historyMessages) || ''
+  const userPreview = String(userMessage || '').slice(0, 120).replace(/\n/g, ' ')
+  const assistPreview = lastAssist.slice(0, 120).replace(/\n/g, ' ')
   console.log(
-    `[inscricaoDesistencia] lead=${idLead ?? 'n/a'} telefone=${telefone} oferta_confirm_desistencia`,
+    `[inscricaoDesistencia] lead=${idLead ?? 'n/a'} telefone=${telefone} oferta_confirm_desistencia ` +
+      `userMsg="${userPreview}" lastAssist="${assistPreview}" historyLen=${historyMessages.length}`,
   )
 
   return {
