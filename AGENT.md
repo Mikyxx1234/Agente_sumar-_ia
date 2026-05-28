@@ -12,6 +12,50 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-05-28 - Pós-matrícula: agradecimento + mover lead para fila de instruções
+
+- **Decisão**
+  - Quando o lead envia o comprovante de pagamento (imagem ou texto
+    canônico) APÓS o link de contrato, o agente:
+    1. Agradece a matrícula e informa que as instruções para iniciar o
+       curso serão encaminhadas em breve (texto canônico atualizado em
+       `buildComprovantePagamentoRecebidoReply`).
+    2. Cria nota Kommo com o comprovante e o destino.
+    3. **Move o lead** via `updateLeadPipelineStatus` para a fila
+       pós-matrícula `pipeline=13756724 / status=106426128`
+       (envs `KOMMO_POS_MATRICULA_PIPELINE_ID` /
+       `KOMMO_POS_MATRICULA_STATUS_ID`).
+  - **Substitui** a chamada anterior de `runDistribuirHumano` (que
+    distribuía para consultor de vendas) — lead matriculado não precisa
+    mais de consultor de vendas, só de quem distribui instruções de
+    início de curso.
+
+- **Contexto**
+  - Antes, o lead matriculado caía na rotina de distribuição comercial
+    (resumo IA + escolha de consultor de vendas + tabela
+    `distribuicao_por_consultor`), o que era desperdício: ele já tinha
+    fechado matrícula, não precisava mais ser tratado como prospect.
+  - Negócio quer uma fila dedicada para "alunos matriculados aguardando
+    instruções para iniciar o curso", visível no CRM.
+
+- **Alternativas descartadas**
+  - *Manter `runDistribuirHumano` e adicionar a movimentação*:
+    duplicava trabalho e o lead acabaria com dois donos (consultor
+    comercial + fila pós-matrícula).
+  - *Mover sem nota Kommo*: perderia rastreabilidade (auditoria do
+    comprovante recebido + razão da movimentação).
+
+- **Impacto**
+  - Reply mais coerente com o estado real do lead.
+  - Fila pós-matrícula passa a receber 100% dos leads que mandam
+    comprovante via WhatsApp.
+  - Se o `id_lead` não estiver disponível em `dados_cliente_sum`, o
+    código loga warning e **não move** (degrada graceful, não quebra a
+    resposta ao lead).
+  - Configurável por env para mover destino sem redeploy.
+
+---
+
 ### 2026-05-28 - Inscrição express via dados do card Kommo (Sumaré Comercial)
 
 - **Decisão**

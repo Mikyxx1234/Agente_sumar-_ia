@@ -525,7 +525,8 @@ export function buildPagamentoSemComprovanteReply(opts = {}) {
 export function buildComprovantePagamentoRecebidoReply(opts = {}) {
   const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
   return (
-    `Perfeito${nameBit}! Recebemos seu comprovante de pagamento. ` +
-    `Nossa equipe vai conferir e em breve um consultor da Faculdade Sumaré entra em contato por aqui para os próximos passos da sua matrícula, tudo bem?`
+    `Agradecemos sua matrícula${nameBit}! ` +
+    `Em breve, assim que seu pagamento for reconhecido, vamos encaminhar aqui as informações ` +
+    `de como prosseguir para iniciar o curso. Qualquer dúvida, é só responder por aqui.`
   )
 }

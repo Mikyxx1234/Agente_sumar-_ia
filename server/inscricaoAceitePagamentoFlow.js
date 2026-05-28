@@ -18,8 +18,7 @@ import {
   updateDadosCliente,
   getLeadIdByTelefone,
 } from './dadosClienteStore.js'
-import { runDistribuirHumano, formatDistribuirHumanoReply } from './distribuirHumanoTool.js'
-import { createLeadNote } from './kommoClient.js'
+import { createLeadNote, updateLeadPipelineStatus } from './kommoClient.js'
 import { fetchCandidatoStatus } from './matriculaCaptacaoPipeline.js'
 import {
   consultarStatusCandidato,
@@ -28,6 +27,18 @@ import {
 } from './sumareCaptacaoClient.js'
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
+
+/** Fila pós-matrícula no Kommo (alunos aguardando instruções de início de curso). */
+const POS_MATRICULA_PIPELINE_DEFAULT = 13756724
+const POS_MATRICULA_STATUS_DEFAULT = 106426128
+
+export function resolvePosMatriculaTarget(env = process.env) {
+  const pipelineId =
+    Number(env?.KOMMO_POS_MATRICULA_PIPELINE_ID) || POS_MATRICULA_PIPELINE_DEFAULT
+  const statusId =
+    Number(env?.KOMMO_POS_MATRICULA_STATUS_ID) || POS_MATRICULA_STATUS_DEFAULT
+  return { pipelineId, statusId }
+}
 
 function buildAgentReturn({ executionId, model, t0, reply, steps, toolCalls, ctxSnapshot, ok = true }) {
   return {
@@ -219,34 +230,52 @@ export async function tryHandleMatriculaAceitePagamentoFlow(env, input) {
     { type: 'comprovante_pagamento_recebido', candidato_id: candidatoId || null },
   ]
 
+  const { pipelineId, statusId } = resolvePosMatriculaTarget(env)
+
   if (idLead) {
     await createLeadNote(
       env,
       idLead,
-      `Comprovante de pagamento recebido via WhatsApp (candidato ${candidatoId || 'n/a'}). Aguardando validação do consultor.`,
+      `Comprovante de pagamento recebido via WhatsApp (candidato ${candidatoId || 'n/a'}). ` +
+        `Lead movido para fila pós-matrícula (pipeline ${pipelineId} / status ${statusId}) — ` +
+        `aguardando instruções de início do curso.`,
     ).catch(() => {})
+
+    const move = await updateLeadPipelineStatus(env, idLead, { pipelineId, statusId }).catch(
+      (err) => ({ ok: false, error: err?.message || String(err) }),
+    )
+    steps.push({
+      type: 'move_lead_pos_matricula',
+      ok: Boolean(move?.ok),
+      pipeline_id: pipelineId,
+      status_id: statusId,
+      error: move?.ok ? undefined : move?.error || move?.code,
+    })
+    toolCalls.push({
+      tool: 'move_lead_pos_matricula',
+      args: { id_lead: idLead, pipeline_id: pipelineId, status_id: statusId },
+      result: move?.ok
+        ? `Lead movido para pipeline=${pipelineId} status=${statusId}`
+        : `Falha ao mover lead: ${move?.error || move?.code || 'unknown'}`,
+      ok: Boolean(move?.ok),
+    })
+    console.log(
+      `[inscricaoAceite] telefone=${telefone} lead=${idLead} comprovante_ok ` +
+        `move_pos_matricula=${Boolean(move?.ok)} pipeline=${pipelineId} status=${statusId}`,
+    )
+  } else {
+    steps.push({
+      type: 'move_lead_pos_matricula',
+      ok: false,
+      pipeline_id: pipelineId,
+      status_id: statusId,
+      error: 'missing_lead_id',
+    })
+    console.warn(
+      `[inscricaoAceite] telefone=${telefone} comprovante_ok mas sem id_lead — ` +
+        `lead NÃO movido para pós-matrícula.`,
+    )
   }
-
-  const dist = await runDistribuirHumano(env, {
-    telefone,
-    id_lead: idLead,
-    motivo: 'consultor',
-  })
-  steps.push({
-    type: 'distribuir_humano_pos_comprovante',
-    ok: Boolean(dist.ok),
-    handoff_mode: dist.handoff_mode,
-  })
-  toolCalls.push({
-    tool: 'distribuir_humano',
-    args: { telefone, id_lead: idLead, motivo: 'consultor' },
-    result: formatDistribuirHumanoReply(dist),
-    ok: Boolean(dist.ok),
-  })
-
-  console.log(
-    `[inscricaoAceite] telefone=${telefone} lead=${idLead ?? 'n/a'} comprovante_ok distrib=${Boolean(dist.ok)}`,
-  )
 
   return {
     handled: true,
@@ -261,6 +290,8 @@ export async function tryHandleMatriculaAceitePagamentoFlow(env, input) {
         inscricaoForm: INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO,
         comprovanteRecebido: true,
         iaPaused: true,
+        posMatriculaPipelineId: pipelineId,
+        posMatriculaStatusId: statusId,
       },
     }),
   }

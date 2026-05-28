@@ -55,7 +55,9 @@ import {
   INSCRICAO_FORM_STATUS_DISTRIBUIR_CONSULTOR,
   INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_POLO_KOMMO,
   matriculaPosFormAlreadyProcessed,
+  buildComprovantePagamentoRecebidoReply,
 } from '../libShared/inscricaoFormHeuristics.js'
+import { resolvePosMatriculaTarget } from '../server/inscricaoAceitePagamentoFlow.js'
 
 let passed = 0
 let failed = 0
@@ -507,6 +509,54 @@ section('10. Plano_Inscricao_CardKommo — fluxo express via card Sumaré Comerc
       detectStateFromReply('blá blá') === null,
     '10.10 estado terminal não é regredido pelo auto-sync',
   )
+}
+
+section('11. Pós-matrícula: agradecimento + mover lead para fila de instruções')
+
+{
+  // 11.1 Novo texto: agradece matrícula + promete instruções
+  const replyPadrao = buildComprovantePagamentoRecebidoReply({})
+  assert(
+    /agradecemos sua matrícula/i.test(replyPadrao),
+    '11.1 reply começa com "agradecemos sua matrícula"',
+  )
+  assert(
+    /pagamento for reconhecido/i.test(replyPadrao),
+    '11.1b reply menciona "pagamento for reconhecido"',
+  )
+  assert(
+    /instru[cç][oõ]es?|prosseguir|iniciar o curso/i.test(replyPadrao),
+    '11.1c reply menciona instruções para iniciar o curso',
+  )
+  assert(
+    !/consultor da Faculdade Sumaré entra em contato/i.test(replyPadrao),
+    '11.1d reply não menciona mais "consultor entra em contato"',
+  )
+
+  // 11.2 Reply com pushName
+  const replyComNome = buildComprovantePagamentoRecebidoReply({ pushName: 'Caio Silva' })
+  assert(/, Caio/i.test(replyComNome), '11.2 reply inclui primeiro nome quando pushName fornecido')
+
+  // 11.3 Defaults da fila pós-matrícula
+  const t1 = resolvePosMatriculaTarget({})
+  assertEqual(t1.pipelineId, 13756724, '11.3 pipelineId default = 13756724')
+  assertEqual(t1.statusId, 106426128, '11.3b statusId default = 106426128')
+
+  // 11.4 Override via env
+  const t2 = resolvePosMatriculaTarget({
+    KOMMO_POS_MATRICULA_PIPELINE_ID: '99999',
+    KOMMO_POS_MATRICULA_STATUS_ID: '88888',
+  })
+  assertEqual(t2.pipelineId, 99999, '11.4 pipelineId override via env')
+  assertEqual(t2.statusId, 88888, '11.4b statusId override via env')
+
+  // 11.5 Env malformado → cai no default (Number('abc') = NaN)
+  const t3 = resolvePosMatriculaTarget({
+    KOMMO_POS_MATRICULA_PIPELINE_ID: 'lixo',
+    KOMMO_POS_MATRICULA_STATUS_ID: '',
+  })
+  assertEqual(t3.pipelineId, 13756724, '11.5 env malformado cai no default pipeline')
+  assertEqual(t3.statusId, 106426128, '11.5b env vazio cai no default status')
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */
