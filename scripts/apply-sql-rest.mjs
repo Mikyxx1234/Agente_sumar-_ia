@@ -111,7 +111,7 @@ async function main() {
   // Verifica colunas esperadas (probe).
   const expected = [
     'id_lead',
-    'teste_AB',
+    'teste_ab',
     'polo_inscricao_escolhido',
     'captacao_unidade',
     'kommo_nome',

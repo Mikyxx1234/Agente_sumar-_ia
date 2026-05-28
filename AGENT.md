@@ -74,7 +74,7 @@ Histórico das decisões estruturais do agente. Formato por entrada:
     Form Sumar). Reduz drop-off durante o preenchimento.
   - Scheduler para de queimar ciclos em leads com curso indisponível.
   - Migration adiciona 10 colunas em `dados_cliente_sum` (`kommo_*`,
-    `polo_inscricao_escolhido`, `captacao_unidade`, `id_lead`, `teste_AB`
+    `polo_inscricao_escolhido`, `captacao_unidade`, `id_lead`, `teste_ab`
     — essas 2 últimas já eram usadas pelo código mas inexistentes na
     tabela, silent fail).
   - Feature flag `INSCRICAO_KOMMO_CARD_EXPRESS_ENABLED=true` (default).

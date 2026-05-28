@@ -698,7 +698,7 @@ app.post('/api/memory/history', async (req, res) => {
 })
 
 // ── Store: dados_cliente (Supabase principal) ──
-//    Node "Atualizar Cliente" do N8N: seta teste_AB='IA' + id_lead por telefone.
+//    Node "Atualizar Cliente" do N8N: seta teste_ab='IA' + id_lead por telefone.
 
 app.post('/api/clientes/marcar-ia', async (req, res) => {
   try {

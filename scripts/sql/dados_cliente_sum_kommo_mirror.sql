@@ -7,9 +7,12 @@
 
 -- Colunas já usadas pelo código (sem existir → PostgREST retornava 400
 -- e a função engolia o erro).
+-- Nota: PostgREST/Postgres normalizam identificadores não-citados para
+-- lowercase. Mantemos `teste_ab` (snake_case) — referências no código
+-- também ajustadas para o nome canônico.
 ALTER TABLE dados_cliente_sum
   ADD COLUMN IF NOT EXISTS id_lead bigint,
-  ADD COLUMN IF NOT EXISTS teste_AB text;
+  ADD COLUMN IF NOT EXISTS teste_ab text;
 
 -- Estado de inscrição.
 ALTER TABLE dados_cliente_sum

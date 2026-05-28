@@ -7,7 +7,7 @@
  * Primeiro node implementado aqui:
  *
  *   UPDATE dados_cliente
- *   SET teste_AB = 'IA',
+ *   SET teste_ab = 'IA',
  *       id_lead  = <id retornado do Kommo>
  *   WHERE telefone = <telefoneCorreto>
  *
@@ -162,7 +162,7 @@ export async function marcarClienteIA(env, { telefone, idLead }) {
   return updateDadosCliente(env, {
     telefone,
     fields: {
-      teste_AB: 'IA',
+      teste_ab: 'IA',
       id_lead: idLeadValue,
     },
   })
@@ -194,7 +194,7 @@ export async function ensureDadosClienteRow(env, { telefone, idLead, fields = {}
   const jid = telefoneToWhatsAppJid(fone)
   const row = {
     telefone: jid || fone,
-    teste_AB: 'IA',
+    teste_ab: 'IA',
     ...fields,
   }
   if (idLead != null && idLead !== '') {
