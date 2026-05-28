@@ -47,6 +47,7 @@ import { filterHistoryMessagesForAgent } from '../../libShared/historySanitize.j
 import { detectFormSumarRecebidoNoKommo } from '../inscricaoPostFormPipeline.js'
 import { tryHandleCaptacaoInscricaoExistenteFlow } from '../captacaoInscricaoExistenteFlow.js'
 import { tryHandlePoloPreFormFlow, tryHandlePoloEscolhaFlow } from '../inscricaoPoloFlow.js'
+import { tryHandleInscricaoFromKommoCard } from '../inscricaoKommoPreFilledFlow.js'
 import {
   messageExpressesCourseInterestOnly,
   messageLooksLikeFormSumarResponse,
@@ -440,6 +441,24 @@ export async function runAgent(env, input) {
   }
 
   if (telefone) {
+    // Plano_Inscricao_CardKommo — antes do polo padrão: tenta express
+    // usando dados pré-preenchidos no card Sumaré Comercial. Cobre:
+    //   1) lead pediu matrícula + card completo → pergunta confirma polo
+    //   2) lead respondeu a confirmação → executa captação direto
+    const kommoCardFlow = await tryHandleInscricaoFromKommoCard(env, formFlowCtx)
+    if (kommoCardFlow?.handled) {
+      const snap = kommoCardFlow.result?.ctxSnapshot || {}
+      console.log(
+        `[${executionId}] KOMMO_CARD_EXPRESS stage=${snap.inscricaoForm ?? 'n/a'} ` +
+          `polo=${snap.poloId ?? snap.poloNome ?? 'n/a'} fail=${Boolean(snap.kommoCardExpressFail)}`,
+      )
+      return {
+        ...kommoCardFlow.result,
+        historyLoaded: historyMessages.length,
+        aiMeta: ctx.toAiMeta(),
+      }
+    }
+
     const poloPreFlow = await tryHandlePoloPreFormFlow(env, formFlowCtx)
     if (poloPreFlow?.handled) {
       console.log(

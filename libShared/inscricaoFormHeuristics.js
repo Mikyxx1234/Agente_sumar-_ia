@@ -26,17 +26,23 @@ export const FORM_SUMAR_FLOW_COMPLETED_MARKER = '[FORMULARIO_SUMAR_PREENCHIDO]'
 export const INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_NOVA_INSCRICAO = 'aguardando_confirm_nova_inscricao'
 /** Comprovante de pagamento recebido — consultor segue o atendimento. */
 export const INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO = 'comprovante_pagamento_recebido'
+/** Captação falhou (curso indisponível, dados inválidos) — consultor humano segue. Terminal para parar loops. */
+export const INSCRICAO_FORM_STATUS_DISTRIBUIR_CONSULTOR = 'distribuir_consultor'
+/** Card Kommo completo, agente perguntou ao lead se mantém o polo do card antes de seguir express. */
+export const INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_POLO_KOMMO = 'aguardando_confirm_polo_kommo'
 
 const MATRICULA_POS_FORM_TERMINAL_STATUSES = new Set([
   INSCRICAO_FORM_STATUS_CONCLUIDO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
   INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO,
+  INSCRICAO_FORM_STATUS_DISTRIBUIR_CONSULTOR,
 ])
 
 /** Em andamento — não reprocessar pós-form nem salesbot 49813. */
 const MATRICULA_POS_FORM_IN_PROGRESS_STATUSES = new Set([
   INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM,
   INSCRICAO_FORM_STATUS_AGUARDANDO_POLO,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_POLO_KOMMO,
   ...MATRICULA_POS_FORM_TERMINAL_STATUSES,
 ])
 

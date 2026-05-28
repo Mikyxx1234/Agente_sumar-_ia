@@ -1,8 +1,13 @@
 # Plano — Inscrição usando dados do card Kommo (Sumaré Comercial)
 
-> **Status:** aguardando 3 decisões pendentes antes de executar.
-> **Aprovação parcial em:** 2026-05-27 — perguntas `ux_confirma` e `ux_inscrito` respondidas.
-> Quando todas as decisões pendentes forem confirmadas, este plano vira commits.
+> **Status:** EXECUTADO em 2026-05-28.
+> **Decisões finais:** `ux_confirma=express`, `ux_inscrito=criar_novo`,
+> `polo=confirma_polo`, `campos_extras=sim_obrigatorios`, `migration=ambos`.
+> **Pré-requisito manual:** colar `scripts/sql/00_bootstrap_exec_sql.sql`
+> uma vez no Supabase Studio antes de rodar
+> `node scripts/apply-sql-rest.mjs scripts/sql/dados_cliente_sum_kommo_mirror.sql`.
+> Sem a migration o código continua funcionando (cai no fluxo Form Sumar
+> tradicional), mas o express não ativa.
 
 ---
 

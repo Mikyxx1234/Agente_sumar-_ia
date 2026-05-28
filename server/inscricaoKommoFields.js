@@ -20,7 +20,7 @@ const FIELD_ALIASES = {
     'codigo curso',
   ],
   tipoInscricao: ['tipo inscrição', 'tipo de ingresso', 'tipo_inscricao', 'tipo de inscrição'],
-  poloInscricao: ['polo inscrição', 'polo da inscrição', 'polo_inscricao'],
+  poloInscricao: ['polo inscrição', 'polo da inscrição', 'polo_inscricao', 'sum_polo', 'sum polo'],
   dataNasc: [
     'data nascimento',
     'data de nascimento',
@@ -29,10 +29,20 @@ const FIELD_ALIASES = {
     'dt nasc',
     'sum_data nascimento',
     'sum data nascimento',
+    'sum_data_nascimento',
   ],
   sexo: ['sexo', 'gênero', 'genero'],
   unidade: ['unidade', 'polo', 'campus', 'unidade inscrição'],
   turno: ['turno', 'modalidade'],
+  modalidade: ['sum_modalidade', 'sum modalidade', 'modalidade'],
+  statusInscricao: [
+    'sum_status_inscricao',
+    'sum status inscricao',
+    'sum_status inscrição',
+    'sum status inscrição',
+    'status inscrição',
+    'status inscricao',
+  ],
 }
 
 function isCampoAusente(val) {
@@ -122,6 +132,8 @@ export async function fetchLeadFormSnapshot(env, leadId) {
   const sexo = pickByAliases(custom, fieldsByName, FIELD_ALIASES.sexo)
   const unidade = pickByAliases(custom, fieldsByName, FIELD_ALIASES.unidade)
   const turno = pickByAliases(custom, fieldsByName, FIELD_ALIASES.turno)
+  const modalidade = pickByAliases(custom, fieldsByName, FIELD_ALIASES.modalidade)
+  const statusInscricao = pickByAliases(custom, fieldsByName, FIELD_ALIASES.statusInscricao)
 
   return {
     ok: true,
@@ -137,6 +149,8 @@ export async function fetchLeadFormSnapshot(env, leadId) {
       sexo,
       unidade,
       turno,
+      modalidade,
+      status_inscricao: statusInscricao,
       responsible_user_id: Number(lead.responsible_user_id) || 0,
       status_id: Number(lead.status_id) || 0,
       pipeline_id: Number(lead.pipeline_id) || 0,

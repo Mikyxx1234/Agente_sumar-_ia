@@ -11,6 +11,7 @@ import {
   INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_NOVA_INSCRICAO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM,
   INSCRICAO_FORM_STATUS_AGUARDANDO_POLO,
+  INSCRICAO_FORM_STATUS_DISTRIBUIR_CONSULTOR,
   messageLooksLikeFormSumarResponse,
   messageIsFlowResponsesReceived,
   messageLooksLikeFormFollowUp,
@@ -379,6 +380,11 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
   let ctxForm = 'completed'
   let skipSchedulerWhatsapp = false
   let contratoWhatsappSent = false
+  /** Captação Sumaré falhou de forma definitiva (curso indisponível / dados
+   * inválidos). Vai gravar `distribuir_consultor` no fim para parar o loop
+   * do scheduler (Plano_Inscricao_CardKommo / lead #23608285). */
+  let captacaoFailedTerminal = false
+  let captacaoFailReason = ''
 
   if (isSumareCaptacaoEnabled(env)) {
     const cap = await runMatriculaCaptacaoAfterForm(env, {
@@ -439,6 +445,8 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
       } else {
         reply = buildInscricaoFormCompleteReply({ pushName, ok: false })
       }
+      captacaoFailedTerminal = true
+      captacaoFailReason = `${cap.code || 'sem_code'}:${missing || cap.error || 'sem_detalhe'}`
       toolCalls.push({
         tool: 'sumare_captacao_contrato',
         args: { telefone, id_lead: idLead },
@@ -486,6 +494,18 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
     // pelo portal Sumaré; só volta IA quando consultor liberar.
     const pauseRes = await pauseAtendimentoIa(env, telefone)
     steps.unshift({ type: 'ia_paused', ok: pauseRes.ok, reason: 'aguardando_aceite_contrato' })
+  } else if (captacaoFailedTerminal && !matriculaOk) {
+    // Plano_Inscricao_CardKommo — captação falhou definitivamente e o salesbot
+    // fallback também não rodou. Estado terminal evita o loop do scheduler
+    // (que ficava reprocessando o mesmo lead a cada tick — caso CAIO SILVA).
+    const pauseRes = await pauseAtendimentoIa(env, telefone)
+    steps.unshift({
+      type: 'ia_paused',
+      ok: pauseRes.ok,
+      reason: `distribuir_consultor:${captacaoFailReason}`,
+    })
+    await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_DISTRIBUIR_CONSULTOR).catch(() => {})
+    ctxForm = INSCRICAO_FORM_STATUS_DISTRIBUIR_CONSULTOR
   } else {
     const pauseRes = await pauseAtendimentoIa(env, telefone)
     steps.unshift({ type: 'ia_paused', ok: pauseRes.ok })
@@ -630,6 +650,7 @@ export async function tryProcessInscricaoPostFormPipeline(env, input) {
   if (status === INSCRICAO_FORM_STATUS_CONCLUIDO) return null
   if (status === INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE) return null
   if (status === INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO) return null
+  if (status === INSCRICAO_FORM_STATUS_DISTRIBUIR_CONSULTOR) return null
 
   const idLead = await resolveLeadId(env, telefone, leadIdHint)
 

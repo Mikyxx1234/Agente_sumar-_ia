@@ -12,6 +12,81 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-05-28 - Inscrição express via dados do card Kommo (Sumaré Comercial)
+
+- **Decisão**
+  - Quando o card Kommo já tem todos os campos `sum_*` preenchidos
+    (`sum_Nome`, `sum_CPF`, `sum_Email`, `sum_Curso`, `sum_Polo`,
+    `sum_Data_Nascimento`, `sum_Modalidade`), o agente **pula o Form
+    Sumar** e cria a candidatura direto via API Sumaré. Implementado em
+    [server/inscricaoKommoPreFilledFlow.js](server/inscricaoKommoPreFilledFlow.js)
+    e plugado no `agentRunner.js` antes do `tryHandlePoloPreFormFlow`.
+  - **UX `ux_confirma = express`**: sem etapa "confirma seus dados?" —
+    aproveita o card como fonte de verdade.
+  - **UX `ux_inscrito = criar_novo`**: mesmo com `sum_Status_Inscricao =
+    "Inscrito"`, cria nova candidatura (decisão de negócio: API decide o
+    que fazer com duplicação).
+  - **UX `polo = confirma_polo`**: antes de criar a candidatura, agente
+    pergunta ao lead "quer manter `<sum_Polo>` como polo?". Novo estado
+    `aguardando_confirm_polo_kommo`. Lead pode confirmar ("sim", "isso",
+    "manter"), declinar ("não", "trocar polo") ou citar outro polo direto.
+  - **Campos obrigatórios `sim_obrigatorios`**: se faltar `sum_Data_Nascimento`
+    OU `sum_Modalidade` no card, NÃO tenta express — cai no Form Sumar
+    tradicional.
+  - **Loop scheduler**: captação falhada (curso indisponível, dados
+    inválidos) agora grava `inscricao_form_status = distribuir_consultor`
+    (novo estado terminal). Antes, o pipeline pós-form deixava o lead em
+    `aguardando_distribuicao_form` para sempre — o scheduler reprocessava
+    a cada tick (caso CAIO SILVA #23608285).
+  - **Espelhamento Kommo → Supabase**: módulo
+    [server/kommoCardMirror.js](server/kommoCardMirror.js) grava o
+    snapshot do card nas colunas `kommo_*` de `dados_cliente_sum` com
+    TTL de 5 min (evita PATCH a cada turno).
+
+- **Contexto**
+  - Caso CAIO SILVA #23608285: card completo, mas agente perguntou polo,
+    mandou Form Sumar e entrou em loop no scheduler quando a API Sumaré
+    rejeitou "Pedagogia" (indisponível para inscrição automática). Lead
+    sem resposta + scheduler queimando ciclos.
+  - Vários canais comerciais da Sumaré já populam o card antes do lead
+    chegar no WhatsApp — manter Form Sumar como única porta de entrada
+    duplicava trabalho e introduzia pontos de falha.
+
+- **Alternativas descartadas**
+  - *Confirmar dados genérico ("Você é X, CPF Y? confirma?")*: aumenta
+    fricção; trade-off de "dado errado no card" fica com o canal que
+    populou o card (responsabilidade já existente).
+  - *Polo `sim_pular` (não perguntar)*: rejeitado pelo negócio — o polo
+    é informação que o lead pode ter mudado de ideia desde o cadastro
+    inicial; vale uma confirmação rápida.
+  - *Polo `sempre_pergunta` (ignora `sum_Polo`)*: ignorar a informação
+    do card aumentaria atrito; melhor confirmar.
+  - *Campos `nao_sei` (deixar API decidir)*: cria mais loops para
+    `distribuir_consultor` em casos triviais que o card já indicava
+    incompletos.
+  - *Migration via REST direto*: PostgREST não aceita DDL puro; precisa
+    da RPC `exec_sql`. Caminho híbrido: arquivo `.sql` versionado +
+    aplicador via REST (com bootstrap manual UMA VEZ no painel
+    Supabase). Arquivos em [scripts/sql/](scripts/sql/).
+
+- **Impacto**
+  - Lead com card completo: matrícula em 1-2 turnos (vs. 4-5 turnos via
+    Form Sumar). Reduz drop-off durante o preenchimento.
+  - Scheduler para de queimar ciclos em leads com curso indisponível.
+  - Migration adiciona 10 colunas em `dados_cliente_sum` (`kommo_*`,
+    `polo_inscricao_escolhido`, `captacao_unidade`, `id_lead`, `teste_AB`
+    — essas 2 últimas já eram usadas pelo código mas inexistentes na
+    tabela, silent fail).
+  - Feature flag `INSCRICAO_KOMMO_CARD_EXPRESS_ENABLED=true` (default).
+    Para desligar: `false` no env.
+  - Pré-requisito manual: aplicar [scripts/sql/00_bootstrap_exec_sql.sql](scripts/sql/00_bootstrap_exec_sql.sql)
+    no Supabase Studio (uma vez), depois `node scripts/apply-sql-rest.mjs
+    scripts/sql/dados_cliente_sum_kommo_mirror.sql`. Sem isso o código
+    continua funcionando (cai no Form Sumar), mas o fluxo express não
+    ativa.
+
+---
+
 ### 2026-05-27 - Link enviado ao candidato sempre na tela `/contrato` (ASSINAR CONTRATO)
 
 - **Decisão**

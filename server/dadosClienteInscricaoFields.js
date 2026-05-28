@@ -7,6 +7,15 @@
 export const DADOS_CLIENTE_INSCRICAO_SELECT =
   'id,telefone,inscricao_form_status,inscricao_form_recebido_at,atendimento_ia'
 
+/**
+ * SELECT estendido para o fluxo express via card Kommo
+ * (Plano_Inscricao_CardKommo): inclui as colunas espelhadas do card.
+ */
+export const DADOS_CLIENTE_KOMMO_MIRROR_SELECT =
+  'id,telefone,inscricao_form_status,inscricao_form_recebido_at,atendimento_ia,' +
+  'polo_inscricao_escolhido,captacao_unidade,' +
+  'kommo_nome,kommo_cpf,kommo_email,kommo_data_nasc,kommo_curso,kommo_polo,kommo_modalidade,kommo_status_inscricao,kommo_sync_at'
+
 /** Prefixos da mensagem padrão quando captação/salesbot conclui o pós-form (dedupe outbound). */
 export const POST_FORM_REGISTRADO_PREFIX =
   'obrigado! registramos o formulário. um consultor da faculdade sumaré'

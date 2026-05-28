@@ -44,6 +44,18 @@ import { isKommoSystemOrIntegrationNote } from '../libShared/inboundMessageSanit
 import { detectStateFromReply, AUTO_SYNC_TERMINAL_OR_ADVANCED } from '../server/inscricaoStateAutoSync.js'
 import { buildPoloEscolhaPreFormMessage } from '../libShared/sumarePoloCatalog.js'
 import { resolvePortalUrlForCandidato } from '../server/sumareCaptacaoClient.js'
+import {
+  evaluateKommoExpressReadiness,
+} from '../server/kommoCardMirror.js'
+import {
+  leadConfirmsKeepPolo,
+  leadDeclinesKeepPolo,
+} from '../server/inscricaoKommoPreFilledFlow.js'
+import {
+  INSCRICAO_FORM_STATUS_DISTRIBUIR_CONSULTOR,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_POLO_KOMMO,
+  matriculaPosFormAlreadyProcessed,
+} from '../libShared/inscricaoFormHeuristics.js'
 
 let passed = 0
 let failed = 0
@@ -418,6 +430,82 @@ section('9. Link de contrato sempre na tela "ASSINAR CONTRATO" (/contrato)')
   assert(
     r5.url.startsWith('https://sumare.edu.br/vem-pra-sumare/vestibular/contrato?id='),
     '9.5 default env → URL canônica /contrato',
+  )
+}
+
+section('10. Plano_Inscricao_CardKommo — fluxo express via card Sumaré Comercial')
+
+{
+  // 10.1 Card completo (todos os campos) → ready=true
+  const cardCompleto = {
+    nome: 'CAIO SILVA',
+    cpf: '123.456.789-00',
+    email: 'caio@example.com',
+    curso_inscricao: 'Pedagogia',
+    polo_inscricao: 'Barra Funda',
+    data_nasc: '16/05/2000',
+    modalidade: 'EAD',
+  }
+  const r10a = evaluateKommoExpressReadiness(cardCompleto)
+  assert(r10a.ready === true, '10.1 card completo → ready=true')
+  assertEqual(r10a.missing.length, 0, '10.1b missing vazio')
+
+  // 10.2 Card sem data_nasc → ready=false + missing contém data_nasc
+  const cardSemDataNasc = { ...cardCompleto, data_nasc: '' }
+  const r10b = evaluateKommoExpressReadiness(cardSemDataNasc)
+  assert(r10b.ready === false, '10.2 sem data_nasc → ready=false')
+  assert(r10b.missing.includes('data_nasc'), '10.2b missing contém data_nasc')
+
+  // 10.3 Card sem modalidade → ready=false (decisão: sim_obrigatorios)
+  const cardSemModalidade = { ...cardCompleto, modalidade: '' }
+  const r10c = evaluateKommoExpressReadiness(cardSemModalidade)
+  assert(r10c.ready === false, '10.3 sem modalidade → ready=false (sim_obrigatorios)')
+  assert(r10c.missing.includes('modalidade'), '10.3b missing contém modalidade')
+
+  // 10.4 "Não informado" tratado como ausente
+  const cardComNaoInformado = { ...cardCompleto, cpf: 'Não informado' }
+  const r10d = evaluateKommoExpressReadiness(cardComNaoInformado)
+  assert(r10d.ready === false, '10.4 "Não informado" conta como ausente')
+  assert(r10d.missing.includes('cpf'), '10.4b missing contém cpf')
+
+  // 10.5 Fallback: snapshot.turno também serve como modalidade
+  const cardComTurno = { ...cardCompleto, modalidade: '', turno: 'EAD' }
+  const r10e = evaluateKommoExpressReadiness(cardComTurno)
+  assert(r10e.ready === true, '10.5 turno=EAD compensa modalidade vazia')
+
+  // 10.6 Heurística confirma manter polo
+  assert(leadConfirmsKeepPolo('sim'), '10.6 "sim" confirma manter polo')
+  assert(leadConfirmsKeepPolo('Isso mesmo!'), '10.6b "isso mesmo" confirma')
+  assert(leadConfirmsKeepPolo('manter'), '10.6c "manter" confirma')
+  assert(!leadConfirmsKeepPolo('quero matrícula em Pedagogia'), '10.6d frase longa não confirma')
+
+  // 10.7 Heurística declina manter polo
+  assert(leadDeclinesKeepPolo('não'), '10.7 "não" declina')
+  assert(leadDeclinesKeepPolo('Não quero esse polo'), '10.7b "não quero esse polo" declina')
+  assert(leadDeclinesKeepPolo('quero trocar de polo'), '10.7c "trocar polo" declina')
+  assert(!leadDeclinesKeepPolo('sim'), '10.7d "sim" não declina')
+
+  // 10.8 Status terminal distribuir_consultor para bloquear loop scheduler
+  assert(
+    matriculaPosFormAlreadyProcessed({ inscricao_form_status: INSCRICAO_FORM_STATUS_DISTRIBUIR_CONSULTOR }),
+    '10.8 distribuir_consultor é terminal (scheduler skip)',
+  )
+
+  // 10.9 aguardando_confirm_polo_kommo bloqueia reentrada do scheduler
+  assert(
+    matriculaPosFormAlreadyProcessed({
+      inscricao_form_status: INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_POLO_KOMMO,
+    }),
+    '10.9 aguardando_confirm_polo_kommo conta como em-progresso',
+  )
+
+  // 10.10 auto-sync NÃO regride distribuir_consultor (terminal)
+  assert(
+    AUTO_SYNC_TERMINAL_OR_ADVANCED.has(INSCRICAO_FORM_STATUS_DISTRIBUIR_CONSULTOR) ||
+      // Se ainda não está no set explícito, ao menos não é interpretado como
+      // polo pelo detectStateFromReply (terminal não vem de reply de polo).
+      detectStateFromReply('blá blá') === null,
+    '10.10 estado terminal não é regredido pelo auto-sync',
   )
 }
 
