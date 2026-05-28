@@ -12,6 +12,68 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-05-28 - Pause gate com exceção para `desistencia_concluida` (early handler)
+
+- **Decisão**
+  - `flushSessionInner` (webhook Evolution) deixou de usar
+    `isAtendimentoIaPaused` e passou a usar `shouldHoldOnIaPause`
+    (`server/dadosClienteStore.js`). A decisão composta retorna
+    `{ hold, paused, reason }`:
+    - `atendimento_ia='pause'` + `inscricao_form_status='desistencia_concluida'`
+      → `hold=false`, `reason='desistencia_concluida'` → drain prossegue.
+    - Demais casos com `pause` → `hold=true` (bloqueia, igual antes).
+  - `runAgent` ganhou um handler "early" `tryHandleDesistenciaJaRegistrada`
+    rodando junto com `tryHandleCaptacaoInscricaoExistenteFlow` e
+    `tryHandleMatriculaAceitePagamentoFlow`, ANTES do gate interno de
+    pause. Esse handler só responde a mensagem canônica
+    "Sua desistência já foi registrada…" quando o status do banco é
+    `desistencia_concluida` — não depende de histórico.
+
+- **Contexto**
+  - Lead que confirmava desistência ficava com `atendimento_ia=pause`.
+    Próxima mensagem (qualquer "boa tarde", "oi") era bloqueada por
+    `flushSessionInner` e o lead nunca recebia resposta. O fallback
+    "Sua desistência já foi registrada…" existia em
+    `tryHandleInscricaoDesistenciaFlow` mas estava posicionado depois
+    do gate de pause em `runAgent`, sendo inalcançável.
+  - Bug reportado no lead #23841399 (William testest) — generalizado
+    a qualquer lead que confirmasse desistência.
+
+- **Alternativas descartadas**
+  - Auto-reativar IA após pause: perigoso, pode roubar conversa de
+    consultor humano em casos de `distribuir_humano`.
+  - Remover `atendimento_ia=pause` do fluxo de desistência: quebraria
+    a semântica de "encerrado" e poderia fazer o LLM oferecer
+    reativação espontânea quando o lead só estava agradecendo.
+  - Mover a checagem `isAtendimentoIaPaused` inteira para depois dos
+    early handlers: cobriria o caso, mas perderia a otimização de
+    `skipPauseCheck` no `runAgent` (round-trip extra a Supabase).
+
+- **Impacto**
+  - Lead que voltar a falar após desistência confirmada recebe
+    sempre a mensagem canônica via early handler — sem precisar
+    intervenção manual.
+  - Demais casos de `atendimento_ia=pause` (matrícula em andamento,
+    consultor humano) continuam bloqueando o drain, como antes.
+  - Testes seção 13 cobrem `decideHoldOnIaPause` em 9 combinações
+    (null row, paused null, pause genérico, pause + desistência,
+    case-insensitive). 117/117 testes passando.
+  - Função pura `decideHoldOnIaPause` torna o gate testável sem
+    Supabase e abre espaço para outras exceções similares no futuro
+    (cada uma com seu `reason` distinto).
+
+- **Arquivos**
+  - `server/dadosClienteStore.js`: `decideHoldOnIaPause` (pura) +
+    `shouldHoldOnIaPause` (async).
+  - `server/inscricaoDesistenciaFlow.js`: `tryHandleDesistenciaJaRegistrada`.
+  - `server/ai/agentRunner.js`: plug do early handler antes do
+    gate `isAtendimentoIaPaused`.
+  - `server/evolution/webhookEvolution.js`: gate trocado para
+    `shouldHoldOnIaPause` com log explícito quando há early handler.
+  - `scripts/test-inscricao-flow.mjs`: seção 13 (11 asserts).
+
+---
+
 ### 2026-05-28 - Desistência de inscrição (sem interesse) → fila 143
 
 - **Decisão**
