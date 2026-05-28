@@ -48,6 +48,7 @@ import { detectFormSumarRecebidoNoKommo } from '../inscricaoPostFormPipeline.js'
 import { tryHandleCaptacaoInscricaoExistenteFlow } from '../captacaoInscricaoExistenteFlow.js'
 import { tryHandlePoloPreFormFlow, tryHandlePoloEscolhaFlow } from '../inscricaoPoloFlow.js'
 import { tryHandleInscricaoFromKommoCard } from '../inscricaoKommoPreFilledFlow.js'
+import { tryHandleInscricaoDesistenciaFlow } from '../inscricaoDesistenciaFlow.js'
 import {
   messageExpressesCourseInterestOnly,
   messageLooksLikeFormSumarResponse,
@@ -441,6 +442,18 @@ export async function runAgent(env, input) {
   }
 
   if (telefone) {
+    const desistenciaFlow = await tryHandleInscricaoDesistenciaFlow(env, formFlowCtx)
+    if (desistenciaFlow?.handled) {
+      console.log(
+        `[${executionId}] INSCRICAO_DESISTENCIA stage=${desistenciaFlow.result?.ctxSnapshot?.inscricaoForm ?? 'n/a'}`,
+      )
+      return {
+        ...desistenciaFlow.result,
+        historyLoaded: historyMessages.length,
+        aiMeta: ctx.toAiMeta(),
+      }
+    }
+
     // Plano_Inscricao_CardKommo — antes do polo padrão: tenta express
     // usando dados pré-preenchidos no card Sumaré Comercial. Cobre:
     //   1) lead pediu matrícula + card completo → pergunta confirma polo

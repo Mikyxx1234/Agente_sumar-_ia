@@ -25,13 +25,16 @@
 
 import {
   INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_DESISTENCIA,
   INSCRICAO_FORM_STATUS_AGUARDANDO,
   INSCRICAO_FORM_STATUS_CONCLUIDO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
   INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
+  INSCRICAO_FORM_STATUS_DESISTENCIA_CONCLUIDA,
 } from '../libShared/inscricaoFormHeuristics.js'
 import { assistantAskedPoloPreFormChoice } from '../libShared/sumarePoloCatalog.js'
+import { assistantAskedDesistenciaConfirm } from '../libShared/inscricaoDesistenciaHeuristics.js'
 import { ensureDadosClienteRow, updateDadosCliente } from './dadosClienteStore.js'
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
@@ -43,6 +46,7 @@ const TERMINAL_OR_ADVANCED_STAGES = new Set([
   INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
   INSCRICAO_FORM_STATUS_AGUARDANDO,
+  INSCRICAO_FORM_STATUS_DESISTENCIA_CONCLUIDA,
 ])
 
 /**
@@ -58,6 +62,9 @@ export function detectStateFromReply(reply) {
   if (!text) return null
   if (assistantAskedPoloPreFormChoice(text)) {
     return INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM
+  }
+  if (assistantAskedDesistenciaConfirm(text)) {
+    return INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_DESISTENCIA
   }
   return null
 }

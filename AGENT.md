@@ -12,6 +12,36 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-05-28 - Desistência de inscrição (sem interesse) → fila 143
+
+- **Decisão**
+  - Quando o agente já apresentou o curso, tirou dúvidas e o lead declara
+    que **não quer seguir com a inscrição**, o fluxo servidor
+    (`tryHandleInscricaoDesistenciaFlow`) intercepta antes do LLM:
+    1. Pergunta canônica de confirmação (outros cursos, consultor, ou
+       confirmar desistência).
+    2. Se o lead confirma → agradece, pausa IA, grava
+       `sum_Motivo da perda = "Sem Interesse"` e move para
+       `pipeline=13756724 / status=143`.
+  - Se o lead volta atrás ("quero me inscrever", "mudei de ideia") → limpa
+    status e deixa o fluxo normal continuar.
+  - Não roda durante matrícula ativa (form, polo, aceite contrato, etc.).
+
+- **Contexto**
+  - Leads que desistem após tirar dúvidas ficavam no funil de atendimento IA
+    sem registro formal de perda no Kommo.
+
+- **Alternativas descartadas**
+  - *Deixar só o LLM decidir*: inconsistente; sem PATCH no campo enum nem
+    movimentação garantida.
+
+- **Impacto**
+  - Env: `INSCRICAO_DESISTENCIA_ENABLED`, `KOMMO_DESISTENCIA_STATUS_ID=143`,
+    `KOMMO_DESISTENCIA_PIPELINE_ID=13756724`.
+  - Estados: `aguardando_confirm_desistencia`, `desistencia_concluida`.
+
+---
+
 ### 2026-05-28 - Pós-matrícula: agradecimento + mover lead para fila de instruções
 
 - **Decisão**

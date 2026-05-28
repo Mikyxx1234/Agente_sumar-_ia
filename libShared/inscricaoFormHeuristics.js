@@ -30,12 +30,17 @@ export const INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO = 'comprovante_pagamento
 export const INSCRICAO_FORM_STATUS_DISTRIBUIR_CONSULTOR = 'distribuir_consultor'
 /** Card Kommo completo, agente perguntou ao lead se mantém o polo do card antes de seguir express. */
 export const INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_POLO_KOMMO = 'aguardando_confirm_polo_kommo'
+/** Lead declarou que não quer inscrição — aguardando confirmação explícita de desistência. */
+export const INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_DESISTENCIA = 'aguardando_confirm_desistencia'
+/** Desistência confirmada — lead movido para fila de perda e IA pausada. */
+export const INSCRICAO_FORM_STATUS_DESISTENCIA_CONCLUIDA = 'desistencia_concluida'
 
 const MATRICULA_POS_FORM_TERMINAL_STATUSES = new Set([
   INSCRICAO_FORM_STATUS_CONCLUIDO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
   INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO,
   INSCRICAO_FORM_STATUS_DISTRIBUIR_CONSULTOR,
+  INSCRICAO_FORM_STATUS_DESISTENCIA_CONCLUIDA,
 ])
 
 /** Em andamento — não reprocessar pós-form nem salesbot 49813. */
@@ -43,6 +48,7 @@ const MATRICULA_POS_FORM_IN_PROGRESS_STATUSES = new Set([
   INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM,
   INSCRICAO_FORM_STATUS_AGUARDANDO_POLO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_POLO_KOMMO,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_DESISTENCIA,
   ...MATRICULA_POS_FORM_TERMINAL_STATUSES,
 ])
 

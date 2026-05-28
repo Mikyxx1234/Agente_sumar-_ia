@@ -58,6 +58,21 @@ import {
   buildComprovantePagamentoRecebidoReply,
 } from '../libShared/inscricaoFormHeuristics.js'
 import { resolvePosMatriculaTarget } from '../server/inscricaoAceitePagamentoFlow.js'
+import { resolveDesistenciaTarget } from '../server/inscricaoDesistenciaFlow.js'
+import {
+  messageExpressesEnrollmentDecline,
+  messageConfirmsFinalDesistencia,
+  messageRevokesDesistencia,
+  shouldOfferDesistenciaConfirm,
+  buildConfirmDesistenciaReply,
+  buildDesistenciaAgradecimentoReply,
+  assistantAskedDesistenciaConfirm,
+  conversationHadCourseEngagement,
+} from '../libShared/inscricaoDesistenciaHeuristics.js'
+import {
+  INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_DESISTENCIA,
+  INSCRICAO_FORM_STATUS_DESISTENCIA_CONCLUIDA,
+} from '../libShared/inscricaoFormHeuristics.js'
 
 let passed = 0
 let failed = 0
@@ -557,6 +572,73 @@ section('11. Pós-matrícula: agradecimento + mover lead para fila de instruçõ
   })
   assertEqual(t3.pipelineId, 13756724, '11.5 env malformado cai no default pipeline')
   assertEqual(t3.statusId, 106426128, '11.5b env vazio cai no default status')
+}
+
+section('12. Desistência de inscrição — confirma, agradece e move fila 143')
+
+{
+  const histCurso = [
+    { role: 'user', content: 'quero saber sobre pedagogia' },
+    {
+      role: 'assistant',
+      content:
+        'O curso de Pedagogia na Sumaré é EAD. A mensalidade é a partir de R$ 199. Deseja seguir com a inscrição?',
+    },
+    { role: 'user', content: 'qual a duração?' },
+    {
+      role: 'assistant',
+      content: 'A graduação em Pedagogia tem duração de 4 anos. Posso te ajudar com a inscrição?',
+    },
+  ]
+
+  assert(
+    conversationHadCourseEngagement(histCurso),
+    '12.1 histórico com curso + dúvidas = engajamento',
+  )
+  assert(
+    messageExpressesEnrollmentDecline('não quero me inscrever', histCurso),
+    '12.2 "não quero me inscrever" é declínio',
+  )
+  assert(
+    shouldOfferDesistenciaConfirm('não tenho interesse no curso', histCurso),
+    '12.3 oferece confirmação de desistência',
+  )
+  assert(
+    !shouldOfferDesistenciaConfirm('quero me matricular', histCurso),
+    '12.3b pedido de matrícula não é desistência',
+  )
+
+  const confirmMsg = buildConfirmDesistenciaReply({ pushName: 'Gustavo' })
+  assert(
+    assistantAskedDesistenciaConfirm(confirmMsg),
+    '12.4 mensagem canônica detectada pelo auto-sync',
+  )
+  assert(/impulsionar a sua carreira/i.test(confirmMsg), '12.4b menciona outros cursos')
+  assert(/confirmar a desistência/i.test(confirmMsg), '12.4c pede confirmação')
+
+  assert(messageConfirmsFinalDesistencia('sim, confirmo a desistência'), '12.5 confirma desistência')
+  assert(messageConfirmsFinalDesistencia('não'), '12.5b "não" após pergunta = confirma')
+  assert(messageRevokesDesistencia('mudei de ideia, quero me inscrever'), '12.6 revoga desistência')
+
+  const thanks = buildDesistenciaAgradecimentoReply({})
+  assert(/obrigado pelo contato/i.test(thanks), '12.7 agradecimento final')
+  assert(/qualquer outra dúvida/i.test(thanks), '12.7b convida contato futuro')
+
+  const tDes = resolveDesistenciaTarget({})
+  assertEqual(tDes.pipelineId, 13756724, '12.8 pipeline default Sumaré')
+  assertEqual(tDes.statusId, 143, '12.8b status default fila 143')
+
+  assert(
+    matriculaPosFormAlreadyProcessed({
+      inscricao_form_status: INSCRICAO_FORM_STATUS_DESISTENCIA_CONCLUIDA,
+    }),
+    '12.9 desistencia_concluida é terminal',
+  )
+  assertEqual(
+    detectStateFromReply(buildConfirmDesistenciaReply({})),
+    INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_DESISTENCIA,
+    '12.10 auto-sync detecta pergunta de desistência',
+  )
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */

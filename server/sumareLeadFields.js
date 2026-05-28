@@ -20,6 +20,16 @@ const SUM_CURSO_ALIASES = [
   'curso sumaré',
 ]
 
+const SUM_MOTIVO_PERDA_ALIASES = [
+  'sum_motivo da perda',
+  'sum_motivo da perdida',
+  'sum_motivo perda',
+  'sum motivo da perda',
+  'motivo da perda',
+]
+
+const MOTIVO_PERDA_SEM_INTERESSE = 'Sem Interesse'
+
 const FIELD_CACHE_TTL_MS = 5 * 60 * 1000
 const LEAD_UPDATE_DEDUPE_TTL_MS = 6 * 60 * 60 * 1000
 
@@ -62,6 +72,103 @@ async function resolveSumCursoFieldId(env) {
   const id = await resolveFieldIdByAliases(env, SUM_CURSO_ALIASES, 'KOMMO_FIELD_SUM_CURSO_ID')
   if (id) setFieldCache('sum_curso', id)
   return id
+}
+
+async function resolveSumMotivoPerdaFieldDef(env) {
+  const fromEnv = Number(env.KOMMO_FIELD_SUM_MOTIVO_PERDA_ID)
+  if (Number.isFinite(fromEnv) && fromEnv > 0) {
+    const lookup = await listLeadCustomFields(env)
+    if (lookup.ok && lookup.byName) {
+      for (const def of lookup.byName.values()) {
+        if (Number(def.id) === fromEnv) return def
+      }
+    }
+    return { id: fromEnv, enums: null }
+  }
+  const cached = fieldCache.get('sum_motivo_perda_def')
+  if (cached?.def && Date.now() - cached.ts < FIELD_CACHE_TTL_MS) return cached.def
+
+  const lookup = await listLeadCustomFields(env)
+  if (!lookup.ok || !lookup.byName) return null
+  for (const alias of SUM_MOTIVO_PERDA_ALIASES) {
+    const def = lookup.byName.get(String(alias).trim().toLowerCase())
+    if (def?.id) {
+      fieldCache.set('sum_motivo_perda_def', { def, ts: Date.now() })
+      return def
+    }
+  }
+  return null
+}
+
+/**
+ * Grava `sum_Motivo da perda` = "Sem Interesse" (enum) no lead Kommo.
+ */
+export async function setSumMotivoPerdaSemInteresse(env, { leadId, telefone }) {
+  const idLead = await resolveLeadIdInternal(env, { leadId, telefone })
+  if (!idLead) return { ok: false, code: 'LEAD_NOT_FOUND' }
+
+  const fieldDef = await resolveSumMotivoPerdaFieldDef(env)
+  if (!fieldDef?.id) return { ok: false, code: 'FIELD_SUM_MOTIVO_PERDA_NOT_FOUND' }
+
+  const enumId = findEnumIdByLabel(fieldDef, MOTIVO_PERDA_SEM_INTERESSE)
+  if (!enumId) {
+    return {
+      ok: false,
+      code: 'ENUM_SEM_INTERESSE_NOT_FOUND',
+      fieldId: fieldDef.id,
+      error: `Opção "${MOTIVO_PERDA_SEM_INTERESSE}" não encontrada no campo`,
+    }
+  }
+
+  const result = await patchLeadCustomFieldEnum(env, idLead, fieldDef.id, enumId)
+  return {
+    ...result,
+    leadId: idLead,
+    fieldId: fieldDef.id,
+    enumId,
+    motivo: MOTIVO_PERDA_SEM_INTERESSE,
+  }
+}
+
+function normalizeFieldLabel(s) {
+  return String(s || '')
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .trim()
+}
+
+function findEnumIdByLabel(fieldDef, label) {
+  const want = normalizeFieldLabel(label)
+  const enums = Array.isArray(fieldDef?.enums) ? fieldDef.enums : []
+  for (const en of enums) {
+    const v = normalizeFieldLabel(en?.value ?? en?.name ?? '')
+    if (v === want) return Number(en.id)
+  }
+  return null
+}
+
+async function patchLeadCustomFieldEnum(env, leadId, fieldId, enumId) {
+  const base = (env.KOMMO_BASE_URL || '').replace(/\/$/, '')
+  const token = env.KOMMO_ACCESS_TOKEN || ''
+  if (!base || !token) return { ok: false, code: 'KOMMO_NOT_CONFIGURED' }
+  try {
+    const res = await fetch(`${base}/api/v4/leads/${leadId}`, {
+      method: 'PATCH',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        custom_fields_values: [{ field_id: fieldId, values: [{ enum_id: enumId }] }],
+      }),
+    })
+    const text = await res.text().catch(() => '')
+    return { ok: res.ok, status: res.status, body: text.slice(0, 300) }
+  } catch (err) {
+    return { ok: false, code: 'FETCH_FAILED', error: err.message }
+  }
 }
 
 async function patchLeadCustomField(env, leadId, fieldId, value) {
