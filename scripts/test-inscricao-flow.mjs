@@ -665,6 +665,53 @@ section('12. Desistência de inscrição — confirma, agradece e move fila 143'
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */
+/* 13. Pause Gate — desistência concluída deve PASSAR mesmo com IA pausada    */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+section('13. Gate atendimento_ia=pause — exceção para desistência concluída')
+
+{
+  const { decideHoldOnIaPause } = await import('../server/dadosClienteStore.js')
+
+  // 13.1 Linha vazia (cliente nunca tocado) — nada pausa.
+  const r1 = decideHoldOnIaPause(null)
+  assertEqual(r1.hold, false, '13.1 row nula = hold false')
+  assertEqual(r1.paused, false, '13.1b row nula = paused false')
+
+  // 13.2 atendimento_ia null + qualquer status — não pausa.
+  const r2 = decideHoldOnIaPause({ atendimento_ia: null, inscricao_form_status: 'concluido' })
+  assertEqual(r2.hold, false, '13.2 atendimento_ia=null = não bloqueia')
+
+  // 13.3 pause + status genérico (matrícula/consultor) — bloqueia.
+  const r3 = decideHoldOnIaPause({
+    atendimento_ia: 'pause',
+    inscricao_form_status: 'aguardando',
+  })
+  assertEqual(r3.hold, true, '13.3 pause sem exceção = hold=true (matrícula em andamento)')
+  assertEqual(r3.paused, true, '13.3b paused=true')
+  assertEqual(r3.reason, null, '13.3c reason=null quando bloqueia')
+
+  // 13.4 pause + desistencia_concluida — NÃO bloqueia (early handler responde).
+  const r4 = decideHoldOnIaPause({
+    atendimento_ia: 'pause',
+    inscricao_form_status: 'desistencia_concluida',
+  })
+  assertEqual(r4.hold, false, '13.4 desistencia_concluida = drain prossegue')
+  assertEqual(r4.paused, true, '13.4b paused=true (informa que IA estava pausada)')
+  assertEqual(
+    r4.reason,
+    'desistencia_concluida',
+    '13.4c reason indica qual early handler vai cobrir',
+  )
+
+  // 13.5 Case-insensitive: 'PAUSE' / 'Pause'.
+  const r5 = decideHoldOnIaPause({ atendimento_ia: 'PAUSE', inscricao_form_status: null })
+  assertEqual(r5.hold, true, '13.5 PAUSE maiúsculo = bloqueia')
+  const r6 = decideHoldOnIaPause({ atendimento_ia: 'Pause', inscricao_form_status: null })
+  assertEqual(r6.hold, true, '13.5b Pause capitalizado = bloqueia')
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
 /* Resumo                                                                     */
 /* ────────────────────────────────────────────────────────────────────────── */
 

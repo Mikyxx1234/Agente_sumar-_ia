@@ -59,6 +59,43 @@ export async function isAtendimentoIaPaused(env, telefone) {
   return String(row?.atendimento_ia || '').toLowerCase() === 'pause'
 }
 
+/**
+ * Lógica pura da decisão do gate de pause — separada para facilitar teste.
+ * Veja `shouldHoldOnIaPause` para descrição dos campos.
+ */
+export function decideHoldOnIaPause(row) {
+  const paused = String(row?.atendimento_ia || '').toLowerCase() === 'pause'
+  if (!paused) return { hold: false, paused: false, reason: null }
+  if (row?.inscricao_form_status === 'desistencia_concluida') {
+    return { hold: false, paused: true, reason: 'desistencia_concluida' }
+  }
+  return { hold: true, paused: true, reason: null }
+}
+
+/**
+ * Decisão composta sobre o gate de IA pausada. Retorna `{ hold, paused, reason }`.
+ *
+ * - `paused`: cliente está com `atendimento_ia='pause'` no banco.
+ * - `hold`: se TRUE, o caller deve abortar o drain (igual ao antigo
+ *   `isAtendimentoIaPaused`). Se FALSE mesmo com `paused=true`, existe um
+ *   handler "early" (rodado antes do gate do orquestrador) responsável por
+ *   responder a mensagem — neste caso o drain DEVE prosseguir.
+ * - `reason`: rótulo descritivo do early handler (`'desistencia_concluida'`,
+ *   etc.) ou `null` quando `hold=true`.
+ *
+ * Exceção atual: `inscricao_form_status='desistencia_concluida'` — o lead
+ * que voltar a falar precisa receber a mensagem canônica "Sua desistência já
+ * foi registrada…" em vez de silêncio.
+ */
+export async function shouldHoldOnIaPause(env, telefone) {
+  const row = await fetchDadosClienteByTelefone(
+    env,
+    telefone,
+    'atendimento_ia,inscricao_form_status',
+  )
+  return decideHoldOnIaPause(row)
+}
+
 function getConfig(env) {
   const url = env.SUPABASE_URL || env.VITE_SUPABASE_URL || ''
   const key = env.SUPABASE_KEY || env.VITE_SUPABASE_KEY || ''

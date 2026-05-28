@@ -48,7 +48,10 @@ import { detectFormSumarRecebidoNoKommo } from '../inscricaoPostFormPipeline.js'
 import { tryHandleCaptacaoInscricaoExistenteFlow } from '../captacaoInscricaoExistenteFlow.js'
 import { tryHandlePoloPreFormFlow, tryHandlePoloEscolhaFlow } from '../inscricaoPoloFlow.js'
 import { tryHandleInscricaoFromKommoCard } from '../inscricaoKommoPreFilledFlow.js'
-import { tryHandleInscricaoDesistenciaFlow } from '../inscricaoDesistenciaFlow.js'
+import {
+  tryHandleInscricaoDesistenciaFlow,
+  tryHandleDesistenciaJaRegistrada,
+} from '../inscricaoDesistenciaFlow.js'
 import {
   messageExpressesCourseInterestOnly,
   messageLooksLikeFormSumarResponse,
@@ -343,6 +346,22 @@ export async function runAgent(env, input) {
       )
       return {
         ...aceiteFlow.result,
+        historyLoaded: 0,
+        aiMeta: ctx.toAiMeta(),
+      }
+    }
+
+    // Desistência já concluída: precisa rodar ANTES do gate `atendimento_ia=pause`,
+    // senão o lead que voltar a falar fica sem nenhuma resposta. O handler
+    // completo (oferecer/confirmar desistência) continua rodando mais abaixo,
+    // após o load de histórico.
+    const desistenciaJaFlow = await tryHandleDesistenciaJaRegistrada(env, formFlowCtx)
+    if (desistenciaJaFlow?.handled) {
+      console.log(
+        `[${executionId}] DESISTENCIA_JA_REGISTRADA telefone=${telefone}`,
+      )
+      return {
+        ...desistenciaJaFlow.result,
         historyLoaded: 0,
         aiMeta: ctx.toAiMeta(),
       }

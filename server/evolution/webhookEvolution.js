@@ -47,7 +47,7 @@ import { transcribeAudioBase64, analyzeImageBase64 } from './openaiMedia.js'
 import { fetchEvolutionMediaBase64, resolveInstanceName, describeMediaPayloadShape } from './evolutionMedia.js'
 import { runAgent } from '../ai/agentRunner.js'
 import { saveConversation } from '../historyStore.js'
-import { getLeadIdByTelefone, isAtendimentoIaPaused } from '../dadosClienteStore.js'
+import { getLeadIdByTelefone, shouldHoldOnIaPause } from '../dadosClienteStore.js'
 import { seenMessage, withSessionLock } from './concurrency.js'
 import { findLeadByPhone } from '../kommoClient.js'
 import { assertLeadInAgentFunnel, describeLeadFunnel } from '../kommoAgentFunnelGate.js'
@@ -524,12 +524,22 @@ async function flushSessionInner(env, sessionId, opts = {}) {
       return { skipped: 'reply_cooldown', telefone, pending, remainingMs }
     }
 
-    if (telefone && (await isAtendimentoIaPaused(env, telefone))) {
-      const pending = await peekPending()
-      console.log(
-        `[Evolution][flush] ${sessionId} held — ia_paused (matrícula/consultor ativo) | pending: ${pending}`,
-      )
-      return { skipped: 'ia_paused', pending }
+    if (telefone) {
+      const pauseDecision = await shouldHoldOnIaPause(env, telefone)
+      if (pauseDecision.hold) {
+        const pending = await peekPending()
+        console.log(
+          `[Evolution][flush] ${sessionId} held — ia_paused (matrícula/consultor ativo) | pending: ${pending}`,
+        )
+        return { skipped: 'ia_paused', pending }
+      }
+      if (pauseDecision.paused && pauseDecision.reason) {
+        // IA pausada, mas com handler early que vai responder mensagem canônica
+        // (ex: desistência já concluída). Drain prossegue.
+        console.log(
+          `[Evolution][flush] ${sessionId} ia_paused mas early_handler=${pauseDecision.reason} — drain prossegue`,
+        )
+      }
     }
 
     const leadIdHint = Number(opts.leadIdHint)

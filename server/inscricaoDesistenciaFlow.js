@@ -176,6 +176,43 @@ async function finalizeDesistencia(env, { telefone, idLead, executionId, pushNam
 }
 
 /**
+ * Handler "early" — roda ANTES do gate `atendimento_ia=pause`. Cobre apenas
+ * o caso em que a desistência já está concluída: responde a mensagem canônica
+ * ("Sua desistência já foi registrada…") sem depender de histórico.
+ *
+ * Sem este handler, o gate `pause` deixa o lead sem nenhuma resposta após
+ * desistência confirmada — o `tryHandleInscricaoDesistenciaFlow` completo
+ * roda DEPOIS do gate e nunca é alcançado.
+ *
+ * @returns {Promise<null | { handled: true, result: object }>}
+ */
+export async function tryHandleDesistenciaJaRegistrada(env, input) {
+  if (!isFeatureEnabled(env)) return null
+  const { telefone, userMessage, executionId, model, t0 } = input || {}
+  if (!telefone || !String(userMessage || '').trim()) return null
+
+  const row = await fetchDadosClienteByTelefone(env, telefone, DADOS_CLIENTE_INSCRICAO_SELECT).catch(
+    () => null,
+  )
+  const status = row?.[FORM_STATUS_FIELD] ?? null
+  if (status !== INSCRICAO_FORM_STATUS_DESISTENCIA_CONCLUIDA) return null
+
+  return {
+    handled: true,
+    result: buildAgentReturn({
+      executionId,
+      model,
+      t0,
+      reply:
+        'Obrigado pelo contato! Sua desistência já foi registrada. ' +
+        'Se tiver qualquer dúvida no futuro, estamos à disposição por aqui.',
+      steps: [{ type: 'desistencia_ja_registrada_early' }],
+      ctxSnapshot: { inscricaoForm: status, desistenciaJaRegistrada: true },
+    }),
+  }
+}
+
+/**
  * @returns {Promise<null | { handled: true, result: object }>}
  */
 export async function tryHandleInscricaoDesistenciaFlow(env, input) {
