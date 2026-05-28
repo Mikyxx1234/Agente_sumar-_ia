@@ -12,6 +12,7 @@ import {
   deleteEvaluation,
   retryEvaluation,
 } from '../lib/feedbackIAStore'
+import { useScopedLeadIds, leadMatchesScope } from '../lib/funnelScope'
 import KommoLeadLink from './KommoLeadLink'
 import FeedbackIAPatchPanel from './FeedbackIAPatchPanel'
 
@@ -295,7 +296,7 @@ const TABS = [
   { id: 'patch', label: 'Otimizar Prompt' },
 ]
 
-export default function FeedbackIA() {
+export default function FeedbackIA({ kommoScope = null }) {
   const [stats, setStats] = useState(null)
   const [evals, setEvals] = useState([])
   const [evalsError, setEvalsError] = useState(null)
@@ -308,6 +309,11 @@ export default function FeedbackIA() {
   const [running, setRunning] = useState(false)
   const [statusMsg, setStatusMsg] = useState('')
   const [busyById, setBusyById] = useState({})
+
+  // Filtro por escopo de perfil (Agente Inscrição): pega leadIds do funil
+  // filtrado e mantém só avaliações desses leads. Quando kommoScope é null
+  // (Atendimento ou nenhum), scopedLeadIds.leadIds = null = sem filtro.
+  const scopedLeadIds = useScopedLeadIds(kommoScope)
 
   const fetchAll = useCallback(async () => {
     setLoading(true)
@@ -338,8 +344,13 @@ export default function FeedbackIA() {
       list = list.filter((r) => String(r.lead_id || '').toLowerCase().includes(q))
     }
     if (filterVerdict) list = list.filter((r) => r.verdict === filterVerdict)
+    if (scopedLeadIds.leadIds) {
+      // Evaluations sempre têm lead_id, então passWhenMissing=false força
+      // descarte de qualquer linha sem lead_id válido (defensivo).
+      list = list.filter((r) => leadMatchesScope(r.lead_id, scopedLeadIds, { passWhenMissing: false }))
+    }
     return list
-  }, [evals, filterLead, filterVerdict])
+  }, [evals, filterLead, filterVerdict, scopedLeadIds])
 
   const runManual = async () => {
     const id = manualLead.trim()

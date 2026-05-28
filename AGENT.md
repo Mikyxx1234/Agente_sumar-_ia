@@ -74,6 +74,258 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-05-28 - Separação TOTAL entre perfis (Atendimento com `mode: exclude`)
+
+- **Decisão**
+  - Estender `kommoScope` com campo `mode: 'include' | 'exclude'`
+    (default `'include'`, preservando comportamento anterior).
+  - **Agente Atendimento** passa a ter `kommoScope` ativo com
+    `mode: 'exclude'` e `statusIds: [INSCRIÇÃO, AGUARDANDO_PAGAMENTO]`
+    — Dashboard / Execuções / Feedback IA filtram **excluindo** leads
+    que estão nessas duas colunas.
+  - **Agente Inscrição** marcado explicitamente com `mode: 'include'`
+    nos mesmos `statusIds`.
+  - Helper compartilhado `leadMatchesScope(leadId, scopedState)` em
+    `src/lib/funnelScope.js` centraliza a regra; cada componente apenas
+    delega. Heurística para execuções sem `leadId` (playground, lookup
+    falhou): `mode=include` descarta (não confirma pertencimento),
+    `mode=exclude` mantém (não está nos status excluídos).
+  - **Aba Matrículas removida do perfil Atendimento** (toda matrícula
+    vem do agente de Inscrição; ficaria vazia após o filtro).
+  - **Funil Kommo** recebe um escopo dedicado por perfil
+    (`profile.kommoFunnelScope`), separado do `kommoScope` usado para
+    filtragem client-side. Necessário porque o endpoint do Kommo só
+    sabe filtrar por inclusão (sem operador "not in"):
+    - Atendimento → `[ATENDIMENTO (106140284), AGUARDANDO_RESPOSTA (106377088)]`
+    - Inscrição   → `[INSCRIÇÃO (106804680), AGUARDANDO_PAGAMENTO (106426128)]`
+  - Constante `KOMMO_STATUS_AGUARDANDO_RESPOSTA = 106377088` levantada
+    em 2026-05-28 via Network do Kommo (PATCH ao arrastar lead).
+
+- **Contexto**
+  - Após Fase 2, o perfil Atendimento ainda mostrava "tudo" em
+    Dashboard/Execuções/Feedback IA, incluindo dados dos leads de
+    INSCRIÇÃO/PAGAMENTO. Consultor pediu separação completa: Inscrição
+    só os 2 status do agente de inscrição; Atendimento todo o resto.
+  - Como o `status_id` de AGUARDANDO RESPOSTA ainda não foi
+    levantado, a abordagem por **exclusão** (em vez de inclusão
+    explícita dos status do Atendimento) evita o bloqueio: qualquer
+    coluna nova no Kommo cai automaticamente em "Atendimento".
+
+- **Alternativas descartadas**
+  - *Listar explicitamente os `statusIds` do Atendimento*: precisaria
+    do ID de AGUARDANDO RESPOSTA agora, e quebraria toda vez que uma
+    coluna nova surgisse no funil.
+  - *Filtrar `MatriculasViewer` com o mesmo `kommoScope`*: na prática
+    daria lista vazia (matrícula → lead em INSCRIÇÃO/PAGAMENTO). Mais
+    honesto remover a aba do perfil Atendimento.
+  - *Estender o `Funil Kommo` do Atendimento por exclusão*: o endpoint
+    do Kommo não tem operador "not in". Listar leads do pipeline
+    inteiro e filtrar custaria muitos GETs extras — defere para quando
+    tivermos o ID de AGUARDANDO RESPOSTA.
+
+- **Impacto**
+  - Atualizados: `src/lib/funnelScope.js`, `src/lib/agentProfiles.js`,
+    `src/components/Dashboard.jsx`, `src/components/ExecutionViewer.jsx`,
+    `src/components/FeedbackIA.jsx`, `src/App.jsx`.
+  - Persistência: usuários que tinham `matriculas` como última página
+    do perfil Atendimento caem automaticamente em `dashboard`
+    (`loadPageForProfile` valida contra o `nav` atualizado).
+  - Backend: zero mudança nesta entrega — usa o mesmo endpoint
+    `/api/scheduler/funnel?statusIds=…` (chamado com os IDs do
+    Inscrição em ambos os perfis; o que muda é a operação client-side).
+  - Rollback: `git revert` da mudança restaura o comportamento parcial
+    anterior (Atendimento sem filtro, Inscrição com filtro).
+
+---
+
+### 2026-05-28 - Perfis de agente no painel (Atendimento + Inscrição)
+
+- **Decisão**
+  - Painel React passa a ter **dois perfis de espaço de trabalho**, alternáveis
+    via dropdown no topo da sidebar (padrão visual inspirado no troca-conta do
+    Kommo):
+    1. **Agente Atendimento** (perfil padrão) — mantém as 8 abas atuais:
+       Dashboard, Funil Kommo, Prompts, Teste IA, Execuções, Feedback IA,
+       Matrículas, Atualização IA.
+    2. **Agente Inscrição** — 5 abas dedicadas: Dashboard, Execuções,
+       Matrículas, Feedback IA, Funil Kommo (Inscrição).
+  - Estado do perfil ativo persistido em `localStorage` (`agent_profile`).
+  - **Página corrente é lembrada por perfil** (`agent_profile_page` é um
+    objeto `{ atendimento: pageId, inscricao: pageId }`): trocar de perfil
+    e voltar mantém a última aba aberta naquele perfil.
+  - **Fase 1 (esta entrega)**: apenas a UI shell. As 4 abas do perfil
+    Inscrição reusam os mesmos componentes do Atendimento, com um banner
+    `InscricaoScopeBanner` no topo avisando que **o filtro por agente ainda
+    não está aplicado** — exibem dados de todos os agentes até a Fase 2.
+  - **Fase 2 (definição esclarecida em 2026-05-28)**: a separação é por
+    **status (coluna) dentro do mesmo pipeline AGENTE-SUMARÉ** (`13756724`).
+    Status IDs centralizados em `src/lib/agentProfiles.js`:
+    - `KOMMO_STATUS_ATENDIMENTO = 106140284` (Agente Atendimento — já
+      é o `KOMMO_AGENT_STATUS_ID` do `.env`)
+    - `KOMMO_STATUS_INSCRICAO = 106804680` (Agente Inscrição)
+    - `KOMMO_STATUS_AGUARDANDO_PAGAMENTO = 106426128` (Agente
+      Inscrição — mesmo ID já em uso como `KOMMO_POS_MATRICULA_STATUS_ID`;
+      lead vai pra cá após enviar comprovante)
+  - Cada perfil tem `kommoScope: { pipelineId, statusIds }` na sua
+    config. Componentes que precisam filtrar dados por agente recebem
+    esse `kommoScope` via prop e filtram client-side (ou via query
+    param quando o endpoint suporta).
+  - **Implementação por aba** está sendo feita progressivamente após
+    a definição dos IDs (ver entrada subsequente).
+
+- **Contexto**
+  - Negócio terá dois agentes operando em paralelo: um faz atendimento
+    comercial (já existente), outro automatiza inscrições/matrículas.
+  - Consultor pediu separação visual pra "não ficar tudo junto e confuso"
+    — métricas, feedback e funil de cada agente isolados.
+  - Espelha o padrão do Kommo onde cada conta tem perfis (CRUZEIRO,
+    ANHANGUERA, UEaD, etc.) trocáveis pelo header do app.
+
+- **Alternativas descartadas**
+  - *Rotas distintas (`/atendimento/*` vs `/inscricao/*`)*: o app não usa
+    react-router, adicionaria dependência só pra isso.
+  - *Tabs/segmented control no header de cada tela*: ocuparia espaço útil
+    da página e não dá a sensação de "espaço de trabalho separado" que o
+    usuário pediu.
+  - *Implementar tudo em uma fase (UI + filtros de dados)*: como o
+    critério de separação dos dados ainda não está definido pelo
+    negócio, isso travava o trabalho. Separar em fases libera a UI já
+    e deixa o filtro pra quando a regra estiver clara.
+
+- **Impacto**
+  - Novos arquivos: `src/lib/agentProfiles.js` (definição central dos
+    perfis + helpers de persistência), `src/components/AgentProfileSwitcher.jsx`
+    (botão + dropdown), `src/components/InscricaoScopeBanner.jsx` (banner
+    da Fase 1).
+  - `src/components/Sidebar.jsx`: deixa de ter `NAV_ITEMS` fixa, recebe
+    `activeProfile` e `onProfileChange` por props.
+  - `src/App.jsx`: roteamento passa a depender do par `(profileId, pageId)`;
+    as 4 abas do perfil Inscrição (`inscricao-matriculas`,
+    `inscricao-dashboard`, `inscricao-feedback`, `inscricao-funil`)
+    renderizam wrappers com banner + componente existente.
+  - CSS em `src/App.css`: novas classes `.profile-switcher`,
+    `.profile-switcher-trigger`, `.profile-switcher-dropdown`,
+    `.profile-switcher-item`, `.inscricao-scope-banner`.
+  - Para adicionar um terceiro perfil no futuro: basta acrescentar
+    entrada em `PROFILES` no `agentProfiles.js` (sem mexer em Sidebar
+    ou App.jsx).
+
+---
+
+### 2026-05-28 - Fase 2 perfis: filtro client-side por escopo Kommo
+
+- **Decisão**
+  - Cada componente que precisa filtrar por agente recebe a prop
+    `kommoScope = { pipelineId, statusIds }` quando renderizado dentro
+    do perfil Agente Inscrição. Quando a prop é null (perfil Atendimento
+    ou contexto sem perfil), comportamento é IDÊNTICO ao anterior — sem
+    filtro algum.
+  - Helper compartilhado em `src/lib/funnelScope.js`:
+    - `buildFunnelUrl(scope)` — monta `/api/scheduler/funnel?pipelineId=X&statusIds=Y,Z`
+    - `fetchScopedFunnel(scope)` — chama o endpoint e devolve `Set<leadIds>`
+    - `useScopedLeadIds(scope)` — hook React que recarrega quando o scope muda
+  - Aplicação por tela do perfil Agente Inscrição:
+    - **Funil Kommo (Inscrição)**: passa o scope no fetch — backend
+      devolve leads dos 2 status (`106804680` + `106426128`)
+    - **Feedback IA**: filtra avaliações cujo `lead_id` está no
+      `Set<leadIds>` retornado pelo funil do scope
+    - **Dashboard**: filtra execuções com `getExecutionLeadId(exec)`
+      (extrai leadId dos `steps` que fazem lookup Kommo) e mantém só
+      as que estão no `Set<leadIds>`
+    - **Execuções**: mesmo `ExecutionViewer.jsx` do perfil Atendimento,
+      mas recebendo `kommoScope` → aplica o mesmo filtro que o
+      Dashboard antes dos demais filtros (status/feedback/tools/etc.)
+    - **Matrículas**: sem filtro adicional — toda matrícula registrada
+      já é resultado do agente de inscrição por natureza
+  - Banner `InscricaoScopeBanner` removido das 4 abas (componente foi
+    mantido no repo caso seja útil em outras situações futuras).
+
+- **Backend (única mudança aditiva)**
+  - `server.js` → `/api/scheduler/funnel` agora aceita query params
+    OPCIONAIS `?pipelineId=X&statusIds=Y,Z`. Quando ausentes, usa
+    `KOMMO_AGENT_PIPELINE_ID`/`KOMMO_AGENT_STATUS_ID` do `.env`
+    (comportamento original). Quando presentes, busca leads de cada
+    status via `listLeadsByStatus` (1 GET por status) e concatena.
+  - Endpoint continua **read-only** no Kommo — sem PATCH, sem mover
+    lead, sem mensagem. Sem efeitos colaterais em schedulers, Redis,
+    Supabase ou WhatsApp.
+  - Resposta inclui campos novos no `config`: `effectivePipelineId`,
+    `effectiveStatusIds`, `scoped` (boolean).
+
+- **Contexto**
+  - Pipeline AGENTE-SUMARÉ é único; agentes diferentes operam em
+    colunas (status) diferentes. Para separar visualmente os dados
+    no painel, basta filtrar pelos status_ids correspondentes a cada
+    agente.
+  - Status IDs foram descobertos manualmente pelo consultor via
+    DevTools do Kommo (resposta `/api/v4/leads/pipelines/13756724`).
+
+- **Alternativas descartadas**
+  - *Coluna nova na tabela `ai_rule_evaluations` armazenando
+    `status_id_at_eval`*: mudança de schema, requer migration,
+    afeta backfill. Filtragem client-side é mais simples e suficiente.
+  - *Endpoint novo `/api/scheduler/funnel/inscricao`*: duplicaria
+    código sem ganho — o original já recebe os dois IDs como
+    parâmetros, mais limpo.
+
+- **Impacto**
+  - Mudança no backend é **aditiva e retroativa-compatível**: 100%
+    do tráfego atual (sem query params) continua idêntico.
+  - Aumento marginal de uso da API Kommo: ao abrir "Funil Kommo
+    (Inscrição)", o painel faz 2 GETs em vez de 1 a cada 10s. Ainda
+    bem dentro do rate limit (7 req/s do Kommo).
+  - Nenhum env novo necessário; status IDs ficam em
+    `src/lib/agentProfiles.js` (constantes exportadas).
+  - Rollback trivial: `git revert` do único commit afeta apenas a
+    feature nova; o resto continua funcionando.
+
+---
+
+### 2026-05-28 - Redesign da tela "Execuções" (filtros + reorganização visual)
+
+- **Decisão**
+  - Reorganizar `src/components/ExecutionViewer.jsx` mantendo a estrutura de
+    painel duplo (lista à esquerda, detalhe à direita) e adicionar:
+    1. Barra de filtros com `status` (todos/sucesso/erro), `feedback`
+       (todos/👍/👎/sem), `tools` (todos/com/sem), `período`
+       (todos/hoje/7d/30d) e `ordenação` (mais recente/antigo/demorado).
+    2. Stat-cards no topo: total, erros, tempo médio, tokens totais.
+    3. Cards da lista com hierarquia visual revisada (status + tempo
+       relativo no topo, mensagem em destaque, ID + duração + tools no
+       footer).
+    4. Agrupamento da lista por data (Hoje / Ontem / Esta semana /
+       Este mês / Mais antigos) com headers sticky.
+    5. Toolbar do header: ações destrutivas (Limpar) separadas
+       visualmente das demais; botões de Reindexar FAQ ficam em
+       grupo secundário (visual mais discreto).
+
+- **Contexto**
+  - Tela tinha apenas busca textual por ID/mensagem, sem filtros por
+    status, feedback, presença de tools ou período. Consultor relatou
+    "conversas sem filtro e bem desorganizado".
+  - Header misturava ações de Reindexar FAQ com Atualizar/Limpar no
+    mesmo nível visual, dificultando localizar a ação desejada.
+
+- **Alternativas descartadas**
+  - *Apenas adicionar filtros sem mexer no layout*: resolveria 1/2 do
+    problema relatado; ficaria visualmente igual.
+  - *Refactor maior (tabela, drawer modal para detalhe, export CSV,
+    bulk delete)*: sairia do padrão das outras telas
+    (Conversas, FeedbackIA), mais risco de regressão.
+
+- **Impacto**
+  - Sem alterações em backend, contrato de `executionStore` ou
+    `executionFeedbackStore`. Filtragem/ordenação 100% client-side
+    sobre o array já carregado.
+  - CSS novo em `src/App.css`: `.exec-stats`, `.exec-stat-card`,
+    `.exec-filters`, `.exec-filter-group`, `.exec-segmented`,
+    `.exec-group-header`. Reaproveita variáveis e tokens existentes.
+  - Padrão de filtros (segmented control) fica como referência para
+    aplicar nas demais telas que listam dados (FeedbackIA, Conversas,
+    Matrículas) se necessário no futuro.
+
+---
+
 ### 2026-05-28 - Desistência de inscrição (sem interesse) → fila 143
 
 - **Decisão**

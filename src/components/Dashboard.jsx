@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { getExecutionsByRange } from '../lib/executionStore'
 import { calcCostBRL } from '../lib/openaiPricing'
+import { useScopedLeadIds, getExecutionLeadId, leadMatchesScope } from '../lib/funnelScope'
 
 const TOPIC_LABELS = {
   buscar_conhecimento: 'Busca base Sumaré (RAG)',
@@ -273,8 +274,8 @@ const PRESETS = [
   { label: '30 dias', days: 30 },
 ]
 
-export default function Dashboard() {
-  const [executions, setExecutions] = useState([])
+export default function Dashboard({ kommoScope = null }) {
+  const [executionsRaw, setExecutionsRaw] = useState([])
   const [loading, setLoading] = useState(true)
   const [activePreset, setActivePreset] = useState(7)
 
@@ -283,10 +284,20 @@ export default function Dashboard() {
   const [startDate, setStartDate] = useState(sevenAgo)
   const [endDate, setEndDate] = useState(today)
 
+  // Filtro por escopo de perfil (Agente Inscrição): mantém só execuções
+  // cujo leadId está no funil filtrado pelos statusIds do escopo.
+  // Quando kommoScope é null (Atendimento), leadIds = null = sem filtro.
+  const scopedLeadIds = useScopedLeadIds(kommoScope)
+
+  const executions = useMemo(() => {
+    if (!scopedLeadIds.leadIds) return executionsRaw
+    return executionsRaw.filter((exec) => leadMatchesScope(getExecutionLeadId(exec), scopedLeadIds))
+  }, [executionsRaw, scopedLeadIds])
+
   const fetchData = useCallback(async () => {
     setLoading(true)
     const data = await getExecutionsByRange(startDate, endDate)
-    setExecutions(data)
+    setExecutionsRaw(data)
     setLoading(false)
   }, [startDate, endDate])
 

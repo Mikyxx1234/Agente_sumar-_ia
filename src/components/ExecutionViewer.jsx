@@ -6,13 +6,17 @@ import {
   Check, ListChecks, Wand2, BookOpen,
   Send, MessageSquare, Tag, BookMarked,
   ThumbsUp, ThumbsDown, ShieldAlert,
+  Filter as FilterIcon, ArrowDownAZ, CircleCheck, CircleX,
+  Hourglass, Coins,
 } from 'lucide-react'
 import { getAllExecutions, clearExecutions, reindexPerguntasEmbeddings } from '../lib/executionStore'
 import { getAllExecutionFeedback, migrateLocalFeedbackToServer } from '../lib/executionFeedbackStore'
+import { useScopedLeadIds, getExecutionLeadId, leadMatchesScope } from '../lib/funnelScope'
 import ResponseFeedback from './ResponseFeedback'
 
 function formatDuration(ms) {
-  if (ms < 1000) return `${ms}ms`
+  if (ms == null || Number.isNaN(ms)) return '—'
+  if (ms < 1000) return `${Math.round(ms)}ms`
   return `${(ms / 1000).toFixed(1)}s`
 }
 
@@ -21,9 +25,87 @@ function formatTime(iso) {
   return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
+function formatRelativeTime(iso) {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  const diff = Date.now() - d.getTime()
+  if (diff < 60_000) return 'agora'
+  if (diff < 3_600_000) return `há ${Math.floor(diff / 60_000)} min`
+  if (diff < 86_400_000) return `há ${Math.floor(diff / 3_600_000)} h`
+  if (diff < 7 * 86_400_000) return `há ${Math.floor(diff / 86_400_000)} d`
+  return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+function formatNumberCompact(n) {
+  if (n == null || Number.isNaN(n)) return '—'
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return String(n)
+}
+
+function getTotalTokens(exec) {
+  const steps = Array.isArray(exec?.steps) ? exec.steps : []
+  return steps
+    .filter((s) => s?.type === 'llm_call')
+    .reduce((acc, r) => acc + (r?.usage?.total_tokens || 0), 0)
+}
+
+function getDateBucket(timestamp) {
+  const d = new Date(timestamp)
+  if (Number.isNaN(d.getTime())) return 'Mais antigos'
+  const now = new Date()
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const t = d.getTime()
+  if (t >= startOfToday) return 'Hoje'
+  if (t >= startOfToday - 86_400_000) return 'Ontem'
+  if (t >= startOfToday - 7 * 86_400_000) return 'Esta semana'
+  if (t >= startOfToday - 30 * 86_400_000) return 'Este mês'
+  return 'Mais antigos'
+}
+
+const DATE_BUCKET_ORDER = ['Hoje', 'Ontem', 'Esta semana', 'Este mês', 'Mais antigos']
+
 function truncate(text, max = 200) {
   if (!text) return '(vazio)'
   return text.length > max ? text.substring(0, max) + '…' : text
+}
+
+function Segmented({ label, value, onChange, options }) {
+  return (
+    <div className="exec-filter-group">
+      {label && <span className="exec-filter-label">{label}</span>}
+      <div className="exec-segmented" role="group" aria-label={label}>
+        {options.map((opt) => {
+          const Icon = opt.icon
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              className={`exec-seg-btn${value === opt.value ? ' active' : ''}`}
+              onClick={() => onChange(opt.value)}
+              title={opt.title || opt.label}
+            >
+              {Icon && <Icon size={11} />}
+              <span>{opt.label}</span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function StatCard({ icon: Icon, label, value, sub, variant }) {
+  return (
+    <div className={`exec-stat-card${variant ? ` ${variant}` : ''}`}>
+      <div className="exec-stat-icon">{Icon && <Icon size={14} />}</div>
+      <div className="exec-stat-body">
+        <div className="exec-stat-label">{label}</div>
+        <div className="exec-stat-value">{value}</div>
+        {sub && <div className="exec-stat-sub">{sub}</div>}
+      </div>
+    </div>
+  )
 }
 
 function RoundDetail({ round }) {
@@ -457,15 +539,30 @@ Tokens LLM  : prompt=${tc.queryRewrite.usage.prompt_tokens || 0}, completion=${t
   )
 }
 
-export default function ExecutionViewer() {
+export default function ExecutionViewer({ kommoScope = null, titleOverride = null }) {
   const [searchId, setSearchId] = useState('')
   const [selected, setSelected] = useState(null)
-  const [executions, setExecutions] = useState([])
+  const [executionsRaw, setExecutionsRaw] = useState([])
   const [loading, setLoading] = useState(true)
   const [copyToast, setCopyToast] = useState(false)
   const [reindexing, setReindexing] = useState(false)
   const [reindexResult, setReindexResult] = useState(null)
   const [feedbackMap, setFeedbackMap] = useState({})
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [feedbackFilter, setFeedbackFilter] = useState('all')
+  const [toolsFilter, setToolsFilter] = useState('all')
+  const [periodFilter, setPeriodFilter] = useState('all')
+  const [sortOrder, setSortOrder] = useState('newest')
+
+  // Filtro por escopo de perfil (Agente Inscrição). Quando o escopo está
+  // ativo, mantém só execuções cujo leadId está nos leads do funil
+  // filtrado (statusIds INSCRIÇÃO + AGUARDANDO PAGAMENTO).
+  const scopedLeadIds = useScopedLeadIds(kommoScope)
+
+  const executions = useMemo(() => {
+    if (!scopedLeadIds.leadIds) return executionsRaw
+    return executionsRaw.filter((exec) => leadMatchesScope(getExecutionLeadId(exec), scopedLeadIds))
+  }, [executionsRaw, scopedLeadIds])
 
   const fetchExecutions = useCallback(async () => {
     setLoading(true)
@@ -474,7 +571,7 @@ export default function ExecutionViewer() {
       getAllExecutions(),
       getAllExecutionFeedback(),
     ])
-    setExecutions(data)
+    setExecutionsRaw(data)
     setFeedbackMap(feedback)
     setLoading(false)
   }, [])
@@ -493,7 +590,7 @@ export default function ExecutionViewer() {
   const handleClear = async () => {
     if (window.confirm('Limpar todas as execuções?')) {
       await clearExecutions()
-      setExecutions([])
+      setExecutionsRaw([])
       setSelected(null)
     }
   }
@@ -521,14 +618,90 @@ export default function ExecutionViewer() {
     }
   }
 
+  const stats = useMemo(() => {
+    const total = executions.length
+    const errors = executions.filter((e) => e.error).length
+    const success = total - errors
+    const totalTokens = executions.reduce((acc, e) => acc + getTotalTokens(e), 0)
+    const totalDuration = executions.reduce((acc, e) => acc + (e.totalDurationMs || 0), 0)
+    const avgDuration = total ? totalDuration / total : 0
+    const successRate = total ? Math.round((success / total) * 100) : 0
+    return { total, errors, success, totalTokens, avgDuration, successRate }
+  }, [executions])
+
   const filtered = useMemo(() => {
-    if (!searchId.trim()) return executions
+    const now = Date.now()
+    const startOfToday = new Date(new Date().setHours(0, 0, 0, 0)).getTime()
+    const periodCutoff = (() => {
+      if (periodFilter === 'today') return startOfToday
+      if (periodFilter === '7d') return now - 7 * 86_400_000
+      if (periodFilter === '30d') return now - 30 * 86_400_000
+      return null
+    })()
     const q = searchId.trim().toLowerCase()
-    return executions.filter((e) =>
-      e.id.toLowerCase().includes(q) ||
-      e.userMessage.toLowerCase().includes(q)
-    )
-  }, [executions, searchId])
+    const list = executions.filter((exec) => {
+      if (q && !(
+        (exec.id || '').toLowerCase().includes(q)
+        || (exec.userMessage || '').toLowerCase().includes(q)
+      )) return false
+      if (statusFilter === 'success' && exec.error) return false
+      if (statusFilter === 'error' && !exec.error) return false
+      const rating = feedbackMap[exec.id]?.rating
+      if (feedbackFilter === 'positive' && rating !== 'positive') return false
+      if (feedbackFilter === 'negative' && rating !== 'negative') return false
+      if (feedbackFilter === 'none' && (rating === 'positive' || rating === 'negative')) return false
+      const hasTools = (exec.toolCalls?.length || 0) > 0
+      if (toolsFilter === 'with' && !hasTools) return false
+      if (toolsFilter === 'without' && hasTools) return false
+      if (periodCutoff != null) {
+        const t = new Date(exec.timestamp).getTime()
+        if (Number.isNaN(t) || t < periodCutoff) return false
+      }
+      return true
+    })
+    list.sort((a, b) => {
+      if (sortOrder === 'longest') {
+        return (b.totalDurationMs || 0) - (a.totalDurationMs || 0)
+      }
+      const ta = new Date(a.timestamp).getTime() || 0
+      const tb = new Date(b.timestamp).getTime() || 0
+      return sortOrder === 'oldest' ? ta - tb : tb - ta
+    })
+    return list
+  }, [executions, searchId, statusFilter, feedbackFilter, toolsFilter, periodFilter, sortOrder, feedbackMap])
+
+  const grouped = useMemo(() => {
+    if (sortOrder === 'longest') {
+      return [{ label: 'Ordenado por duração', items: filtered }]
+    }
+    const buckets = new Map()
+    for (const exec of filtered) {
+      const label = getDateBucket(exec.timestamp)
+      if (!buckets.has(label)) buckets.set(label, [])
+      buckets.get(label).push(exec)
+    }
+    return DATE_BUCKET_ORDER
+      .filter((label) => buckets.has(label))
+      .map((label) => ({ label, items: buckets.get(label) }))
+  }, [filtered, sortOrder])
+
+  const filtersActive = (
+    statusFilter !== 'all'
+    || feedbackFilter !== 'all'
+    || toolsFilter !== 'all'
+    || periodFilter !== 'all'
+    || sortOrder !== 'newest'
+    || !!searchId.trim()
+  )
+
+  const resetFilters = () => {
+    setStatusFilter('all')
+    setFeedbackFilter('all')
+    setToolsFilter('all')
+    setPeriodFilter('all')
+    setSortOrder('newest')
+    setSearchId('')
+  }
 
   const handleSelect = (exec) => {
     setSelected(exec.id === selected?.id ? null : exec)
@@ -540,32 +713,69 @@ export default function ExecutionViewer() {
     showCopyToast()
   }
 
+  const statusOptions = [
+    { value: 'all', label: 'Todos' },
+    { value: 'success', label: 'Sucesso', icon: CircleCheck },
+    { value: 'error', label: 'Erro', icon: CircleX },
+  ]
+  const feedbackOptions = [
+    { value: 'all', label: 'Todos' },
+    { value: 'positive', label: 'Bom', icon: ThumbsUp },
+    { value: 'negative', label: 'Ruim', icon: ThumbsDown },
+    { value: 'none', label: 'Sem' },
+  ]
+  const toolsOptions = [
+    { value: 'all', label: 'Todos' },
+    { value: 'with', label: 'Com tools', icon: Database },
+    { value: 'without', label: 'Sem tools' },
+  ]
+  const periodOptions = [
+    { value: 'all', label: 'Tudo' },
+    { value: 'today', label: 'Hoje' },
+    { value: '7d', label: '7d' },
+    { value: '30d', label: '30d' },
+  ]
+  const sortOptions = [
+    { value: 'newest', label: 'Recentes', icon: ArrowDownAZ },
+    { value: 'oldest', label: 'Antigos' },
+    { value: 'longest', label: 'Mais demorados', icon: Hourglass },
+  ]
+
   return (
     <div className="exec-viewer">
       {copyToast && <div className="toast"><Check size={14} className="toast-check" /> ID copiado</div>}
 
       <div className="pg-header">
         <div className="pg-title-group">
-          <h1 className="page-title" style={{ fontSize: 18 }}>Execuções</h1>
-          <span className="badge">{executions.length} registradas</span>
+          <h1 className="page-title" style={{ fontSize: 18 }}>{titleOverride || 'Execuções'}</h1>
+          <span className="badge">
+            {filtered.length === executions.length
+              ? `${executions.length} registrada${executions.length === 1 ? '' : 's'}`
+              : `${filtered.length} de ${executions.length}`}
+          </span>
         </div>
         <div className="page-actions">
-          <button
-            className="btn btn-ghost"
-            onClick={() => onReindexPerguntas({ force: false })}
-            disabled={reindexing}
-            title="Gera embedding das linhas novas do FAQ (documents_perguntas) — use depois de inserir uma pergunta via SQL"
-          >
-            <BookMarked size={14} /> <span>{reindexing ? 'Indexando…' : 'Reindexar FAQ'}</span>
-          </button>
-          <button
-            className="btn btn-ghost"
-            onClick={() => onReindexPerguntas({ force: true })}
-            disabled={reindexing}
-            title="FORÇA reindex de TODAS as linhas do FAQ — use quando mudar a normalização"
-          >
-            <BookMarked size={14} /> <span>{reindexing ? 'Forçando…' : 'Reindexar FAQ (forçar)'}</span>
-          </button>
+          <div className="exec-action-group" role="group" aria-label="Reindexação do FAQ">
+            <button
+              className="btn btn-ghost btn-subtle"
+              onClick={() => onReindexPerguntas({ force: false })}
+              disabled={reindexing}
+              title="Gera embedding das linhas novas do FAQ (documents_perguntas) — use depois de inserir uma pergunta via SQL"
+            >
+              <BookMarked size={14} />
+              <span>{reindexing ? 'Indexando…' : 'Reindexar FAQ'}</span>
+            </button>
+            <button
+              className="btn btn-ghost btn-subtle"
+              onClick={() => onReindexPerguntas({ force: true })}
+              disabled={reindexing}
+              title="FORÇA reindex de TODAS as linhas do FAQ — use quando mudar a normalização"
+            >
+              <BookMarked size={14} />
+              <span>{reindexing ? 'Forçando…' : 'Forçar reindex'}</span>
+            </button>
+          </div>
+          <span className="exec-toolbar-sep" aria-hidden />
           <button className="btn btn-ghost" onClick={fetchExecutions}>
             <RefreshCw size={14} /> <span>Atualizar</span>
           </button>
@@ -575,31 +785,50 @@ export default function ExecutionViewer() {
         </div>
       </div>
 
+      <div className="exec-stats">
+        <StatCard icon={ListChecks} label="Execuções" value={stats.total} sub={`${stats.successRate}% sucesso`} />
+        <StatCard icon={CircleX} label="Erros" value={stats.errors} variant={stats.errors > 0 ? 'danger' : ''} sub={stats.errors > 0 ? `${Math.round((stats.errors / stats.total) * 100)}% do total` : 'zero falhas'} />
+        <StatCard icon={Hourglass} label="Tempo médio" value={formatDuration(stats.avgDuration)} sub="por execução" />
+        <StatCard icon={Coins} label="Tokens totais" value={formatNumberCompact(stats.totalTokens)} sub="orquestrador + tools" />
+      </div>
+
       {reindexResult && (
-        <div
-          style={{
-            padding: '8px 12px',
-            background: reindexResult.ok
-              ? 'rgba(34,197,94,0.08)'
-              : 'rgba(239,68,68,0.08)',
-            border: `1px solid ${reindexResult.ok ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}`,
-            borderRadius: 6,
-            marginBottom: 12,
-            fontSize: 12,
-          }}
-        >
+        <div className={`exec-reindex-alert${reindexResult.ok ? '' : ' danger'}`}>
           {reindexResult.ok ? (
             <>
-              ✓ Reindex FAQ ok · {reindexResult.total} linha{reindexResult.total === 1 ? '' : 's'} processada{reindexResult.total === 1 ? '' : 's'}
-              {' '}({reindexResult.batches} batch{reindexResult.batches === 1 ? '' : 'es'}, {reindexResult.durationMs}ms,{' '}
-              {reindexResult.usage?.total_tokens || 0} tokens)
-              {reindexResult.message ? ` · ${reindexResult.message}` : ''}
+              <CircleCheck size={14} />
+              <span>
+                Reindex FAQ ok · {reindexResult.total} linha{reindexResult.total === 1 ? '' : 's'}
+                {' '}({reindexResult.batches} batch{reindexResult.batches === 1 ? '' : 'es'},
+                {' '}{reindexResult.durationMs}ms, {reindexResult.usage?.total_tokens || 0} tokens)
+                {reindexResult.message ? ` · ${reindexResult.message}` : ''}
+              </span>
             </>
           ) : (
-            <>✗ Erro: {reindexResult.error || 'falha desconhecida'}</>
+            <>
+              <CircleX size={14} />
+              <span>Erro: {reindexResult.error || 'falha desconhecida'}</span>
+            </>
           )}
         </div>
       )}
+
+      <div className="exec-filters">
+        <div className="exec-filters-icon" aria-hidden>
+          <FilterIcon size={13} />
+          <span>Filtros</span>
+        </div>
+        <Segmented label="Status" value={statusFilter} onChange={setStatusFilter} options={statusOptions} />
+        <Segmented label="Feedback" value={feedbackFilter} onChange={setFeedbackFilter} options={feedbackOptions} />
+        <Segmented label="Tools" value={toolsFilter} onChange={setToolsFilter} options={toolsOptions} />
+        <Segmented label="Período" value={periodFilter} onChange={setPeriodFilter} options={periodOptions} />
+        <Segmented label="Ordem" value={sortOrder} onChange={setSortOrder} options={sortOptions} />
+        {filtersActive && (
+          <button type="button" className="exec-filters-reset" onClick={resetFilters} title="Remover todos os filtros">
+            Limpar filtros
+          </button>
+        )}
+      </div>
 
       <div className="exec-layout">
         <div className="exec-list-panel">
@@ -615,40 +844,73 @@ export default function ExecutionViewer() {
             {!loading && filtered.length === 0 && (
               <div className="empty">
                 <ListChecks size={28} className="empty-icon" />
-                <div className="empty-title">Nenhuma execução</div>
-                <div>Use o Teste IA para gerar</div>
+                <div className="empty-title">
+                  {executions.length === 0 ? 'Nenhuma execução' : 'Nada corresponde aos filtros'}
+                </div>
+                <div>
+                  {executions.length === 0
+                    ? 'Use o Teste IA para gerar'
+                    : 'Ajuste os filtros acima ou limpe-os para ver tudo'}
+                </div>
               </div>
             )}
-            {!loading && filtered.map((exec) => (
-              <div key={exec.id} className={`exec-item${selected?.id === exec.id ? ' selected' : ''}`}
-                onClick={() => handleSelect(exec)}>
-                <div className="exec-item-head">
-                  <button className="exec-item-id" onClick={(e) => copyId(exec.id, e)}>
-                    {exec.id}
-                    <Copy size={10} />
-                  </button>
-                  <span className="exec-item-badges">
-                    {feedbackMap[exec.id]?.rating === 'positive' && (
-                      <span className="exec-feedback-pill positive" title="Boa resposta">
-                        <ThumbsUp size={11} />
-                      </span>
-                    )}
-                    {feedbackMap[exec.id]?.rating === 'negative' && (
-                      <span className="exec-feedback-pill negative" title="Resposta ruim">
-                        <ThumbsDown size={11} />
-                      </span>
-                    )}
-                    <span className={`status-dot ${exec.error ? 'error' : 'success'}`} />
-                  </span>
+            {!loading && grouped.map((group) => (
+              <div key={group.label} className="exec-group">
+                <div className="exec-group-header">
+                  <span>{group.label}</span>
+                  <span className="exec-group-count">{group.items.length}</span>
                 </div>
-                <div className="exec-item-msg">{truncate(exec.userMessage, 80)}</div>
-                <div className="exec-item-footer tnum">
-                  <span><Clock size={10} /> {formatTime(exec.timestamp)}</span>
-                  <span><Zap size={10} /> {formatDuration(exec.totalDurationMs)}</span>
-                  {exec.toolCalls?.length > 0 && (
-                    <span><Database size={10} /> {exec.toolCalls.length} tool{exec.toolCalls.length > 1 ? 's' : ''}</span>
-                  )}
-                </div>
+                {group.items.map((exec) => {
+                  const rating = feedbackMap[exec.id]?.rating
+                  const toolsCount = exec.toolCalls?.length || 0
+                  return (
+                    <div
+                      key={exec.id}
+                      className={`exec-item${selected?.id === exec.id ? ' selected' : ''}`}
+                      onClick={() => handleSelect(exec)}
+                    >
+                      <div className="exec-item-head">
+                        <span className="exec-item-head-left">
+                          <span className={`status-dot ${exec.error ? 'error' : 'success'}`} />
+                          <span className="exec-item-time" title={formatTime(exec.timestamp)}>
+                            {formatRelativeTime(exec.timestamp)}
+                          </span>
+                        </span>
+                        <span className="exec-item-badges">
+                          {rating === 'positive' && (
+                            <span className="exec-feedback-pill positive" title="Boa resposta">
+                              <ThumbsUp size={11} />
+                            </span>
+                          )}
+                          {rating === 'negative' && (
+                            <span className="exec-feedback-pill negative" title="Resposta ruim">
+                              <ThumbsDown size={11} />
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                      <div className="exec-item-msg">{truncate(exec.userMessage, 90)}</div>
+                      <div className="exec-item-footer tnum">
+                        <button
+                          type="button"
+                          className="exec-item-id"
+                          onClick={(e) => copyId(exec.id, e)}
+                          title={`Copiar ${exec.id}`}
+                        >
+                          {exec.id}
+                          <Copy size={10} />
+                        </button>
+                        <span className="exec-item-sep" aria-hidden>·</span>
+                        <span title="Duração total"><Zap size={10} /> {formatDuration(exec.totalDurationMs)}</span>
+                        {toolsCount > 0 && (
+                          <span title={`${toolsCount} tool call${toolsCount > 1 ? 's' : ''}`}>
+                            <Database size={10} /> {toolsCount}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             ))}
           </div>

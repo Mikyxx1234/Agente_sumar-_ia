@@ -9,6 +9,11 @@ import FunilKommo from './components/FunilKommo'
 import FeedbackIA from './components/FeedbackIA'
 import MatriculasViewer from './components/MatriculasViewer'
 import { PowerOff } from 'lucide-react'
+import {
+  loadProfile, saveProfile,
+  loadPageForProfile, savePageForProfile,
+  getProfile,
+} from './lib/agentProfiles'
 import './App.css'
 
 const STORAGE_KEY = 'prompt_edits'
@@ -86,10 +91,22 @@ export default function App() {
   const [originalPrompts, setOriginalPrompts] = useState([])
   const [edits, setEdits] = useState(loadEdits)
   const [versions, setVersions] = useState(loadVersions)
-  const [page, setPage] = useState('dashboard')
+  const [profileId, setProfileId] = useState(() => loadProfile())
+  const [page, setPage] = useState(() => loadPageForProfile(loadProfile()))
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [aiState, setAiState] = useState(null)
+
+  const handleProfileChange = useCallback((nextProfileId) => {
+    setProfileId(nextProfileId)
+    saveProfile(nextProfileId)
+    setPage(loadPageForProfile(nextProfileId))
+  }, [])
+
+  const handleNavigate = useCallback((nextPage) => {
+    setPage(nextPage)
+    savePageForProfile(profileId, nextPage)
+  }, [profileId])
 
   useEffect(() => {
     fetch('/APAGAR.txt')
@@ -152,7 +169,13 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', height: '100vh', width: '100%' }}>
-      <Sidebar page={page} onNavigate={setPage} onAIStateChange={setAiState} />
+      <Sidebar
+        page={page}
+        onNavigate={handleNavigate}
+        onAIStateChange={setAiState}
+        activeProfileId={profileId}
+        onProfileChange={handleProfileChange}
+      />
       <main className="main">
         {aiOff && (
           <div className="ai-off-banner" role="alert">
@@ -176,16 +199,44 @@ export default function App() {
               <p style={{ color: 'var(--danger)' }}>Erro: {error}</p>
             </div>
           )}
-          {!loading && !error && page === 'dashboard' && <Dashboard />}
-          {!loading && !error && page === 'funil-kommo' && <FunilKommo />}
+          {!loading && !error && page === 'dashboard' && (
+            <Dashboard kommoScope={getProfile('atendimento').kommoScope} />
+          )}
+          {!loading && !error && page === 'funil-kommo' && (
+            <FunilKommo kommoScope={getProfile('atendimento').kommoFunnelScope} />
+          )}
           {!loading && !error && page === 'prompts' && (
             <PromptViewer prompts={prompts} onSave={handleSavePrompt} getVersions={getVersions} onRestore={handleRestore} />
           )}
           {!loading && !error && page === 'playground' && <Playground prompts={prompts} />}
-          {!loading && !error && page === 'executions' && <ExecutionViewer />}
-          {!loading && !error && page === 'feedback-ia' && <FeedbackIA />}
-          {!loading && !error && page === 'matriculas' && <MatriculasViewer />}
+          {!loading && !error && page === 'executions' && (
+            <ExecutionViewer kommoScope={getProfile('atendimento').kommoScope} />
+          )}
+          {!loading && !error && page === 'feedback-ia' && (
+            <FeedbackIA kommoScope={getProfile('atendimento').kommoScope} />
+          )}
           {!loading && !error && page === 'knowledge-update' && <KnowledgeUpdate />}
+          {!loading && !error && page === 'inscricao-matriculas' && (
+            <MatriculasViewer />
+          )}
+          {!loading && !error && page === 'inscricao-dashboard' && (
+            <Dashboard kommoScope={getProfile('inscricao').kommoScope} />
+          )}
+          {!loading && !error && page === 'inscricao-execucoes' && (
+            <ExecutionViewer
+              kommoScope={getProfile('inscricao').kommoScope}
+              titleOverride="Execuções (Inscrição)"
+            />
+          )}
+          {!loading && !error && page === 'inscricao-feedback' && (
+            <FeedbackIA kommoScope={getProfile('inscricao').kommoScope} />
+          )}
+          {!loading && !error && page === 'inscricao-funil' && (
+            <FunilKommo
+              kommoScope={getProfile('inscricao').kommoFunnelScope}
+              titleOverride="Funil Kommo (Inscrição)"
+            />
+          )}
         </div>
       </main>
     </div>

@@ -5,6 +5,7 @@ import {
   Globe, ExternalLink,
 } from 'lucide-react'
 import KommoLeadLink from './KommoLeadLink'
+import { buildFunnelUrl } from '../lib/funnelScope'
 
 function formatAge(sec) {
   if (sec == null) return '—'
@@ -267,7 +268,7 @@ function LeadDetail({ row, kommoBaseUrl }) {
   )
 }
 
-export default function FunilKommo() {
+export default function FunilKommo({ kommoScope = null, titleOverride = null }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -280,10 +281,16 @@ export default function FunilKommo() {
   const [toast, setToast] = useState(null)
   const [ticking, setTicking] = useState(false)
 
+  // Chave estável do escopo — quando muda, refaz o fetch
+  const scopeKey = kommoScope?.statusIds
+    ? `${kommoScope.pipelineId || ''}:${kommoScope.statusIds.join(',')}`
+    : null
+
   const fetchFunnel = useCallback(async (silent = false) => {
     if (!silent) setRefreshing(true)
     try {
-      const r = await fetch('/api/scheduler/funnel')
+      const url = buildFunnelUrl(kommoScope)
+      const r = await fetch(url)
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const j = await r.json()
       setData(j)
@@ -294,13 +301,14 @@ export default function FunilKommo() {
       setLoading(false)
       if (!silent) setRefreshing(false)
     }
-  }, [])
+  }, [kommoScope])
 
   useEffect(() => {
     fetchFunnel()
     const id = setInterval(() => fetchFunnel(true), 10000)
     return () => clearInterval(id)
-  }, [fetchFunnel])
+    // scopeKey troca quando o perfil muda → recarrega com novos statusIds
+  }, [fetchFunnel, scopeKey])
 
   useEffect(() => {
     if (!selected || !data) return
@@ -358,7 +366,7 @@ export default function FunilKommo() {
     <div className="exec-viewer mat-viewer">
       <div className="pg-header">
         <div className="pg-title-group">
-          <h1 className="page-title" style={{ fontSize: 18 }}>Funil Kommo</h1>
+          <h1 className="page-title" style={{ fontSize: 18 }}>{titleOverride || 'Funil Kommo'}</h1>
           {data && (
             <span className="badge">
               {(data.leads || []).length} lead{(data.leads || []).length === 1 ? '' : 's'} · {eligibleCount} elegíveis

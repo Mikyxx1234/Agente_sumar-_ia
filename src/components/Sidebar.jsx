@@ -1,29 +1,15 @@
-import { Sparkles, LayoutDashboard, FileText, FlaskConical, ListChecks, Settings, Database, GraduationCap, Filter, ShieldCheck } from 'lucide-react'
+import { Settings } from 'lucide-react'
 import AIKillSwitch from './AIKillSwitch'
+import AgentProfileSwitcher from './AgentProfileSwitcher'
+import { getProfile } from '../lib/agentProfiles'
 
-const NAV_ITEMS = [
-  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { id: 'funil-kommo', label: 'Funil Kommo', icon: Filter },
-  { id: 'prompts', label: 'Prompts', icon: FileText },
-  { id: 'playground', label: 'Teste IA', icon: FlaskConical },
-  { id: 'executions', label: 'Execuções', icon: ListChecks },
-  { id: 'feedback-ia', label: 'Feedback IA', icon: ShieldCheck },
-  { id: 'matriculas', label: 'Matrículas', icon: GraduationCap },
-  { id: 'knowledge-update', label: 'Atualização IA', icon: Database },
-]
+export default function Sidebar({ page, onNavigate, onAIStateChange, activeProfileId, onProfileChange }) {
+  const profile = getProfile(activeProfileId)
+  const navItems = profile.nav
 
-export default function Sidebar({ page, onNavigate, onAIStateChange }) {
   return (
     <aside className="sidebar">
-      <div className="brand">
-        <div className="brand-mark">
-          <Sparkles size={16} />
-        </div>
-        <div className="brand-text">
-          <div className="brand-title">Agente Comercial</div>
-          <div className="brand-sub">Painel da IA</div>
-        </div>
-      </div>
+      <AgentProfileSwitcher activeProfileId={profile.id} onChange={onProfileChange} />
 
       <div style={{ padding: '0 0 12px' }}>
         <AIKillSwitch onStateChange={onAIStateChange} />
@@ -31,7 +17,7 @@ export default function Sidebar({ page, onNavigate, onAIStateChange }) {
 
       <div className="nav-section">Geral</div>
       <nav className="nav-list">
-        {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
+        {navItems.map(({ id, label, icon: Icon }) => (
           <button
             key={id}
             className={`nav-item${page === id ? ' active' : ''}`}

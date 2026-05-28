@@ -2262,7 +2262,7 @@ app.post('/api/scheduler/tick', async (_req, res) => {
  * Usado pela aba do painel para responder "quem está prestes a ser
  * processado pelo agente?" sem precisar consultar Kommo no navegador.
  */
-app.get('/api/scheduler/funnel', async (_req, res) => {
+app.get('/api/scheduler/funnel', async (req, res) => {
   const env = process.env
   const enabled = (() => {
     const flag = String(env.KOMMO_SCHEDULER_ENABLED || '').trim().toLowerCase()
@@ -2284,6 +2284,21 @@ app.get('/api/scheduler/funnel', async (_req, res) => {
   const whitelistSet = whitelist.length ? new Set(whitelist) : null
   const publicWebhookBaseUrl = env.PUBLIC_WEBHOOK_BASE_URL || null
 
+  // Query params opcionais — quando ausentes, comportamento é IDÊNTICO ao anterior
+  // (usa pipelineId/statusId do .env). Permitem ao painel pedir o funil de
+  // OUTRO recorte do mesmo pipeline (ex: perfil Agente Inscrição pede
+  // statusIds=106804680,106426128). Endpoint continua read-only.
+  const reqPipelineId = req.query?.pipelineId ? Number(req.query.pipelineId) : null
+  const reqStatusIdsRaw = req.query?.statusIds ? String(req.query.statusIds) : ''
+  const reqStatusIds = reqStatusIdsRaw
+    ? reqStatusIdsRaw.split(',').map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0)
+    : []
+  const effPipelineId = Number.isFinite(reqPipelineId) && reqPipelineId > 0 ? reqPipelineId : pipelineId
+  const effStatusIds = reqStatusIds.length > 0
+    ? reqStatusIds
+    : (Number.isFinite(statusId) && statusId > 0 ? [statusId] : [])
+  const scoped = reqStatusIds.length > 0 || (Number.isFinite(reqPipelineId) && reqPipelineId > 0)
+
   const config = {
     running: isSchedulerRunning(),
     enabled,
@@ -2295,9 +2310,12 @@ app.get('/api/scheduler/funnel', async (_req, res) => {
     whitelist,
     publicWebhookBaseUrl,
     kommoBaseUrl: env.KOMMO_BASE_URL || null,
+    effectivePipelineId: effPipelineId,
+    effectiveStatusIds: effStatusIds,
+    scoped,
   }
 
-  if (!enabled || !Number.isFinite(pipelineId) || !Number.isFinite(statusId)) {
+  if (!enabled || !Number.isFinite(effPipelineId) || effStatusIds.length === 0) {
     res.json({
       ok: true,
       config,
@@ -2310,19 +2328,30 @@ app.get('/api/scheduler/funnel', async (_req, res) => {
   }
 
   try {
-    const listing = await listLeadsByStatus(env, { pipelineId, statusId })
-    if (!listing.ok) {
+    // Busca leads de cada status solicitado (1 GET por status) e concatena.
+    // No caminho default (sem query params) só roda 1 iteração, idêntico ao
+    // comportamento original. Em escopo de Inscrição roda 2x (read-only).
+    const leadsAll = []
+    let kommoError = null
+    for (const sid of effStatusIds) {
+      const listing = await listLeadsByStatus(env, { pipelineId: effPipelineId, statusId: sid })
+      if (!listing.ok) {
+        kommoError = listing.error || listing.status
+        break
+      }
+      if (Array.isArray(listing.leads)) leadsAll.push(...listing.leads)
+    }
+    if (kommoError) {
       res.json({
         ok: true,
         config,
         kommoOk: false,
-        kommoError: listing.error || listing.status,
+        kommoError,
         leads: [],
         orphans: [],
       })
       return
     }
-    const leadsAll = listing.leads || []
     const contactIds = []
     for (const lead of leadsAll) {
       const cs = lead?._embedded?.contacts || []
