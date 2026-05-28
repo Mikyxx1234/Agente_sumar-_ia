@@ -57,46 +57,89 @@ export function conversationHadCourseEngagement(historyMessages = []) {
   return assistantCourseTurns >= 1 && userParticipated
 }
 
-/** Lead declarou que não quer seguir com a inscrição / matrícula. */
+/**
+ * Padrões condicionais ("se não tiver", "caso não", "senão", "se não der")
+ * que NÃO devem ser interpretados como recusa de inscrição. Cobrem casos
+ * tipo "se não tiver veterinária, quero pediatria".
+ */
+const CONDICIONAL_NEGATIVO_RE =
+  /\b(se\s+n[aã]o|caso\s+n[aã]o|sen[aã]o|se\s+n[aã]o\s+(tiver|for|der|puder|houver))\b/i
+
+/**
+ * Lead acabou de pedir/citar outro curso ("ou o curso de X", "ent[aã]o quero Y").
+ * É plano B, não desistência.
+ */
+const PLANO_B_CURSO_RE = /\b(ou\s+(o|a)\s+curso|prefiro|ent[aã]o\s+(quero|prefiro)|tamb[eé]m\s+(quero|gostaria))\b/i
+
+/** Verbo de inscrição/matrícula adjacente à negação. */
+const NEGACAO_DIRETA_INSCRICAO_RE =
+  /\bn[aã]o\s+(quero|vou|pretendo|desejo|tenho\s+interesse|posso|consigo)\s+(me\s+|de\s+|em\s+|com\s+a\s+|a\s+)?(inscrever|matricular|fazer\s+a\s+(inscri[cç][aã]o|matr[ií]cula)|seguir|prosseguir|continuar|avan[cç]ar)\b/i
+
+/**
+ * Lead declarou que não quer seguir com a inscrição / matrícula.
+ *
+ * Heurística conservadora: para evitar falsos positivos, a negação precisa
+ * estar adjacente ao verbo de inscrição/matrícula. Frases condicionais
+ * ("se não tiver X, quero Y") e plano B ("ou administração predial")
+ * são explicitamente excluídas.
+ */
 export function messageExpressesEnrollmentDecline(text, historyMessages = []) {
   const t = normalizeMessageForScope(text).toLowerCase()
-  if (!t || t.length < 4) return false
+  if (!t || t.length < 6) return false
 
-  // Antes do guard de confirmação de inscrição — "não quero me inscrever"
-  // contém "quero me inscrever" e geraria falso negativo.
-  const inscricaoWord = /\b(inscrever|matricular|inscri[cç][aã]o|matr[ií]cula|curso)\b/i
-
-  if (
-    /\bn[aã]o\b/i.test(t) &&
-    /\b(quero|vou|pretendo|tenho\s+interesse|desejo)\b/i.test(t) &&
-    inscricaoWord.test(t)
-  ) {
-    return true
+  // Mensagens muito curtas (1-2 tokens) sem verbo de inscrição não podem
+  // ser desistência (ex.: "predial", "pediatria", "obrigado").
+  if (t.split(/\s+/).filter(Boolean).length < 2 && !/\b(desisto|desistir|n[aã]o)\b/i.test(t)) {
+    return false
   }
+
+  // 1) Negação direta sobre verbo de inscrição/matrícula PRECEDE o guard
+  // de confirmação ("não quero me inscrever" contém "quero me inscrever").
+  if (NEGACAO_DIRETA_INSCRICAO_RE.test(t)) return true
 
   if (messageConfirmsProceedToInscricaoForm(text, historyMessages)) return false
 
+  // Plano B / curso alternativo — não é desistência.
+  if (PLANO_B_CURSO_RE.test(t)) return false
+
+  // "se não tiver veterinária, quero pediatria" — condicional, não recusa.
+  if (CONDICIONAL_NEGATIVO_RE.test(t)) {
+    if (/\b(quero|prefiro|gostaria|desejo|tenho\s+interesse)\b/i.test(t)) {
+      return false
+    }
+    // sem verbo positivo na cláusula, ainda pode ser declínio puro
+    // ("se não der, deixa pra lá"); cai nos demais testes abaixo.
+  }
+
+  // 2) "não tenho interesse" / "sem interesse" PROXIMO de inscrição/matrícula.
   if (
-    /\b(n[aã]o\s+quero|n[aã]o\s+tenho\s+interesse|sem\s+interesse)\b[\s\S]{0,40}/i.test(t) &&
-    inscricaoWord.test(t)
+    /\b(n[aã]o\s+tenho\s+interesse|sem\s+interesse|n[aã]o\s+me\s+interess[ao])\b[\s\S]{0,40}\b(inscri[cç][aã]o|matr[ií]cula|curso|matricul|inscrever|seguir)\b/i.test(
+      t,
+    )
   ) {
     return true
   }
-  if (/\b(desistir|desist[eê]ncia|desisto)\b/i.test(t) && inscricaoWord.test(t)) {
+
+  // 3) Verbo de desistência explícito.
+  if (/\b(desistir|desist[eê]ncia|desisto|desisti)\b/i.test(t)) {
+    if (/\b(inscri[cç][aã]o|matr[ií]cula|curso|sumar[eé])\b/i.test(t)) return true
+    // "desisto" sozinho após pergunta de matrícula
+    if (/^\s*desist[oe]\s*[.!?]*\s*$/i.test(t)) return true
+  }
+
+  // 4) "agora não" + matrícula adjacente.
+  if (/\bagora\s+n[aã]o\b[\s\S]{0,20}\b(inscri|matricul|curso|fazer)\b/i.test(t)) return true
+
+  // 5) "deixa pra lá" + inscrição/matrícula.
+  if (/\bdeixa\s+(pra\s+l[aá]|quieto)\b/i.test(t) && /\b(inscri|matricul|curso)\b/i.test(t)) {
     return true
   }
-  if (/\bn[aã]o\s+(vou|pretendo|quero)\s+(me\s+)?(inscrever|matricular)\b/i.test(t)) return true
-  if (/\bn[aã]o\s+quero\s+seguir\b/i.test(t)) return true
-  if (/\bdeixa\s+(pra\s+l[aá]|quieto)\b/i.test(t) && /\b(inscri|matricul|curso)\b/i.test(t)) return true
+
+  // 6) "não" puro APENAS após o agente perguntar sobre matrícula explicitamente.
   if (/^\s*n[aã]o\s*[.!?]*\s*$/i.test(t) && assistantAskedEnrollmentInLastReply(historyMessages)) {
     return true
   }
-  if (
-    /\bagora\s+n[aã]o\b/i.test(t) &&
-    /\b(inscri|matricul|curso)\b/i.test(t)
-  ) {
-    return true
-  }
+
   return false
 }
 

@@ -608,6 +608,29 @@ section('12. Desistência de inscrição — confirma, agradece e move fila 143'
     '12.3b pedido de matrícula não é desistência',
   )
 
+  // Regressões reais (lead #23841399 — print do CRM): plano B / condicional
+  // não pode ser tratado como desistência.
+  assert(
+    !messageExpressesEnrollmentDecline('se não tiver quero o curso de pediatria', histCurso),
+    '12.3c "se não tiver quero X" é condicional, NÃO declínio',
+  )
+  assert(
+    !messageExpressesEnrollmentDecline('ou o curso de administração predial', histCurso),
+    '12.3d "ou o curso de Y" é plano B, NÃO declínio',
+  )
+  assert(
+    !messageExpressesEnrollmentDecline('predial', histCurso),
+    '12.3e nome solto de curso NÃO é declínio',
+  )
+  assert(
+    !messageExpressesEnrollmentDecline('quero conhecer o curso de veterinario', histCurso),
+    '12.3f "quero conhecer curso" NÃO é declínio',
+  )
+  assert(
+    !shouldOfferDesistenciaConfirm('se não tiver veterinária prefiro pediatria', histCurso),
+    '12.3g shouldOffer não dispara em condicional com plano B',
+  )
+
   const confirmMsg = buildConfirmDesistenciaReply({ pushName: 'Gustavo' })
   assert(
     assistantAskedDesistenciaConfirm(confirmMsg),
