@@ -20,6 +20,7 @@ import {
   assistantAskedDesistenciaConfirm,
   messageConfirmsFinalDesistencia,
   messageRevokesDesistencia,
+  messageExpressesEnrollmentDecline,
   buildConfirmDesistenciaReply,
   buildDesistenciaAgradecimentoReply,
 } from '../libShared/inscricaoDesistenciaHeuristics.js'
@@ -267,17 +268,29 @@ export async function tryHandleInscricaoDesistenciaFlow(env, input) {
         model,
       })
     }
-    return {
-      handled: true,
-      result: buildAgentReturn({
-        executionId,
-        model,
-        t0,
-        reply: buildConfirmDesistenciaReply({ pushName }),
-        steps: [{ type: 'desistencia_confirm_repetida' }],
-        ctxSnapshot: { inscricaoForm: INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_DESISTENCIA },
-      }),
+    // Só repete o template se a mensagem AINDA expressa declínio. Saudações,
+    // novas perguntas ou mensagens encaminhadas NÃO devem reativar a oferta
+    // de desistência em loop — limpa o estado e devolve ao fluxo normal (LLM).
+    if (messageExpressesEnrollmentDecline(userMessage, historyMessages)) {
+      return {
+        handled: true,
+        result: buildAgentReturn({
+          executionId,
+          model,
+          t0,
+          reply: buildConfirmDesistenciaReply({ pushName }),
+          steps: [{ type: 'desistencia_confirm_repetida' }],
+          ctxSnapshot: { inscricaoForm: INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_DESISTENCIA },
+        }),
+      }
     }
+    console.log(
+      `[inscricaoDesistencia] telefone=${telefone} confirm_step_saida msg_nao_declinio="${String(userMessage || '')
+        .slice(0, 80)
+        .replace(/\n/g, ' ')}" — limpando estado e devolvendo ao fluxo normal`,
+    )
+    await setStatus(env, telefone, null, idLead)
+    return null
   }
 
   if (!shouldOfferDesistenciaConfirm(userMessage, historyMessages)) return null
