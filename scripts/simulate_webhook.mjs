@@ -11,7 +11,7 @@ const text = process.argv.slice(2).join(' ') || 'Oi, queria saber valores do cur
 // o evento contacts.* pra cruzar. Aqui simulamos um payload Baileys puro.
 const payload = {
   event: 'messages.upsert',
-  instance: process.env.EVOLUTION_INSTANCE || 'comercial_cruzeiro',
+  instance: process.env.EVOLUTION_INSTANCE || 'SUMARE_IA',
   data: {
     key: {
       remoteJid: sessionId,

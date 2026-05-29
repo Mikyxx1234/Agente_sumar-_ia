@@ -85,7 +85,8 @@ import {
 } from '../../libShared/inboundMessageSanitize.js'
 import { userAsksCourseMoreDetails } from '../../libShared/courseMoreInfo.js'
 import { isAtendimentoIaPaused } from '../dadosClienteStore.js'
-import { validateReplyAgainstActions } from '../replyGuard.js'
+import { validateReplyBeforeSend } from '../replyGuard.js'
+import { buildLgpdSystemHint } from '../../libShared/lgpdCompliance.js'
 import { autoSyncInscricaoStateFromReply } from '../inscricaoStateAutoSync.js'
 
 const MAX_TOOL_ROUNDS = 5
@@ -1021,11 +1022,14 @@ export async function runAgent(env, input) {
           'AÇÃO OBRIGATÓRIA: pergunte gentilmente em qual curso ou assunto ele tem interesse, ou peça pra ele reformular a mensagem. ' +
           'Exemplo de resposta correta: "Oi! Para te ajudar melhor, em qual curso você tem interesse?"',
       }
-    : null
+      : null
+
+  const lgpdHint = { role: 'system', content: buildLgpdSystemHint(userMessage) }
 
   const apiMessages = [
     { role: 'system', content: systemMessage },
     ...(contextPreamble ? [{ role: 'system', content: contextPreamble }] : []),
+    lgpdHint,
     ...(inscricaoToolsHint ? [inscricaoToolsHint] : []),
     ...(commercialHint ? [commercialHint] : []),
     ...(courseInterestHint ? [courseInterestHint] : []),
@@ -1252,10 +1256,12 @@ export async function runAgent(env, input) {
       // Roda em TODOS os turnos que produziram texto (até quando uma tool de
       // busca foi chamada): só compara fato (tool de ação chamada?) vs narrativa.
       let guardViolation = null
-      const guardVerdict = validateReplyAgainstActions({
+      const guardVerdict = validateReplyBeforeSend({
         reply,
         toolCalls: toolTrace,
         stage: formFlowCtx.stageBefore || null,
+        userMessage,
+        env,
       })
       if (guardVerdict.violation) {
         console.warn(

@@ -93,6 +93,7 @@ $profiles = @{
       SUMARE_CONTRATO_PORTAL_URL = 'https://sumare.edu.br/vem-pra-sumare/vestibular/contrato'
       SUMARE_CAPTACAO_TEST_ALLOW = 'true'
       FEEDBACK_JOB_ENABLED = 'false'
+      EVOLUTION_INSTANCE = 'SUMARE_IA'
     }
   }
   prod = @{
@@ -128,6 +129,7 @@ $profiles = @{
       SUMARE_CAPTACAO_BASE_URL = 'https://api-captacao.sumare.edu.br'
       SUMARE_CONTRATO_PORTAL_URL = 'https://sumare.edu.br/vem-pra-sumare/vestibular/contrato'
       SUMARE_CAPTACAO_TEST_ALLOW = 'true'
+      EVOLUTION_INSTANCE = 'SUMARE_IA'
     }
   }
 }
@@ -225,6 +227,10 @@ if ($env:SUMARE_CAPTACAO_TOKEN) {
   Write-Host 'env SUMARE_CAPTACAO_TOKEN=***'
 } elseif ($Target -eq 'prod') {
   Write-Warning 'SUMARE_CAPTACAO_TOKEN nao definido — matricula API pode falhar em prod.'
+}
+if ($env:WHATSAPP_ACCESS_TOKEN) {
+  $envText = Set-EnvKey $envText 'WHATSAPP_ACCESS_TOKEN' $env:WHATSAPP_ACCESS_TOKEN
+  Write-Host 'env WHATSAPP_ACCESS_TOKEN=*** (instancia Evolution / Cloud API)'
 }
 
 if ($env:SUMARE_CAPTACAO_CURSO_MAP) {

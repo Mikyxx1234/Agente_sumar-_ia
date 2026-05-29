@@ -30,19 +30,21 @@ function getConfig(env) {
   }
 }
 
+import { getEvolutionInstanceName, normalizeEvolutionInstance } from './instanceConfig.js'
+
 /**
  * Resolve o nome da instância a partir do payload + env. A Evolution
  * coloca em diferentes níveis dependendo da versão.
  */
 export function resolveInstanceName(env, payload) {
-  const cfg = getConfig(env)
-  return (
+  const raw =
     payload?.instance ||
     payload?.body?.instance ||
     payload?.data?.instance ||
-    cfg.defaultInstance ||
     null
-  )
+  const normalized = normalizeEvolutionInstance(env, raw)
+  if (normalized) return normalized
+  return getEvolutionInstanceName(env) || null
 }
 
 /**

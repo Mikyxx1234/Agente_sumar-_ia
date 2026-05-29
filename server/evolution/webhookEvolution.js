@@ -45,6 +45,7 @@ import { tryClaimAgentFlush, tryReserveFlushSync, releaseFlushSync } from '../fl
 import { shouldSkipReplyCooldown, markReplyCooldown, getReplyCooldownRemainingMs } from '../replyCooldown.js'
 import { transcribeAudioBase64, analyzeImageBase64 } from './openaiMedia.js'
 import { fetchEvolutionMediaBase64, resolveInstanceName, describeMediaPayloadShape } from './evolutionMedia.js'
+import { normalizeEvolutionInstance } from './instanceConfig.js'
 import { runAgent } from '../ai/agentRunner.js'
 import { saveConversation } from '../historyStore.js'
 import { getLeadIdByTelefone, shouldHoldOnIaPause } from '../dadosClienteStore.js'
@@ -861,6 +862,10 @@ export function flushSession(env, sessionId, opts = {}) {
 export function makeEvolutionWebhookHandler(env) {
   return async function handler(req, res) {
     const rawBody = req.body || {}
+    if (rawBody.instance != null) {
+      rawBody.instance =
+        normalizeEvolutionInstance(env, String(rawBody.instance)) || String(rawBody.instance)
+    }
     const evtName = rawBody.event || rawBody.body?.event || 'unknown'
     const fromMe = Boolean(rawBody?.data?.key?.fromMe ?? rawBody?.body?.data?.key?.fromMe)
     const instanceName = rawBody.instance != null ? String(rawBody.instance) : null

@@ -16,6 +16,11 @@
  */
 
 import { buildPoloEscolhaPreFormMessage } from '../libShared/sumarePoloCatalog.js'
+import {
+  DEFAULT_LGPD_SENSITIVE_REFUSAL,
+  lgpdGuardEnabled,
+  replyLeaksSensitiveCandidateData,
+} from '../libShared/lgpdCompliance.js'
 
 const PROMISE_FORM_SEND_RX =
   /\b(enviei|acabei de enviar|j[aá] enviei|j[aá] ativei|vou enviar|vou mandar|pode aguardar|aguarde um momento|em instantes (vou|envio))\b[\s\S]{0,80}\bformul[aá]rio\b/i
@@ -120,6 +125,34 @@ export function validateReplyAgainstActions({ reply, toolCalls = [], stage = nul
   }
 
   return { violation: false }
+}
+
+/**
+ * Bloqueia respostas que vazam dados sensíveis de candidatos (LGPD).
+ * @param {object} params
+ * @param {string} params.reply
+ * @param {string} [params.userMessage]
+ * @param {Record<string,string>} [params.env]
+ */
+export function validateReplyLgpd({ reply, userMessage = '', env = process.env } = {}) {
+  if (!lgpdGuardEnabled(env)) return { violation: false }
+  const text = String(reply || '')
+  if (!text || text.length < 4) return { violation: false }
+  const check = replyLeaksSensitiveCandidateData(text, { userMessage })
+  if (!check.leak) return { violation: false }
+  return {
+    violation: true,
+    code: check.code,
+    safeReply: DEFAULT_LGPD_SENSITIVE_REFUSAL,
+    original: text,
+  }
+}
+
+/** Valida guard de ações + LGPD em sequência. */
+export function validateReplyBeforeSend({ reply, toolCalls = [], stage = null, userMessage = '', env = process.env } = {}) {
+  const actionVerdict = validateReplyAgainstActions({ reply, toolCalls, stage })
+  if (actionVerdict.violation) return actionVerdict
+  return validateReplyLgpd({ reply, userMessage, env })
 }
 
 /** Para testes/inspeção: lista as regex usadas. */
