@@ -15,7 +15,7 @@ import {
 import { fetchLeadFormSnapshot } from './inscricaoKommoFields.js'
 import { updateDadosCliente, normalizeTelefone, fetchDadosClienteByTelefone } from './dadosClienteStore.js'
 import { sendMessageWithNote } from './whatsappSender.js'
-import { createLeadNote } from './kommoClient.js'
+import { createLeadAuditNote } from './kommoClient.js'
 import {
   isSumareCaptacaoEnabled,
   runCaptacaoContratoWorkflow,
@@ -265,7 +265,7 @@ export async function runMatriculaCaptacaoAfterForm(env, ctx) {
     const noteLine = whatsappOk
       ? `Inscrição Sumaré (candidato ${candidatoId}) — link contrato enviado por WhatsApp: ${contractUrl}`
       : `Inscrição Sumaré (candidato ${candidatoId}) — link contrato gerado (pendente envio WhatsApp): ${contractUrl}`
-    await createLeadNote(env, leadId, noteLine).catch(() => {})
+    await createLeadAuditNote(env, leadId, noteLine).catch(() => {})
   }
 
   console.log(

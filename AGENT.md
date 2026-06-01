@@ -12,6 +12,71 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-06-01 - Notas internas de auditoria não vazam como mensagem do candidato
+
+- **Decisão**
+  - Toda nota INTERNA de auditoria criada pelo agente (movimentação de
+    funil, motivo de perda, comprovante recebido, reativação) passa a ser
+    criada via novo helper `createLeadAuditNote` (`server/kommoClient.js`),
+    que injeta o marcador estável `AGENT_AUDIT_NOTE_MARKER`
+    (`· [registro interno IA]`).
+  - O poll de inbound (`kommoInboundPoll`) descarta essas notas através de
+    `isKommoSystemOrIntegrationNote`, que agora chama
+    `isAgentInternalAuditNote` em duas camadas:
+    - **Camada A (marcador):** qualquer nota com `[registro interno IA]`
+      é auditoria — blindagem definitiva para notas futuras, independente
+      do texto.
+    - **Camada B (frases):** frases de auditoria já existentes no CRM
+      ("Lead confirmou desistência", "Motivo da perda", "Comprovante de
+      pagamento recebido", "movido para fila/pipeline", "após inatividade",
+      "fila pós-matrícula") — defesa em profundidade para notas antigas
+      sem o marcador.
+
+- **Contexto**
+  - O agente em produção lê mensagens via polling de notas do Kommo (não há
+    webhook direto do WhatsApp para esses leads). O poll separa "fala do
+    candidato" de "eco/sistema" por heurística de texto.
+  - A nota de auditoria de desistência ("Lead confirmou desistência da
+    inscrição via WhatsApp. Motivo da perda: Sem Interesse. Movido para
+    fila 143…") não casava nenhum filtro e foi lida como **mensagem do
+    candidato**, entrando no `n8n_chat_histories` como `user` (lead
+    #23841399, id 54545). Isso corrompeu o contexto do LLM.
+  - Havia 8 call sites de `createLeadNote`; vários gravavam notas internas
+    com risco de vazar. O modelo era frágil: cada texto novo de nota
+    interna podia vazar de novo.
+
+- **Alternativas descartadas**
+  - Só expandir o heurístico de texto (camada B isolada): "whack-a-mole" —
+    cada nova frase de auditoria voltaria a vazar. Mantido apenas como
+    defesa em profundidade.
+  - Gravar auditoria com `note_type` distinto: Kommo trata `common` de
+    forma especial e a integração WhatsApp também usa `common`; mudar o
+    tipo arriscava quebrar a visualização no CRM e o que o poll já consome.
+
+- **Impacto**
+  - Notas de auditoria nunca mais entram no histórico do LLM como fala do
+    candidato — atuais (camada B) e futuras (camada A).
+  - Call sites roteados: `inscricaoDesistenciaFlow`, `inscricaoAceitePagamentoFlow`,
+    `inactivityReengagement`, `matriculaCaptacaoPipeline`. `kommoSalesbot`
+    e `whatsappSender`/`whatsappTemplateSender` mantêm `createLeadNote`
+    (já filtrados por salesbot/sufixo EX-).
+  - `createLeadAuditNote` é idempotente (não duplica o marcador).
+  - Histórico corrompido do lead de teste #23841399 foi limpo (reset).
+  - Testes seção 14 (14 asserts): texto exato da desistência, comprovante,
+    inatividade, marcador arbitrário, e garantia de que fala real do
+    candidato NÃO é classificada como auditoria. 139/139 passando.
+
+- **Arquivos**
+  - `libShared/inboundMessageSanitize.js`: `AGENT_AUDIT_NOTE_MARKER`,
+    `isAgentInternalAuditNote`, plug em `isKommoSystemOrIntegrationNote`.
+  - `server/kommoClient.js`: `createLeadAuditNote`.
+  - `server/inscricaoDesistenciaFlow.js`, `server/inscricaoAceitePagamentoFlow.js`,
+    `server/inactivityReengagement.js`, `server/matriculaCaptacaoPipeline.js`:
+    roteados para o helper.
+  - `scripts/test-inscricao-flow.mjs`: seção 14.
+
+---
+
 ### 2026-05-28 - Pause gate com exceção para `desistencia_concluida` (early handler)
 
 - **Decisão**

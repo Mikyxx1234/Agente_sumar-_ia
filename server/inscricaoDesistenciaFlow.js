@@ -33,7 +33,7 @@ import {
   getLeadIdByTelefone,
 } from './dadosClienteStore.js'
 import { DADOS_CLIENTE_INSCRICAO_SELECT } from './dadosClienteInscricaoFields.js'
-import { createLeadNote, updateLeadPipelineStatus } from './kommoClient.js'
+import { createLeadAuditNote, updateLeadPipelineStatus } from './kommoClient.js'
 import { setSumMotivoPerdaSemInteresse } from './sumareLeadFields.js'
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
@@ -125,7 +125,7 @@ async function finalizeDesistencia(env, { telefone, idLead, executionId, pushNam
       ok: Boolean(motivo?.ok),
     })
 
-    await createLeadNote(
+    await createLeadAuditNote(
       env,
       idLead,
       'Lead confirmou desistência da inscrição via WhatsApp. Motivo da perda: Sem Interesse. ' +

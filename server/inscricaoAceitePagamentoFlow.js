@@ -18,7 +18,7 @@ import {
   updateDadosCliente,
   getLeadIdByTelefone,
 } from './dadosClienteStore.js'
-import { createLeadNote, updateLeadPipelineStatus } from './kommoClient.js'
+import { createLeadAuditNote, updateLeadPipelineStatus } from './kommoClient.js'
 import { fetchCandidatoStatus } from './matriculaCaptacaoPipeline.js'
 import {
   consultarStatusCandidato,
@@ -233,7 +233,7 @@ export async function tryHandleMatriculaAceitePagamentoFlow(env, input) {
   const { pipelineId, statusId } = resolvePosMatriculaTarget(env)
 
   if (idLead) {
-    await createLeadNote(
+    await createLeadAuditNote(
       env,
       idLead,
       `Comprovante de pagamento recebido via WhatsApp (candidato ${candidatoId || 'n/a'}). ` +

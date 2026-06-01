@@ -40,7 +40,11 @@ import {
   INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
   INSCRICAO_FORM_STATUS_CONCLUIDO,
 } from '../libShared/inscricaoFormHeuristics.js'
-import { isKommoSystemOrIntegrationNote } from '../libShared/inboundMessageSanitize.js'
+import {
+  isKommoSystemOrIntegrationNote,
+  isAgentInternalAuditNote,
+  AGENT_AUDIT_NOTE_MARKER,
+} from '../libShared/inboundMessageSanitize.js'
 import { detectStateFromReply, AUTO_SYNC_TERMINAL_OR_ADVANCED } from '../server/inscricaoStateAutoSync.js'
 import { buildPoloEscolhaPreFormMessage } from '../libShared/sumarePoloCatalog.js'
 import { resolvePortalUrlForCandidato } from '../server/sumareCaptacaoClient.js'
@@ -761,6 +765,67 @@ section('13. Gate atendimento_ia=pause — exceção para desistência concluíd
   assertEqual(r5.hold, true, '13.5 PAUSE maiúsculo = bloqueia')
   const r6 = decideHoldOnIaPause({ atendimento_ia: 'Pause', inscricao_form_status: null })
   assertEqual(r6.hold, true, '13.5b Pause capitalizado = bloqueia')
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* 14. Notas internas de auditoria NUNCA viram mensagem do candidato          */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+section('14. Nota interna de auditoria filtrada pelo poll de inbound')
+
+{
+  // Texto EXATO que corrompeu o lead #23841399 (entrou como msg do user).
+  const desistNote =
+    'Lead confirmou desistência da inscrição via WhatsApp. Motivo da perda: Sem Interesse. ' +
+    'Movido para fila 143 (pipeline 13756724).'
+  assert(isAgentInternalAuditNote(desistNote), '14.1 nota de desistência é auditoria (camada B)')
+  assert(
+    isKommoSystemOrIntegrationNote(desistNote),
+    '14.1b poll descarta nota de desistência (via isKommoSystemOrIntegrationNote)',
+  )
+
+  const comprovanteNote =
+    'Comprovante de pagamento recebido via WhatsApp (candidato 12345). ' +
+    'Lead movido para fila pós-matrícula (pipeline 13756724 / status 106426128) — ' +
+    'aguardando instruções de início do curso.'
+  assert(isAgentInternalAuditNote(comprovanteNote), '14.2 nota de comprovante é auditoria')
+  assert(isKommoSystemOrIntegrationNote(comprovanteNote), '14.2b poll descarta nota de comprovante')
+
+  const inatividadeNote =
+    'Lead movido para fila 143 após inatividade (sem resposta ao ping de reativação).'
+  assert(isAgentInternalAuditNote(inatividadeNote), '14.3 nota de inatividade é auditoria')
+  assert(isKommoSystemOrIntegrationNote(inatividadeNote), '14.3b poll descarta nota de inatividade')
+
+  // Camada A — qualquer texto com o marcador é auditoria, independente da frase.
+  const arbitraria = `Qualquer anotação futura do sistema ${AGENT_AUDIT_NOTE_MARKER}`
+  assert(isAgentInternalAuditNote(arbitraria), '14.4 marcador explícito (camada A) detectado')
+  assert(isKommoSystemOrIntegrationNote(arbitraria), '14.4b poll descarta nota com marcador')
+
+  // NÃO pode classificar fala real do candidato como auditoria.
+  assert(
+    !isAgentInternalAuditNote('quero fazer a inscrição no curso de pedagogia'),
+    '14.5 fala do candidato NÃO é auditoria',
+  )
+  assert(
+    !isAgentInternalAuditNote('qual o valor da matrícula?'),
+    '14.5b pergunta de valor NÃO é auditoria',
+  )
+  assert(
+    !isAgentInternalAuditNote('desisti de fazer faculdade esse ano'),
+    '14.5c desabafo do lead (sem frase de auditoria) NÃO é auditoria',
+  )
+  assert(!isAgentInternalAuditNote(''), '14.5d vazio NÃO é auditoria')
+
+  // Flow responses received continua passando (não é auditoria, aciona pós-form).
+  assert(
+    !isKommoSystemOrIntegrationNote('Flow responses received'),
+    '14.6 flow responses received não é descartado',
+  )
+
+  // Idempotência: nota já marcada não recebe marcador duplo (simula helper).
+  const jaMarcada = `Nota X ${AGENT_AUDIT_NOTE_MARKER}`
+  const markerCount = (jaMarcada.match(/\[registro interno ia\]/gi) || []).length
+  assertEqual(markerCount, 1, '14.7 marcador presente uma única vez')
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */

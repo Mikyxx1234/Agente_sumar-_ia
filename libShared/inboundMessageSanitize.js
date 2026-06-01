@@ -6,6 +6,48 @@ import { normalizeMessageForScope } from './scopeHeuristics.js'
 
 export const AGENT_OUTBOUND_SUFFIX = /\s-\sEX-\d{6}-\d{4}-\d{3}\s*$/i
 
+/**
+ * Marcador estável injetado em TODA nota interna de auditoria criada pelo
+ * agente (`createLeadAuditNote`). O poll de inbound (kommoInboundPoll) usa
+ * este marcador para excluir essas notas de forma definitiva — sem depender
+ * de casar o texto da nota frase a frase.
+ *
+ * É discreto o suficiente para o operador no CRM e nunca aparece em mensagem
+ * real de candidato.
+ */
+export const AGENT_AUDIT_NOTE_MARKER = '· [registro interno IA]'
+
+/** Regex tolerante: aceita o marcador com ou sem o "·" e espaçamento variável. */
+const AGENT_AUDIT_NOTE_MARKER_RE = /\[registro\s+interno\s+ia\]/i
+
+/**
+ * Detecta nota interna de auditoria do agente (movimentação de funil, motivo
+ * de perda, comprovante recebido, etc.). NUNCA é fala do candidato.
+ *
+ * Camada A: marcador explícito `[registro interno IA]` — blindagem definitiva
+ *   para notas criadas via `createLeadAuditNote`.
+ * Camada B: frases conhecidas de auditoria já existentes no CRM (defesa em
+ *   profundidade para notas antigas sem o marcador).
+ */
+export function isAgentInternalAuditNote(text) {
+  const raw = String(text || '')
+  if (!raw.trim()) return false
+  // Camada A — marcador explícito.
+  if (AGENT_AUDIT_NOTE_MARKER_RE.test(raw)) return true
+
+  // Camada B — frases de auditoria conhecidas.
+  const low = raw.toLowerCase()
+  if (/\blead\s+confirmou\s+desist[eê]ncia\b/i.test(low)) return true
+  if (/\bmotivo\s+da\s+perda\b/i.test(low)) return true
+  if (/\bcomprovante\s+de\s+pagamento\s+recebido\b/i.test(low)) return true
+  if (/\blead\s+movido\s+para\s+(a\s+)?fila\b/i.test(low)) return true
+  if (/\bmovido\s+para\s+(a\s+)?fila\s+\d+\b/i.test(low)) return true
+  if (/\bmovido\s+para\s+(o\s+)?pipeline\b/i.test(low)) return true
+  if (/\bap[oó]s\s+inatividade\b/i.test(low) && /\b(movido|fila|reativa)\b/i.test(low)) return true
+  if (/\bfila\s+p[oó]s-?matr[ií]cula\b/i.test(low)) return true
+  return false
+}
+
 const ASSISTANT_ECHO_START =
   /^(boa\s+(tarde|dia|noite)|ol[aá]!|perfeito!|desculpe|obrigado|salesbot\s+formulario)/i
 
@@ -81,6 +123,8 @@ export function isKommoSystemOrIntegrationNote(text) {
   // Sinal do Meta/Kommo de Flow preenchido — deve acionar pós-form, não ser descartado.
   if (/\bflow\s+responses\s+received\b/i.test(low)) return false
   if (/\brespostas\s+recebidas\s+(no\s+)?flow\b/i.test(low)) return false
+  // Nota interna de auditoria do agente (marcador + frases conhecidas).
+  if (isAgentInternalAuditNote(text)) return true
   if (isKommoCaptacaoContratoSystemNote(text)) return true
   if (/\bsalesbot\b/i.test(low)) return true
   if (/\bformulario_sum\b/i.test(low)) return true

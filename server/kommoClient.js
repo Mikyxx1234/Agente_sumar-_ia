@@ -12,6 +12,8 @@
  *   KOMMO_ACCESS_TOKEN   Bearer (OAuth ou long-lived)
  */
 
+import { AGENT_AUDIT_NOTE_MARKER } from '../libShared/inboundMessageSanitize.js'
+
 function getConfig(env) {
   return {
     base: (env.KOMMO_BASE_URL || '').replace(/\/$/, ''),
@@ -340,6 +342,22 @@ export async function createLeadNote(env, leadId, text) {
     return { ok: false, code: r.code || 'KOMMO_ERROR', status: r.status, error: summarizeError(r) }
   }
   return { ok: true, status: r.status, data: r.data, noteId: extractCreatedNoteId(r.data) }
+}
+
+/**
+ * Cria uma nota INTERNA de auditoria no lead (movimentação de funil, motivo de
+ * perda, comprovante recebido, etc.). Injeta o marcador `AGENT_AUDIT_NOTE_MARKER`
+ * para que o poll de inbound (kommoInboundPoll) nunca a leia como fala do
+ * candidato. Use sempre que a nota for um registro do sistema — não uma
+ * mensagem enviada ao lead.
+ */
+export async function createLeadAuditNote(env, leadId, text) {
+  const raw = String(text ?? '').trim()
+  // Idempotente: não duplica o marcador se já estiver presente.
+  const tagged = /\[registro\s+interno\s+ia\]/i.test(raw)
+    ? raw
+    : `${raw} ${AGENT_AUDIT_NOTE_MARKER}`
+  return createLeadNote(env, leadId, tagged)
 }
 
 function extractCreatedNoteId(data) {

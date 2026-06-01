@@ -30,7 +30,7 @@ import {
 } from '../libShared/inscricaoFormHeuristics.js'
 import { updateLeadPipelineStatus } from './kommoClient.js'
 import { generateExecutionId } from './ai/executionTelemetry.js'
-import { createLeadNote } from './kommoClient.js'
+import { createLeadAuditNote } from './kommoClient.js'
 
 const PING_MESSAGES = [
   'Oi, ainda está aí? 😊',
@@ -272,7 +272,7 @@ export async function tryInactivityReengagement(env, ctx) {
     const patch = await updateLeadPipelineStatus(env, leadId, moveTarget)
     if (patch.ok) {
       await setReativacaoFields(env, telefone, { [FIELD_MOVED_AT]: new Date().toISOString() })
-      await createLeadNote(
+      await createLeadAuditNote(
         env,
         leadId,
         `Lead movido para fila ${moveTarget.statusId} após inatividade (sem resposta ao ping de reativação).`,
