@@ -7,13 +7,11 @@ function parseLegacyAliases(env) {
   const fromEnv = raw
     ? raw.split(/[,;\n]+/).map((s) => s.trim()).filter(Boolean)
     : []
-  const builtIn = [
-    'Sumare Licenciado - Comercial',
-    'sumare licenciado - comercial',
-    'sumare_ia',
-    'SUMARE IA ',
-  ]
-  return [...new Set([...fromEnv, ...builtIn])]
+  // Sem aliases embutidos: o projeto usa apenas a instância configurada em
+  // EVOLUTION_INSTANCE (SUMARE_IA), resolvida por comparação case-insensitive.
+  // Instâncias antigas/duplicadas no Evolution não são referenciadas aqui —
+  // se algum dia precisar mapear um webhook legado, use EVOLUTION_INSTANCE_LEGACY.
+  return [...new Set(fromEnv)]
 }
 
 export function getEvolutionInstanceName(env) {
