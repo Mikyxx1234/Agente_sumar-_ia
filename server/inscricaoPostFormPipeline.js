@@ -243,7 +243,10 @@ export async function detectFormSumarRecebidoNoKommo(env, leadId, options = {}) 
 
   const notesRes = await listLeadNotes(env, id, { limit: 60, order: 'desc' })
   const notes = notesRes.ok && Array.isArray(notesRes.notes) ? notesRes.notes : []
-  const formSentMs = findLastFormularioSumSentMs(notes)
+  // Cap por idade: nota de formulário fora da janela (ex.: dias atrás após um
+  // reset) NÃO deve ancorar a detecção por eventos de campo/snapshot — senão o
+  // pós-formulário re-dispara sobre dados velhos e pausa a IA (distribuir_consultor).
+  const formSentMs = findLastFormularioSumSentMs(notes, { maxAgeMs, nowMs: now })
   const afterMs = Math.max(
     Number.isFinite(minNoteAfterMs) && !Number.isNaN(minNoteAfterMs) ? minNoteAfterMs : 0,
     formSentMs > 0 ? formSentMs - 60_000 : 0,

@@ -646,3 +646,44 @@ Histórico das decisões estruturais do agente. Formato por entrada:
   - **Cobertura de testes:** seção 8 em `scripts/test-inscricao-flow.mjs`
     valida `detectStateFromReply` para reply canônico, com sufixo EX,
     neutro, vazio, e proteção de estados terminais.
+
+### 2026-06-01 - Cap de idade em findLastFormularioSumSentMs (loop pós-formulário)
+
+- **Decisão**
+  `findLastFormularioSumSentMs` passou a aceitar `{ maxAgeMs, nowMs }`
+  opcionais. Em `detectFormSumarRecebidoNoKommo`
+  (`server/inscricaoPostFormPipeline.js`) a referência do "formulário
+  enviado" é capada por `INSCRICAO_FORM_KOMMO_NOTE_MAX_AGE_H` (default 48h):
+  nota de formulário fora da janela NÃO ancora mais a detecção por eventos
+  de campo nem por snapshot.
+
+- **Contexto**
+  Lead #23841399 ficava mudo após cada reset. Diagnóstico (via API Evolution
+  + memória Supabase): o Evolution recebia as mensagens normalmente na
+  instância ativa `SUMARE_IA` (webhook ON, `MESSAGES_UPSERT`), mas o agente
+  estava pausado (`atendimento_ia='pause'`, `inscricao_form_status=
+  'distribuir_consultor'`). Causa: uma nota antiga `Salesbot Formulario_Sum
+  ativado` (29/mai, ~69h) continuava servindo de âncora; como `formSentMs`
+  era calculado sem limite de idade, o ramo de `custom_field_*_value_changed`
+  recontava mudanças de campo do card (inclusive pós-reset) e re-detectava
+  "formulário recebido" → tentativa de matrícula falha (dado de teste) →
+  pausa da IA. Loop a cada reset.
+
+- **Alternativas descartadas**
+  - *Apagar a nota antiga no Kommo a cada reset*: frágil (depende de permissão
+    e de varrer notas), não resolve o caso real de produção com notas legadas.
+  - *Reduzir o cap global de `maxAgeMs` da detecção*: afetaria a janela do
+    loop de notas legítimo (resposta de flow que chega horas depois).
+  - *Capar dentro de `findLastFormularioSumSentMs` por padrão*: mudaria o
+    comportamento de `postFormSendGuard.js`, que quer a última referência
+    independente da idade. Por isso o cap é opt-in via parâmetro.
+
+- **Impacto**
+  - Pós-formulário não re-dispara sobre formulário fora da janela; fim do
+    loop de pausa após reset. Caminho legítimo (form enviado e respondido
+    dentro de 48h) intacto — o loop de notas recentes continua detectando.
+  - `postFormSendGuard.js` inalterado (cap opt-in).
+  - **Testes:** `scripts/test-form-notes-age-cap.mjs`
+    (`npm run test:form-notes-age-cap`, 6/6) cobre sem cap, nota velha
+    ignorada, nota recente mantida, mistura, sem nota e cap desativado.
+    Suíte `test:inscricao-flow` segue 139/139.

@@ -22,8 +22,19 @@ function noteCreatedMs(n) {
   return Number.isNaN(t) ? 0 : t
 }
 
-/** Última ativação/envio do formulário Sumaré no Kommo (epoch ms). */
-export function findLastFormularioSumSentMs(notes) {
+/**
+ * Última ativação/envio do formulário Sumaré no Kommo (epoch ms).
+ *
+ * `options.maxAgeMs` (opcional): ignora notas de envio mais antigas que essa
+ * janela. Sem o cap, uma nota de formulário antiga (ex.: dias atrás) continua
+ * servindo de âncora para detecções por evento de campo/snapshot, o que
+ * re-dispara o pós-formulário sobre dados velhos (loop após reset). Por padrão
+ * NÃO há cap (preserva o comportamento de quem só quer a última referência).
+ */
+export function findLastFormularioSumSentMs(notes, options = {}) {
+  const maxAgeMs = Number(options.maxAgeMs)
+  const hasCap = Number.isFinite(maxAgeMs) && maxAgeMs > 0
+  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now()
   let max = 0
   for (const n of notes || []) {
     const blob = noteBlob(n).toLowerCase()
@@ -35,7 +46,9 @@ export function findLastFormularioSumSentMs(notes) {
     if (!/\bativad[oa]\b|inscri[cç]|enviad[oa]|envio\b|salesbot|dados b[aá]sicos/i.test(blob)) {
       continue
     }
-    max = Math.max(max, noteCreatedMs(n))
+    const ms = noteCreatedMs(n)
+    if (hasCap && ms && nowMs - ms > maxAgeMs) continue
+    max = Math.max(max, ms)
   }
   return max
 }
