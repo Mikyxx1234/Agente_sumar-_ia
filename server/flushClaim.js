@@ -106,9 +106,12 @@ async function tryDadosClienteFlushClaim(env, telefone, ttlSec) {
 
 /**
  * Claim distribuído (Redis / Supabase). Chamar após tryReserveFlushSync.
+ * Em testMode (Playground /api/test/inbound), só o lock do processo vale —
+ * evita colidir com claim de 90s no Supabase (produção ou turno anterior).
  */
-export async function tryClaimAgentFlush(env, { sessionId, telefone, redisClient, redisKeyPrefix }) {
+export async function tryClaimAgentFlush(env, { sessionId, telefone, redisClient, redisKeyPrefix, testMode = false }) {
   if (!flushClaimEnabled(env)) return { claimed: true }
+  if (testMode) return { claimed: true }
 
   const sid = String(sessionId || '').trim()
   if (!sid) return { claimed: false, reason: 'missing_session' }
@@ -136,4 +139,49 @@ export async function tryClaimAgentFlush(env, { sessionId, telefone, redisClient
   if (tryMemoryClaim(sid, ttlSec)) return { claimed: true }
 
   return { claimed: false, reason: 'claim_busy' }
+}
+
+/**
+ * Libera claim distribuído ao fim do flush (próximo turno não fica preso 90s).
+ */
+export async function releaseAgentFlush(env, { sessionId, telefone, redisClient, redisKeyPrefix }) {
+  if (!flushClaimEnabled(env)) return
+
+  const sid = String(sessionId || '').trim()
+  if (!sid) return
+
+  const prefix = redisKeyPrefix || env.REDIS_KEY_PREFIX || 'wa:msg:'
+  const claimKey = `${prefix}flush:claim:${sid}`
+
+  if (redisClient) {
+    try {
+      await redisClient.del(claimKey)
+    } catch (err) {
+      console.warn('[flushClaim] redis release falhou:', err.message)
+    }
+  }
+
+  memoryClaims.delete(sid)
+
+  const fone = normalizeTelefone(telefone || sid)
+  if (!fone) return
+
+  const { url, key, table } = getSupabaseCfg(env)
+  const telFilter = dadosClienteTelefoneOrFilter(fone)
+  if (!url || !key || !telFilter) return
+
+  try {
+    await fetch(`${url}/rest/v1/${encodeURIComponent(table)}?${telFilter}`, {
+      method: 'PATCH',
+      headers: {
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal',
+      },
+      body: JSON.stringify({ [FIELD_FLUSH_CLAIM]: null }),
+    })
+  } catch (err) {
+    console.warn('[flushClaim] supabase release falhou:', err.message)
+  }
 }

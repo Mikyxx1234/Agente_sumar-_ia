@@ -1,0 +1,325 @@
+{
+  "name": "log_inscricao_feita_sum_kommo_bridge",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "kommo-form-sum-completed",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-1504, 464],
+      "id": "b631c2bd-4e14-47ce-a4bd-a7837698c450",
+      "name": "Webhook Kommo (form preenchido)",
+      "webhookId": "kommo-form-sum-completed-bridge"
+    },
+    {
+      "parameters": {
+        "jsCode": "// POST do agente/Salesbot quando form Flow concluído.\n// Webhook IN: https://n8n-new-n8n.ca31ey.easypanel.host/webhook/kommo-form-sum-completed\n\nconst body = $json.body ?? $json;\n\nfunction pick(obj, keys) {\n  for (const k of keys) {\n    const v = obj?.[k];\n    if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();\n  }\n  return null;\n}\n\nfunction normalizePhone(v) {\n  if (!v) return null;\n  let d = String(v).replace(/\\D/g, '');\n  if (!d) return null;\n  if (!d.startsWith('55') && (d.length === 10 || d.length === 11)) d = `55${d}`;\n  return `${d}@s.whatsapp.net`;\n}\n\nconst leadId = Number(pick(body, ['lead_id', 'leadId', 'id_lead', 'entity_id']));\nconst phoneRaw = pick(body, ['phone', 'telefone', 'wa_id', 'whatsapp', 'contact_phone']);\nconst message = pick(body, ['message', 'text', 'body']) || '';\nconst source = pick(body, ['source']) || 'kommo_salesbot';\n\nconst isFlowSignal =\n  /respostas\\s+recebidas\\s+(no\\s+)?flow/i.test(message) ||\n  /flow\\s+responses\\s+received/i.test(message) ||\n  body.trigger === 'form_flow_completed' ||\n  body.form_completed === true;\n\nif (!Number.isFinite(leadId) || leadId <= 0) {\n  return [{ json: { ok: false, error: 'lead_id ausente ou inválido', raw: body } }];\n}\n\nreturn [{\n  json: {\n    ok: true,\n    lead_id: leadId,\n    phone_raw: phoneRaw,\n    session_id: normalizePhone(phoneRaw),\n    message,\n    source,\n    is_flow_signal: isFlowSignal,\n    bridge_id: `kommo-bridge-${leadId}-${Date.now()}`,\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-1280, 464],
+      "id": "ba933369-0bee-4999-a3d6-6cac83ae2fe3",
+      "name": "Normalizar payload Kommo"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-lead-ok",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-1056, 464],
+      "id": "29d95303-ed1b-4dd9-917a-c6cf558c6817",
+      "name": "Lead ID válido?"
+    },
+    {
+      "parameters": {
+        "url": "=https://academicosoead.kommo.com/api/v4/leads/{{ $json.lead_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "with",
+              "value": "contacts,custom_fields_values"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [-832, 384],
+      "id": "d76df238-8a08-4218-9074-4549ff944116",
+      "name": "GET lead Kommo",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "KOMMO_BEARER_CREDENTIAL_ID",
+          "name": "Kommo API Bearer Sumare"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://academicosoead.kommo.com/api/v4/leads/{{ $('Normalizar payload Kommo').item.json.lead_id }}/notes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "limit",
+              "value": "40"
+            },
+            {
+              "name": "order[created_at]",
+              "value": "desc"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [-608, 384],
+      "id": "690e8e1d-1bdb-4c5e-8a0b-9dacb3abd33a",
+      "name": "GET notas lead",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "KOMMO_BEARER_CREDENTIAL_ID",
+          "name": "Kommo API Bearer Sumare"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const bridge = $('Normalizar payload Kommo').item.json;\nconst lead = $('GET lead Kommo').item.json;\nconst notesPayload = $('GET notas lead').item.json;\nconst notes = notesPayload?._embedded?.notes || [];\n\nfunction pickCf(fields, id) {\n  const f = (fields || []).find((x) => Number(x.field_id) === Number(id));\n  if (!f?.values?.length) return null;\n  const v = f.values[0];\n  return v?.value != null ? String(v.value).trim() : null;\n}\n\nfunction formatDateToDDMMYYYY(v) {\n  const s = String(v ?? '').trim();\n  if (!s) return null;\n  if (/^\\d{2}\\/\\d{2}\\/\\d{4}$/.test(s)) return s;\n  const iso = s.match(/^(\\d{4})-(\\d{2})-(\\d{2})$/);\n  if (iso) return `${iso[3]}/${iso[2]}/${iso[1]}`;\n  const digits = s.replace(/\\D/g, '');\n  if (digits.length === 8) return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4, 8)}`;\n  return s;\n}\n\nfunction mapSexo(enumId) {\n  const mapa = { '1194759': 'Masculino' };\n  return mapa[String(enumId)] ?? null;\n}\n\nfunction normalizeBrazilPhone(v) {\n  let digits = String(v ?? '').replace(/\\D/g, '');\n  if (!digits) return null;\n  if (!digits.startsWith('55') && (digits.length === 10 || digits.length === 11)) digits = `55${digits}`;\n  return digits;\n}\n\nfunction extractResponseJsonFromNotes(noteList) {\n  for (const n of noteList) {\n    const blob = JSON.stringify(n.params || n);\n    const m2 = blob.match(/\"response_json\"\\s*:\\s*\"(\\{.*?\\})\"/);\n    if (m2) {\n      try {\n        return JSON.parse(m2[1].replace(/\\\\\"/g, '\"'));\n      } catch {}\n    }\n    if (/TextInput_1475361_2/.test(blob)) {\n      try {\n        const raw = blob.match(/\\{[^{}]*TextInput_1475361_2[^{}]*\\}/);\n        if (raw) return JSON.parse(raw[0]);\n      } catch {}\n    }\n  }\n  return null;\n}\n\nconst cfs = lead.custom_fields_values || [];\nconst data = extractResponseJsonFromNotes(notes);\n\nconst parsedFromFlow = data\n  ? {\n      nome_completo: data.TextInput_1475361_2 || null,\n      cpf: data.TextInput_1475363_2 || null,\n      telefone: data.TextInput_1475397_2 || null,\n      email: data.TextInput_1475395_2 || null,\n      sexo_enum_id: data.Dropdown_1475971_2 || null,\n      data_nascimento: formatDateToDDMMYYYY(data.TextInput_1475467_2),\n      source: 'notes_response_json',\n    }\n  : null;\n\nconst fromCard = {\n  nome_completo: pickCf(cfs, 1475361),\n  cpf: pickCf(cfs, 1475363),\n  telefone: pickCf(cfs, 1475397),\n  email: pickCf(cfs, 1475395),\n  data_nascimento: formatDateToDDMMYYYY(pickCf(cfs, 1475467)),\n  sexo: pickCf(cfs, 1475971),\n  source: 'kommo_card_fields',\n};\n\nconst contact = lead._embedded?.contacts?.[0];\nconst phoneFromContact = contact?.custom_fields_values\n  ? contact.custom_fields_values.find((f) => /phone|telefone/i.test(String(f.field_code || f.field_name || '')))\n  : null;\nconst phoneContactVal = phoneFromContact?.values?.[0]?.value || null;\n\nconst telefoneNorm = normalizeBrazilPhone(\n  parsedFromFlow?.telefone || fromCard.telefone || phoneContactVal || bridge.phone_raw,\n);\n\nconst sessionId =\n  bridge.session_id || (telefoneNorm ? `${telefoneNorm}@s.whatsapp.net` : null);\n\nreturn [{\n  json: {\n    ok: true,\n    lead_id: bridge.lead_id,\n    bridge_id: bridge.bridge_id,\n    session_id: sessionId,\n    nome_completo: parsedFromFlow?.nome_completo || fromCard.nome_completo || null,\n    cpf: parsedFromFlow?.cpf || fromCard.cpf || null,\n    telefone_normalizado: telefoneNorm,\n    email: parsedFromFlow?.email || fromCard.email || null,\n    sexo: parsedFromFlow?.sexo_enum_id ? mapSexo(parsedFromFlow.sexo_enum_id) : fromCard.sexo,\n    data_nascimento: parsedFromFlow?.data_nascimento || fromCard.data_nascimento || null,\n    data_source: parsedFromFlow ? parsedFromFlow.source : fromCard.source,\n    has_form_fields: Boolean(\n      (parsedFromFlow?.nome_completo || fromCard.nome_completo) &&\n        (parsedFromFlow?.cpf || fromCard.cpf),\n    ),\n    is_flow_signal: bridge.is_flow_signal,\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-384, 384],
+      "id": "4b49c5be-eab6-4794-bf09-768390a666c9",
+      "name": "Extrair dados do form"
+    },
+    {
+      "parameters": {
+        "resource": "notes",
+        "operation": "createNotes",
+        "notes": {
+          "common": [
+            {
+              "entity_id": "={{ $json.lead_id }}",
+              "text": "=CPF: {{ $json.cpf || 'n/a' }}\nDATA DE NASCIMENTO: {{ $json.data_nascimento || 'n/a' }}\nNOME: {{ $json.nome_completo || 'n/a' }}\nEMAIL: {{ $json.email || 'n/a' }}\nTELEFONE INSCRICAO: {{ $json.telefone_normalizado || 'n/a' }}\nSEXO: {{ $json.sexo || 'n/a' }}\n[bridge kommo→n8n] {{ $json.bridge_id }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-kommo.kommo",
+      "typeVersion": 1,
+      "position": [-160, 384],
+      "id": "dcbc98ee-10a0-42e6-9b6d-77343f00730e",
+      "name": "Create new notes",
+      "credentials": {
+        "kommoOAuth2Api": {
+          "id": "0RLQwTFNZKVcXRY1",
+          "name": "Kommo acadêmico/comercial - BU"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "leads",
+        "operation": "updateLeads",
+        "collection": {
+          "lead": [
+            {
+              "id": "={{ $('Extrair dados do form').item.json.lead_id }}",
+              "pipeline_id": 13756724,
+              "status_id": 106804680,
+              "custom_fields_values": {
+                "custom_field": [
+                  {
+                    "data": "{\"id\":1475361,\"type\":\"text\"}",
+                    "value": "={{ $('Extrair dados do form').item.json.nome_completo }}"
+                  },
+                  {
+                    "data": "{\"id\":1475363,\"type\":\"numeric\"}",
+                    "value": "={{ $('Extrair dados do form').item.json.cpf }}"
+                  },
+                  {
+                    "data": "{\"id\":1475397,\"type\":\"text\"}",
+                    "value": "={{ $('Extrair dados do form').item.json.telefone_normalizado }}"
+                  },
+                  {
+                    "data": "{\"id\":1475467,\"type\":\"text\"}",
+                    "value": "={{ $('Extrair dados do form').item.json.data_nascimento }}"
+                  },
+                  {
+                    "data": "{\"id\":1475971,\"type\":\"select\"}",
+                    "value": "={{ $('Extrair dados do form').item.json.sexo }}"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-kommo.kommo",
+      "typeVersion": 1,
+      "position": [64, 384],
+      "id": "bbc4af6e-8c35-4d52-8dc8-8d2667bbd02d",
+      "name": "Update leads",
+      "credentials": {
+        "kommoOAuth2Api": {
+          "id": "0RLQwTFNZKVcXRY1",
+          "name": "Kommo acadêmico/comercial - BU"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://banco-agente-sumare.6tqx2r.easypanel.host/api/evolution/webhook",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"event\": \"messages.upsert\",\n  \"instance\": \"SUMARE_IA\",\n  \"data\": {\n    \"key\": {\n      \"remoteJid\": \"{{ $('Extrair dados do form').item.json.session_id || ($('Extrair dados do form').item.json.telefone_normalizado + '@s.whatsapp.net') }}\",\n      \"fromMe\": false,\n      \"id\": \"{{ $('Extrair dados do form').item.json.bridge_id }}\"\n    },\n    \"message\": {\n      \"conversation\": \"[FORMULARIO_SUMAR_PREENCHIDO]\"\n    },\n    \"messageType\": \"conversation\",\n    \"pushName\": \"Kommo bridge\"\n  }\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [288, 384],
+      "id": "a32cfcb9-21e8-4359-a339-2fb1c187b509",
+      "name": "Notificar agente (form preenchido)"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, lead_id: $('Extrair dados do form').item.json.lead_id, bridge_id: $('Extrair dados do form').item.json.bridge_id, session_id: $('Extrair dados do form').item.json.session_id, agent_notified: true } }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [512, 384],
+      "id": "f810cb5e-6674-4cb6-b0b2-918235725f72",
+      "name": "Responder OK"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [-832, 624],
+      "id": "f697331e-28c6-48b2-a137-58c049ce14e5",
+      "name": "Responder erro"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook Kommo (form preenchido)": {
+      "main": [[{ "node": "Normalizar payload Kommo", "type": "main", "index": 0 }]]
+    },
+    "Normalizar payload Kommo": {
+      "main": [[{ "node": "Lead ID válido?", "type": "main", "index": 0 }]]
+    },
+    "Lead ID válido?": {
+      "main": [
+        [{ "node": "GET lead Kommo", "type": "main", "index": 0 }],
+        [{ "node": "Responder erro", "type": "main", "index": 0 }]
+      ]
+    },
+    "GET lead Kommo": {
+      "main": [[{ "node": "GET notas lead", "type": "main", "index": 0 }]]
+    },
+    "GET notas lead": {
+      "main": [[{ "node": "Extrair dados do form", "type": "main", "index": 0 }]]
+    },
+    "Extrair dados do form": {
+      "main": [[{ "node": "Create new notes", "type": "main", "index": 0 }]]
+    },
+    "Create new notes": {
+      "main": [[{ "node": "Update leads", "type": "main", "index": 0 }]]
+    },
+    "Update leads": {
+      "main": [[{ "node": "Notificar agente (form preenchido)", "type": "main", "index": 0 }]]
+    },
+    "Notificar agente (form preenchido)": {
+      "main": [[{ "node": "Responder OK", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "83d12983-bc4e-4830-b107-4787c850cc61",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "2a1ebd20a532a80cff3c388df4cca3488bfc022f2736d484cb218e0dfe52974a"
+  },
+  "id": "p5X5pk2QLLgDepm9",
+  "tags": [
+    {
+      "updatedAt": "2025-12-17T21:22:14.272Z",
+      "createdAt": "2025-12-17T21:22:14.272Z",
+      "id": "dyi8SEA0aKcz2wBK",
+      "name": "sumare"
+    }
+  ]
+}

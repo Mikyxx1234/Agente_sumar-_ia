@@ -12,6 +12,98 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-06-02 - Webhook nativo WhatsApp Cloud API (Meta) sem Evolution
+
+- **Decisão**
+  - Receber as mensagens do candidato **direto da Meta** via webhook nativo,
+    eliminando a Evolution como intermediário do inbound (causa de quedas em
+    produção). Novas rotas em `server.js`:
+    `GET /api/whatsapp/webhook` (verificação `hub.challenge`) e
+    `POST /api/whatsapp/webhook` (eventos).
+  - Módulos novos e isolados:
+    - `server/whatsapp/metaWebhook.js` — verify token, validação de
+      assinatura `X-Hub-Signature-256` (HMAC com `WHATSAPP_APP_SECRET`),
+      parser do payload Meta (`entry[].changes[].value.messages[]`) para
+      texto/áudio/imagem/botão/interactive(Flow)/documento/vídeo/localização,
+      e push no MESMO buffer (`pushMessage`). Só BUFFERIZA; o agentScheduler
+      responde (idêntico ao webhook Evolution).
+    - `server/whatsapp/metaMedia.js` — download de mídia em 2 etapas
+      (`GET /<media_id>` → URL temporária → bytes), devolvendo base64 para
+      reaproveitar Whisper/Vision (`transcribeAudioBase64`/`analyzeImageBase64`).
+  - `express.json({ verify })` passou a guardar `req.rawBody` (bytes crus
+    necessários para o HMAC da assinatura).
+  - Marcadores de áudio/imagem no buffer são idênticos aos do caminho
+    Evolution, para o prompt (regra de mídia) reagir igual.
+  - **Rollout seguro**: a rota fica INERTE até `WHATSAPP_WEBHOOK_VERIFY_TOKEN`
+    ser configurado (GET 403, POST ignora). Evolution continua como fallback.
+    `WHATSAPP_INGEST_PHONE_ALLOWLIST` limita a fase de teste a números
+    específicos. Outbound, "digitando..." e mídia já eram Cloud API direto.
+
+- **Contexto**
+  - A conexão Meta↔Evolution cai com frequência em produção, deixando o
+    agente sem receber mensagens. O envio já era Cloud API direto (modo
+    `cloud`), então o número já é Meta Cloud — a Evolution só fazia ponte.
+  - A Cloud API não oferece "puxar" inbound por polling próprio; o caminho
+    direto é o webhook nativo (ou, alternativamente, o poll do Kommo já
+    existente).
+
+- **Alternativas descartadas**
+  - Poll do Kommo (`KOMMO_INBOUND_POLL_MODE`): funciona sem Evolution e sem
+    webhook, mas adiciona latência, depende da integração nativa do Kommo e
+    não traz mídia de forma confiável. Mantido como fallback secundário.
+  - Estabilizar a Evolution: não resolve a causa (a ponte Meta↔Evolution).
+
+- **Impacto**
+  - Inbound em tempo real, sem intermediário; some a gambiarra da "ponte
+    Cloud" (`contacts.upsert` sem telefone) que descartava mensagens.
+  - Migração faseada: código deployável sem efeito até configurar as envs +
+    Callback URL no painel Meta. Rollback = remover o verify token / reapontar
+    URL para a Evolution.
+  - Risco concentrado no download de mídia (mecanismo novo) — validar com
+    número de teste (texto → áudio → imagem → resposta) antes do corte.
+
+---
+
+### 2026-06-02 - Ambiente de teste do agente sem Evolution (/api/test/inbound)
+
+- **Decisão**
+  - Novo endpoint `POST /api/test/inbound { phone, message, send?, leadId? }`
+    (`server.js`) que injeta uma mensagem como se viesse do lead e roda o
+    caminho REAL `flushSession` (mesmo do scheduler) — exercitando todas as
+    funções do agente (inscrição, polo, distribuir, captação, telemetria)
+    sem depender do inbound da Evolution.
+  - `flushSessionInner` ganhou as flags de teste em `opts`:
+    `test:true` (ignora gates ai_disabled / reply_cooldown / ia_paused) e
+    `suppressWhatsapp:true` (não envia no WhatsApp, só devolve a reply;
+    também não re-enfileira o turno). `skipFunnelGate` já existia.
+  - Restrito à allowlist `TEST_INBOUND_PHONES` (CSV de dígitos; vazio =
+    só `5511944690752`).
+  - UI: Playground ganhou o modo "Teste real" (`src/components/Playground.jsx`)
+    com toggle "Responder no WhatsApp real" (send) vs "só na tela" (suppress).
+  - CLI: `scripts/test-inbound.mjs "<msg>" [telefone] [leadId] [--no-send]`.
+
+- **Contexto**
+  - A ponte Meta Cloud → Evolution descarta mensagens do candidato
+    (`contact_skip_no_remote_jid`): o `contacts.upsert` chega sem o telefone
+    do lead, então o inbound não entra no buffer e o agente fica mudo.
+  - Enquanto a ponte não é corrigida/deployada, era preciso um canal de
+    teste confiável para um número específico que exercite o agente inteiro.
+
+- **Alternativas descartadas**
+  - Reusar só o `/api/playground/flush`: roda `runAgent` mas não passa pelo
+    `flushSession` real (sem funil, sem envio WhatsApp, sem telemetria
+    `origem:evolution`), então não reproduz produção.
+  - Modo padrão do Playground (browser → OpenAI direto): usa prompt/tools
+    simplificados, sem inscrição/polo/CRM — não cobre "todas as funções".
+
+- **Impacto**
+  - Teste end-to-end de um número específico sem Evolution, com opção de
+    responder de verdade no WhatsApp ou só simular na tela.
+  - Risco contido: gates só são ignorados quando `test:true` (exclusivo do
+    endpoint) e o endpoint é limitado pela allowlist.
+
+---
+
 ### 2026-06-01 - Notas internas de auditoria não vazam como mensagem do candidato
 
 - **Decisão**

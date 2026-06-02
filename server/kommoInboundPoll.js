@@ -59,9 +59,11 @@ import {
   isLikelyAgentEcho,
 } from '../libShared/inboundMessageSanitize.js'
 import {
+  FORM_SUMAR_FLOW_COMPLETED_MARKER,
   inboundTextForFormFlowCompletion,
   messageIsFlowResponsesReceived,
 } from '../libShared/inscricaoFormHeuristics.js'
+import { maybeNotifyN8nFormBridge } from './kommoN8nFormBridge.js'
 
 /** @type {Map<number, { warmed: boolean, lastNoteId: number }>} */
 const noteState = new Map()
@@ -311,6 +313,16 @@ function bufferTextFromInboundRaw(rawText) {
   const stripped = stripExecutionSuffix(String(rawText || '').trim())
   if (!stripped) return ''
   return inboundTextForFormFlowCompletion(stripped)
+}
+
+/** Dispara webhook n8n quando formulário Flow é detectado (substitui Salesbot HTTP). */
+async function notifyN8nFormBridgeIfEnabled(env, { leadId, sessionId, rawMessage, source }) {
+  await maybeNotifyN8nFormBridge(env, {
+    leadId,
+    sessionId,
+    message: rawMessage,
+    source,
+  }).catch(() => {})
 }
 
 /**
@@ -589,6 +601,14 @@ async function pollNotes(env, leadId, sessionId, contactDigits) {
     const c = classifyInboundNote(n, env, contactDigits, types)
     if (c.kind === 'push') {
       await pushMessage(env, sessionId, c.text, { skipDedupe: true })
+      if (c.text === FORM_SUMAR_FLOW_COMPLETED_MARKER) {
+        await notifyN8nFormBridgeIfEnabled(env, {
+          leadId: lid,
+          sessionId,
+          rawMessage: extractNoteText(n, env) || c.text,
+          source: 'kommo_poll_notes',
+        })
+      }
       maxApplied = Math.max(maxApplied, c.nid)
       pushed += 1
       continue
@@ -1206,6 +1226,12 @@ async function pollEvents(env, leadId, sessionId, contactId) {
       if (flowText) {
         try {
           await pushMessage(env, sessionId, flowText, { skipDedupe: true })
+          await notifyN8nFormBridgeIfEnabled(env, {
+            leadId: lid,
+            sessionId,
+            rawMessage: text,
+            source: 'kommo_poll_events',
+          })
           pushed += 1
           if (evId) {
             st.seenIds.add(evId)
@@ -1648,6 +1674,12 @@ async function pollDispatcher(env, leadId, sessionId) {
       if (flowText) {
         try {
           await pushMessage(env, sessionId, flowText, { skipDedupe: true })
+          await notifyN8nFormBridgeIfEnabled(env, {
+            leadId: lid,
+            sessionId,
+            rawMessage: text,
+            source: 'kommo_poll_dispatcher',
+          })
           pushed += 1
           st.seenIds.add(mid)
           maxApplied = Math.max(maxApplied, mid)

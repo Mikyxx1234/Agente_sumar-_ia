@@ -452,7 +452,7 @@ function resolveBufferSessionId(sessionId) {
 
 export async function pushMessage(env, sessionId, text, opts = {}) {
   const sid = resolveBufferSessionId(sessionId)
-  if (!sid || !text) return
+  if (!sid || !text) return { pushed: false, skipped: 'invalid_args' }
   // Kill switch: IA desligada → DESCARTA na entrada. Mensagem nem
   // chega no buffer, então ao religar não há backlog pra processar
   // (comportamento "responde só novas após religar"). O playground/teste
@@ -460,13 +460,15 @@ export async function pushMessage(env, sessionId, text, opts = {}) {
   if (!opts.bypassAiSwitch) {
     const aiState = getAiControlStateSync()
     if (aiState.enabled === false) {
-      return { skipped: 'ai_disabled' }
+      return { pushed: false, skipped: 'ai_disabled' }
     }
   }
   const skipDedupe = opts.skipDedupe === true
   if (!skipDedupe && ingestDedupeEnabled(env)) {
     const ttlMs = ingestDedupeTtlMs(env)
-    if (ttlMs > 0 && shouldSkipDuplicateIngest(sid, text)) return
+    if (ttlMs > 0 && shouldSkipDuplicateIngest(sid, text)) {
+      return { pushed: false, skipped: 'ingest_dedupe' }
+    }
   }
   const backend = await getBackend(env)
   await backend.push(sid, text)
@@ -474,6 +476,7 @@ export async function pushMessage(env, sessionId, text, opts = {}) {
     const ttlMs = ingestDedupeTtlMs(env)
     if (ttlMs > 0) recordIngestDedupe(sid, text, ttlMs)
   }
+  return { pushed: true }
 }
 
 export async function getMessages(env, sessionId) {

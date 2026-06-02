@@ -69,6 +69,7 @@ import {
   messageLooksLikeFormFollowUp,
   messageLooksLikeFormSumarResponse,
 } from '../libShared/inscricaoFormHeuristics.js'
+import { matchPoloFromUserMessage } from '../libShared/sumarePoloCatalog.js'
 import { tryInactivityReengagement } from './inactivityReengagement.js'
 import { sendMessageWithNote } from './whatsappSender.js'
 import { saveConversation } from './historyStore.js'
@@ -414,8 +415,13 @@ export async function runSchedulerTick(env) {
         getLastTouchedAt(env, sessionId),
       ])
       if (messages?.length) {
-        const stale = await clearBufferIfStaleRepush(env, sessionId, messages)
-        if (stale.skip) return
+        const pendingText = messages.map((m) => String(m || '').trim()).join(' ').trim()
+        const looksLikePoloChoice =
+          messages.length === 1 && Boolean(matchPoloFromUserMessage(pendingText))
+        if (!looksLikePoloChoice) {
+          const stale = await clearBufferIfStaleRepush(env, sessionId, messages)
+          if (stale.skip) return
+        }
       }
       if (!messages || messages.length === 0) {
         try {

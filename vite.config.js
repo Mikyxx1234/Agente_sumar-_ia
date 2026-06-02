@@ -24,6 +24,7 @@ export default defineConfig(({ mode }) => {
       proxy: {
         '/api/evolution': { target: 'http://127.0.0.1:8000', changeOrigin: true },
         '/api/playground': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+        '/api/test': { target: 'http://127.0.0.1:8000', changeOrigin: true },
         '/api/agent': { target: 'http://127.0.0.1:8000', changeOrigin: true },
         '/api/whatsapp': { target: 'http://127.0.0.1:8000', changeOrigin: true },
         '/api/scheduler': { target: 'http://127.0.0.1:8000', changeOrigin: true },

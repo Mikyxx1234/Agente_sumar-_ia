@@ -14,6 +14,8 @@ const CHAT_STORAGE_KEY = 'playground_chat'
 const WA_MODE_KEY = 'playground_wa_mode'
 const WA_PHONE_KEY = 'playground_wa_phone'
 const WA_SESSION_KEY = 'playground_wa_session'
+const REAL_TEST_KEY = 'playground_real_test'
+const REAL_TEST_SEND_KEY = 'playground_real_test_send'
 
 function loadChat() {
   try { return JSON.parse(localStorage.getItem(CHAT_STORAGE_KEY)) || [] }
@@ -67,6 +69,13 @@ export default function Playground({ prompts }) {
     localStorage.setItem(WA_SESSION_KEY, fresh)
     return fresh
   })
+  // Ambiente de teste real: roda o agente COMPLETO (runAgent: inscrição,
+  // polo, distribuir, captação) para um número específico via /api/test/inbound,
+  // sem depender do inbound da Evolution. realTestSend=true responde no
+  // WhatsApp de verdade; false só mostra a resposta aqui.
+  const [realTest, setRealTest] = useState(() => localStorage.getItem(REAL_TEST_KEY) === '1')
+  const [realTestSend, setRealTestSend] = useState(() => localStorage.getItem(REAL_TEST_SEND_KEY) === '1')
+
   const [debounceMs, setDebounceMs] = useState(DEFAULT_DEBOUNCE_MS)
   const [waCountdownAt, setWaCountdownAt] = useState(null)
   const [waCountdownRemaining, setWaCountdownRemaining] = useState(0)
@@ -136,6 +145,8 @@ export default function Playground({ prompts }) {
   const saveModel = (m) => { setModel(m); localStorage.setItem('oai_model', m) }
   const saveWaMode = (v) => { setWaMode(v); localStorage.setItem(WA_MODE_KEY, v ? '1' : '0') }
   const saveWaPhone = (p) => { setWaPhone(p); localStorage.setItem(WA_PHONE_KEY, p) }
+  const saveRealTest = (v) => { setRealTest(v); localStorage.setItem(REAL_TEST_KEY, v ? '1' : '0') }
+  const saveRealTestSend = (v) => { setRealTestSend(v); localStorage.setItem(REAL_TEST_SEND_KEY, v ? '1' : '0') }
 
   const clearCountdownInterval = () => {
     if (countdownTimerRef.current) {
@@ -357,6 +368,46 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
     return false
   }
 
+  // Ambiente de teste real: injeta a mensagem como se viesse do lead e roda
+  // o agente completo no servidor (mesmo caminho do scheduler), sem Evolution.
+  const handleSendRealTest = async (text) => {
+    const phoneDigits = String(waPhone || '').replace(/[^0-9]/g, '')
+    setMessages((prev) => [...prev, { role: 'user', content: text }])
+    setInput('')
+    if (!phoneDigits) {
+      setMessages((prev) => [...prev, { role: 'error', content: 'Informe o telefone do lead de teste em Config para usar o Teste real.' }])
+      return
+    }
+    setLoading(true)
+    setToolStatus(realTestSend ? 'Rodando agente completo e respondendo no WhatsApp' : 'Rodando agente completo (sem enviar WhatsApp)')
+    try {
+      const res = await fetch('/api/test/inbound', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: phoneDigits, message: text, send: realTestSend }),
+      })
+      const data = await res.json()
+      if (!data.ok && !data.reply) {
+        const detail = data.skipped ? `bloqueado: ${data.skipped}` : (data.error || 'erro')
+        setMessages((prev) => [...prev, { role: 'error', content: `Teste real: ${detail}` }])
+        return
+      }
+      setMessages((prev) => [...prev, {
+        role: 'assistant',
+        content: data.reply || '(agente não gerou resposta de texto)',
+        execId: data.executionId,
+        realTestSent: data.sent,
+        realTestTools: (data.toolCalls || []).map((t) => t.tool),
+      }])
+    } catch (e) {
+      setMessages((prev) => [...prev, { role: 'error', content: `Teste real falhou: ${e.message}` }])
+    } finally {
+      setLoading(false)
+      setToolStatus('')
+      inputRef.current?.focus()
+    }
+  }
+
   const handleSendWhatsapp = async (text) => {
     const sessionId = effectiveSessionId()
     const userMsg = { role: 'user', content: text, waBuffered: true }
@@ -504,6 +555,7 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
   const handleSend = async () => {
     const effectiveText = buildEffectiveText()
     if (!effectiveText || loading) return
+    if (realTest) { handleSendRealTest(effectiveText); return }
     if (waMode) { handleSendWhatsapp(effectiveText); return }
     if (!apiKey) { setShowConfig(true); return }
 
@@ -721,10 +773,16 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
             <Sparkles size={11} />
             {prompts.length} prompts ativos
           </span>
-          {waMode && (
+          {waMode && !realTest && (
             <span className="badge" style={{ background: 'rgba(16,185,129,.12)', color: '#10b981', border: '1px solid rgba(16,185,129,.25)' }}>
               <Phone size={11} />
               Simulando WhatsApp · {Math.round(debounceMs / 1000)}s
+            </span>
+          )}
+          {realTest && (
+            <span className="badge" style={{ background: realTestSend ? 'rgba(239,68,68,.12)' : 'rgba(99,102,241,.12)', color: realTestSend ? '#ef4444' : '#6366f1', border: `1px solid ${realTestSend ? 'rgba(239,68,68,.25)' : 'rgba(99,102,241,.25)'}` }}>
+              <Bot size={11} />
+              Teste real {realTestSend ? '· responde no WhatsApp' : '· só na tela'}
             </span>
           )}
         </div>
@@ -771,6 +829,42 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
           </div>
           <div>
             <label className="field-label">
+              <Bot size={12} />
+              Teste real (agente completo)
+            </label>
+            <label className="wa-toggle">
+              <input
+                type="checkbox"
+                checked={realTest}
+                onChange={(e) => saveRealTest(e.target.checked)}
+              />
+              <span>
+                Roda o agente do servidor (inscrição, polo, distribuir, captação) para o número abaixo, sem Evolution. Requer telefone.
+              </span>
+            </label>
+          </div>
+          {realTest && (
+            <div>
+              <label className="field-label">
+                <Phone size={12} />
+                Responder no WhatsApp real
+              </label>
+              <label className="wa-toggle">
+                <input
+                  type="checkbox"
+                  checked={realTestSend}
+                  onChange={(e) => saveRealTestSend(e.target.checked)}
+                />
+                <span>
+                  {realTestSend
+                    ? 'LIGADO: o agente envia a resposta no WhatsApp do número (via Evolution).'
+                    : 'DESLIGADO: só mostra a resposta aqui na tela (não envia nada).'}
+                </span>
+              </label>
+            </div>
+          )}
+          <div>
+            <label className="field-label">
               <Phone size={12} />
               Simular WhatsApp
             </label>
@@ -779,6 +873,7 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
                 type="checkbox"
                 checked={waMode}
                 onChange={(e) => saveWaMode(e.target.checked)}
+                disabled={realTest}
               />
               <span>
                 Buffer + debounce de {Math.round(debounceMs / 1000)}s (mesma tabela do webhook real).
@@ -788,14 +883,14 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
           <div>
             <label className="field-label">
               <Phone size={12} />
-              Telefone do lead (opcional)
+              Telefone do lead {realTest ? '(obrigatório no Teste real)' : '(opcional)'}
             </label>
             <input
               className="input"
               placeholder="5511998209798"
               value={waPhone}
               onChange={(e) => saveWaPhone(e.target.value)}
-              disabled={!waMode}
+              disabled={!waMode && !realTest}
             />
           </div>
           <div className="pg-config-info">
@@ -874,6 +969,21 @@ Você está em um ambiente de teste (Playground). As regras abaixo substituem qu
                 {m.waCount > 1 && (
                   <span className="exec-pill" title="Quantidade de mensagens juntadas neste flush">
                     {m.waCount} mensagens juntadas
+                  </span>
+                )}
+                {m.realTestSent === true && (
+                  <span className="exec-pill" title="Resposta enviada no WhatsApp real do lead">
+                    enviado no WhatsApp
+                  </span>
+                )}
+                {m.realTestSent === false && (
+                  <span className="exec-pill" title="Agente rodou completo, mas sem enviar no WhatsApp">
+                    só na tela
+                  </span>
+                )}
+                {Array.isArray(m.realTestTools) && m.realTestTools.length > 0 && (
+                  <span className="exec-pill" title="Tools/flows acionados pelo agente">
+                    {m.realTestTools.join(', ')}
                   </span>
                 )}
                 {m.execId && (

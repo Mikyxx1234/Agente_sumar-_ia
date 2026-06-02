@@ -41,7 +41,7 @@ async function repushDrainedMessages(env, sessionId, items) {
   }
   console.log(`[Evolution][flush] reenfileiradas ${items.length} msg(s) session=${sessionId}`)
 }
-import { tryClaimAgentFlush, tryReserveFlushSync, releaseFlushSync } from '../flushClaim.js'
+import { tryClaimAgentFlush, tryReserveFlushSync, releaseFlushSync, releaseAgentFlush } from '../flushClaim.js'
 import { shouldSkipReplyCooldown, markReplyCooldown, getReplyCooldownRemainingMs } from '../replyCooldown.js'
 import { transcribeAudioBase64, analyzeImageBase64 } from './openaiMedia.js'
 import { fetchEvolutionMediaBase64, resolveInstanceName, describeMediaPayloadShape } from './evolutionMedia.js'
@@ -176,6 +176,42 @@ function normalizeContactPhoneToSessionId(phone) {
   if (!s) return null
   if (s.includes('@')) return canonicalWhatsAppSessionId(s)
   return phoneToWhatsAppSessionId(s)
+}
+
+/** Extrai JID do cliente em contacts.upsert/update (Evolution Cloud varia o shape). */
+function extractContactSessionId(data) {
+  if (data == null) return null
+  if (Array.isArray(data)) {
+    for (const item of data) {
+      const sid = extractContactSessionId(item)
+      if (sid) return sid
+    }
+    return null
+  }
+  if (typeof data !== 'object') return null
+  const candidates = [
+    data.remoteJid,
+    data.remote_jid,
+    data.phoneNumber,
+    data.phone_number,
+    data.wa_id,
+    data.waId,
+    data.profile?.phone,
+    data.profile?.phoneNumber,
+    data.profilePhone,
+    data.contact?.phone,
+    data.contact?.remoteJid,
+    data.id,
+  ]
+  for (const raw of candidates) {
+    const sid = normalizeContactPhoneToSessionId(raw)
+    if (sid && sid.endsWith('@s.whatsapp.net')) return sid
+  }
+  for (const raw of candidates) {
+    const sid = normalizeContactPhoneToSessionId(raw)
+    if (sid) return sid
+  }
+  return null
 }
 
 function normalizeTelefone(sessionId) {
@@ -355,6 +391,18 @@ function authOk(env, req) {
   return provided === expected
 }
 
+async function pushInboundToBuffer(env, sessionId, clean, logCtx = '') {
+  const pushRes = await pushMessage(env, sessionId, clean)
+  if (pushRes?.pushed === false) {
+    console.log(
+      `[Evolution] buffer skip session=${sessionId} reason=${pushRes.skipped || 'unknown'}${logCtx ? ` ctx=${logCtx}` : ''}`,
+    )
+    return false
+  }
+  recordBufferWrite(sessionId)
+  return true
+}
+
 async function extractMessageText(env, payload, messageType) {
   switch (messageType) {
     case 'conversation':
@@ -469,22 +517,28 @@ async function extractMessageText(env, payload, messageType) {
 }
 
 async function flushSessionInner(env, sessionId, opts = {}) {
+  const testMode = opts.test === true
+
   if (!tryReserveFlushSync(sessionId, env)) {
     console.log(`[Evolution][flush] ${sessionId} BLOQUEADO — flush_sync_busy (mesmo processo).`)
     return { skipped: 'flush_sync_busy' }
   }
 
-  try {
-    const telefone = normalizeTelefone(sessionId)
+  const telefone = normalizeTelefone(sessionId)
+  let redisClient = null
+  let redisKeyPrefix = null
 
-    const { client: redisClient, keyPrefix: redisKeyPrefix } = await getMessageBufferRedis(env).catch(
-      () => ({ client: null, keyPrefix: null }),
-    )
+  try {
+    const redis = await getMessageBufferRedis(env).catch(() => ({ client: null, keyPrefix: null }))
+    redisClient = redis.client
+    redisKeyPrefix = redis.keyPrefix
+
     const flushClaim = await tryClaimAgentFlush(env, {
       sessionId,
       telefone,
       redisClient,
       redisKeyPrefix,
+      testMode,
     })
     if (!flushClaim.claimed) {
       console.log(
@@ -506,8 +560,13 @@ async function flushSessionInner(env, sessionId, opts = {}) {
       }
     }
 
+    // Ambiente de teste (/api/test/inbound): ignora gates operacionais
+    // (IA desligada, cooldown, pausa de matrícula/consultor) para sempre
+    // exercitar o agente completo num número de teste, sem depender da
+    // Evolution. NÃO use em produção real — só pra leads de teste.
+
     const aiState = getAiControlStateSync()
-    if (aiState.enabled === false) {
+    if (!testMode && aiState.enabled === false) {
       const pending = await peekPending()
       console.log(
         `[Evolution][flush] ${sessionId} held — ai_disabled${aiState.reason ? ` (${aiState.reason})` : ''} | pending: ${pending}`,
@@ -515,7 +574,7 @@ async function flushSessionInner(env, sessionId, opts = {}) {
       return { skipped: 'ai_disabled', reason: aiState.reason || null, pending }
     }
 
-    if (telefone && shouldSkipReplyCooldown(env, telefone)) {
+    if (!testMode && telefone && shouldSkipReplyCooldown(env, telefone)) {
       const pending = await peekPending()
       const remainingMs = getReplyCooldownRemainingMs(env, telefone)
       const remainingSec = Math.ceil(remainingMs / 1000)
@@ -525,7 +584,7 @@ async function flushSessionInner(env, sessionId, opts = {}) {
       return { skipped: 'reply_cooldown', telefone, pending, remainingMs }
     }
 
-    if (telefone) {
+    if (!testMode && telefone) {
       const pauseDecision = await shouldHoldOnIaPause(env, telefone)
       if (pauseDecision.hold) {
         const pending = await peekPending()
@@ -665,6 +724,12 @@ async function flushSessionInner(env, sessionId, opts = {}) {
       // independentes (Evolution/Cloud API vs Supabase) e juntas
       // adicionavam ~1-2s extras quando feitas em série.
       const sendPromise = (async () => {
+        // Modo teste "só simular": não dispara WhatsApp (nem nota Kommo de
+        // envio). A resposta volta no retorno do flush pra UI exibir.
+        if (opts.suppressWhatsapp === true) {
+          console.log(`[${executionId}] envio WhatsApp SUPRIMIDO (test suppressWhatsapp)`)
+          return { ok: true, sent: 0, total: 0, suppressed: true }
+        }
         try {
           const r = await sendMessageWithNote(env, {
             telefone,
@@ -798,7 +863,7 @@ async function flushSessionInner(env, sessionId, opts = {}) {
           `[${executionId}] agente falhou — reenfileirando ${itens.length} turno(s): ${executionError || out?.error || 'n/a'}`,
         )
         await repushDrainedMessages(env, sessionId, itens)
-      } else if (out?.reply && !sentOk) {
+      } else if (out?.reply && !sentOk && !sendResult?.suppressed) {
         console.warn(
           `[${executionId}] envio não confirmado após drain — reenfileirando ${itens.length} turno(s)`,
         )
@@ -809,6 +874,11 @@ async function flushSessionInner(env, sessionId, opts = {}) {
     return out
   } finally {
     releaseFlushSync(sessionId)
+    try {
+      await releaseAgentFlush(env, { sessionId, telefone, redisClient, redisKeyPrefix })
+    } catch (err) {
+      console.warn(`[Evolution][flush] release claim falhou ${sessionId}:`, err.message)
+    }
   }
 }
 
@@ -884,7 +954,7 @@ export function makeEvolutionWebhookHandler(env) {
     if (evtName === 'contacts.upsert' || evtName === 'contacts.update') {
       const data = rawBody.data || rawBody.body?.data || {}
       const instance = rawBody.instance
-      const customerSession = normalizeContactPhoneToSessionId(data.remoteJid)
+      const customerSession = extractContactSessionId(data)
       if (!customerSession) {
         console.log(`[Evolution][contact] skip sem remoteJid instance=${instance}`)
         sync('contact_skip_no_remote_jid', `instance=${instance || 'n/a'}`)
@@ -922,8 +992,7 @@ export function makeEvolutionWebhookHandler(env) {
             sync('contact_skipped_phone_allowlist', sessionId)
           } else {
             if (pending.messageId) rememberWamid(sessionId, pending.messageId)
-            await pushMessage(env, sessionId, clean)
-            recordBufferWrite(sessionId)
+            await pushInboundToBuffer(env, sessionId, clean, evtName)
             clearCloudBridgeContactWindow(instance)
             console.log('[Evolution][cloud] buffer', sessionId, String(clean).slice(0, 120), evtName)
             sync('contact_matched_buffer_ok', sessionId)
@@ -1006,8 +1075,7 @@ export function makeEvolutionWebhookHandler(env) {
               return
             }
             if (messageId) rememberWamid(hit.sessionId, messageId)
-            await pushMessage(env, hit.sessionId, clean)
-            recordBufferWrite(hit.sessionId)
+            await pushInboundToBuffer(env, hit.sessionId, clean, 'cloud_orphan_immediate')
             console.log('[Evolution][cloud] buffer orphan resolved', hit.sessionId, String(clean).slice(0, 120))
             clearCloudBridgeContactWindow(instance)
           } catch (err) {
@@ -1043,8 +1111,7 @@ export function makeEvolutionWebhookHandler(env) {
           return
         }
         console.log(`[Evolution] ${messageType} ← ${sessionId} (${pushName}): "${clean.slice(0, 140)}"`)
-        await pushMessage(env, sessionId, clean)
-        recordBufferWrite(sessionId)
+        await pushInboundToBuffer(env, sessionId, clean, messageType)
       } catch (err) {
         recordAsyncError('msg_async_buffer', err.message)
         console.error('[Evolution] processing error:', err.message)

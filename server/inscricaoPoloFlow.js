@@ -160,7 +160,9 @@ export async function tryHandlePoloPreFormFlow(env, input) {
     telefone,
     leadId: idLead,
     executionId,
-    forceResend: false,
+    // Nova escolha de polo = novo envio do Form Sumar (dedupe in-memory do salesbot
+    // bloqueava re-testes no mesmo lead dentro de 6h).
+    forceResend: true,
   })
   const sendOk = Boolean(delivery.result?.ok)
   const ack = buildPoloEscolhidoAckReply(polo, { pushName })

@@ -52,7 +52,12 @@ import {
 import { sendMessageWithNote, sendText, splitMessage } from './server/whatsappSender.js'
 import { generateExecutionId, saveExecution } from './server/ai/executionTelemetry.js'
 import { sendTyping } from './server/evolution/typingIndicator.js'
-import { makeEvolutionWebhookHandler } from './server/evolution/webhookEvolution.js'
+import { makeEvolutionWebhookHandler, flushSession } from './server/evolution/webhookEvolution.js'
+import {
+  makeMetaWebhookHandler,
+  makeMetaWebhookVerifyHandler,
+  isMetaWebhookEnabled,
+} from './server/whatsapp/metaWebhook.js'
 import { transcribeAudioBase64, analyzeImageBase64 } from './server/evolution/openaiMedia.js'
 import { fetchEvolutionMediaBase64 } from './server/evolution/evolutionMedia.js'
 import { downloadUrlAsBase64 } from './server/mediaDownloader.js'
@@ -119,7 +124,16 @@ app.get('/api/health', (_req, res) => {
   })
 })
 
-app.use(express.json({ limit: '25mb' }))
+app.use(
+  express.json({
+    limit: '25mb',
+    // Guarda o corpo cru p/ validar a assinatura X-Hub-Signature-256 do
+    // webhook nativo da Meta (HMAC sobre os bytes exatos recebidos).
+    verify: (req, _res, buf) => {
+      if (buf && buf.length) req.rawBody = buf
+    },
+  }),
+)
 // O webhook do amocrm/Kommo manda como application/x-www-form-urlencoded
 // com chaves em bracket notation (`leads[add][0][id]`). Precisamos de
 // `extended: true` pra Express desserializar isso em objeto aninhado.
@@ -893,6 +907,13 @@ function evolutionWebhookIngress(req, res, next) {
 }
 
 app.post('/api/evolution/webhook', evolutionWebhookIngress, makeEvolutionWebhookHandler(process.env))
+
+// ── Webhook NATIVO WhatsApp Cloud API (Meta) — sem Evolution no meio ──
+// GET = verificação do painel Meta (hub.challenge). POST = eventos.
+// Só BUFFERIZA; o agentScheduler responde (igual ao webhook Evolution).
+// Fica inerte até WHATSAPP_WEBHOOK_VERIFY_TOKEN ser configurado.
+app.get('/api/whatsapp/webhook', makeMetaWebhookVerifyHandler(process.env))
+app.post('/api/whatsapp/webhook', makeMetaWebhookHandler(process.env))
 
 // Health-check da WhatsApp Cloud API (Meta). Faz uma chamada GET
 // no endpoint da Graph API só pra validar que o phone_number_id e o
@@ -2574,6 +2595,99 @@ app.post('/api/playground/flush', async (req, res) => {
   }
 })
 
+// ── Ambiente de teste: injeta inbound de um número específico sem Evolution ──
+//
+// Reproduz o caminho REAL do agente (mesmo flushSession do scheduler:
+// inscrição, polo, distribuir, captação, telemetria) para um número de
+// teste, sem depender da ponte Meta Cloud → Evolution (que descarta
+// mensagens via contact_skip_no_remote_jid).
+//
+//   POST /api/test/inbound
+//   body: { phone, message, send?, leadId? }
+//     - phone   (obrigatório) telefone do lead de teste (dígitos)
+//     - message (obrigatório) texto como se o lead tivesse mandado
+//     - send    (default true) true = responde no WhatsApp real (via Evolution);
+//                              false = só roda o agente e devolve a reply (não envia)
+//     - leadId  (opcional) dica do id do lead no Kommo (senão resolve por telefone)
+//
+// Restrito à allowlist TEST_INBOUND_PHONES (CSV de dígitos). Se a env não
+// estiver setada, libera só o número de teste padrão (5511944690752).
+function parseTestInboundAllowlist(env) {
+  const raw = String(env.TEST_INBOUND_PHONES || '').trim()
+  const set = new Set()
+  const src = raw || '5511944690752'
+  for (const part of src.split(/[,\s;]+/)) {
+    const d = String(part).replace(/[^0-9]/g, '')
+    if (d) set.add(d)
+  }
+  return set
+}
+
+function isTestInboundPhoneAllowed(env, phoneDigits) {
+  const allow = parseTestInboundAllowlist(env)
+  if (!phoneDigits) return false
+  for (const a of allow) {
+    if (phoneDigits === a || phoneDigits.endsWith(a) || a.endsWith(phoneDigits)) return true
+  }
+  return false
+}
+
+app.post('/api/test/inbound', async (req, res) => {
+  try {
+    const { phone, message, send, leadId } = req.body || {}
+    const phoneDigits = String(phone || '').replace(/[^0-9]/g, '')
+    const text = String(message || '').trim()
+    if (!phoneDigits || !text) {
+      res.status(400).json({ ok: false, error: 'phone e message são obrigatórios' })
+      return
+    }
+    if (!isTestInboundPhoneAllowed(process.env, phoneDigits)) {
+      res.status(403).json({
+        ok: false,
+        error: `phone ${phoneDigits} não está na allowlist de teste (TEST_INBOUND_PHONES)`,
+      })
+      return
+    }
+
+    const sessionId = phoneToWhatsAppSessionId(phoneDigits) || `${phoneDigits}@s.whatsapp.net`
+    const suppressWhatsapp = send === false || send === 'false'
+
+    // Resolve leadId: body > Kommo por telefone. Sem leadId o agente ainda
+    // roda, mas tools de CRM (inscrição/distribuir) podem cair em MISSING_CRM.
+    let leadIdHint = Number(leadId)
+    if (!Number.isFinite(leadIdHint) || leadIdHint <= 0) {
+      try {
+        const lookup = await findLeadByPhone(process.env, phoneDigits)
+        if (lookup.ok && lookup.lead) leadIdHint = Number(lookup.lead.id)
+      } catch { /* segue sem leadId */ }
+    }
+
+    await pushMessage(process.env, sessionId, text, { skipDedupe: true, bypassAiSwitch: true })
+
+    const out = await flushSession(process.env, sessionId, {
+      leadIdHint: Number.isFinite(leadIdHint) && leadIdHint > 0 ? leadIdHint : undefined,
+      test: true,
+      skipFunnelGate: true,
+      suppressWhatsapp,
+    })
+
+    res.json({
+      ok: Boolean(out?.ok ?? (out && !out.skipped)),
+      sessionId,
+      leadId: Number.isFinite(leadIdHint) && leadIdHint > 0 ? leadIdHint : null,
+      sent: !suppressWhatsapp,
+      reply: out?.reply || null,
+      skipped: out?.skipped || null,
+      toolCalls: out?.toolCalls || [],
+      ctxSnapshot: out?.ctxSnapshot || null,
+      executionId: out?.executionId || null,
+      durationMs: out?.durationMs || 0,
+    })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
 // ── Playground: mídia (imagem e áudio) ──
 //    Reusa o mesmo pipeline de média do webhook real (Whisper + GPT-4o vision).
 //    Front manda base64 puro (sem prefixo data:); endpoint devolve texto.
@@ -2776,6 +2890,18 @@ app.listen(PORT, HOST, async () => {
     console.log('[Server] Evolution — EVOLUTION_WEBHOOK_TOKEN ativo: enviar X-Webhook-Token ou Authorization: Bearer com o mesmo valor.')
   } else {
     console.log('[Server] Evolution — sem EVOLUTION_WEBHOOK_TOKEN (POST aceite sem header de token).')
+  }
+
+  const metaWhUrl = `${publicBase || `http://127.0.0.1:${PORT}`}/api/whatsapp/webhook`
+  if (isMetaWebhookEnabled(process.env)) {
+    console.log(
+      `[Server] Meta Cloud — Webhook NATIVO ATIVO: GET/POST ${metaWhUrl} ` +
+        `(verify token configurado${process.env.WHATSAPP_APP_SECRET ? ' + assinatura HMAC' : ', SEM app secret — assinatura não exigida'}).`,
+    )
+  } else {
+    console.log(
+      '[Server] Meta Cloud — Webhook nativo INERTE (defina WHATSAPP_WEBHOOK_VERIFY_TOKEN para ativar). Evolution segue como fallback.',
+    )
   }
 
   // Probe do dispatcher no boot — falha silenciosa é a pior coisa em
