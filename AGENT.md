@@ -60,6 +60,40 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-06-02 - Snapshot do formulário com fallback pela nota do n8n + e-mail estrito
+
+- **Decisão**
+  - `fetchLeadFormSnapshot` (`server/inscricaoKommoFields.js`) passou a preencher
+    campos vazios (`nome/email/cpf/data_nasc/sexo`) a partir da última NOTA de
+    dados do formulário (escrita pelo n8n no Kommo), via
+    `parseFormDataNoteFields` (`libShared/inscricaoFormHeuristics.js`). Só
+    preenche o que está ausente no campo personalizado; nunca sobrescreve.
+  - Validação de e-mail estrita: e-mail sem formato válido (ex.: `@` corrompido
+    na nota — `...0204@gmail.com` virou `...02042gmail.com`) é tratado como
+    ausente (`validateFormSnapshot` + parser). Evita matricular com e-mail
+    inválido e o consequente pause indevido.
+
+- **Contexto**
+  - O n8n passou a gravar os dados do Flow nos campos do Kommo (`sum_Nome`,
+    `sum_CPF`, `sum_Data Nascimento`, `Sexo`, `sum_Curso`=Gastronomia) e numa
+    nota. Porém o `sum_Email` ficou vazio (e-mail só na nota) e a nota corrompe
+    o `@`. Sem o fallback, o snapshot reprovava por e-mail e a matrícula não
+    disparava.
+
+- **Alternativas descartadas**
+  - Resolver só no n8n (gravar `sum_Email`): correto, mas deixa o agente frágil a
+    qualquer campo não replicado. O fallback pela nota torna a leitura resiliente.
+  - Aceitar o e-mail corrompido: matricularia com e-mail inválido → rejeição da
+    API de Captação → pause/handoff (o problema que estamos eliminando).
+
+- **Impacto**
+  - O agente reconhece o formulário e dispara a matrícula automaticamente assim
+    que um e-mail VÁLIDO chegar (campo `sum_Email` ou na nota com `@` íntegro).
+  - **Pendência de origem:** corrigir no n8n o e-mail — gravar em `sum_Email` e/ou
+    não corromper o `@` na nota. É o único dado que ainda falta para este lead.
+
+---
+
 ### 2026-06-02 - Webhook nativo WhatsApp Cloud API (Meta) sem Evolution
 
 - **Decisão**

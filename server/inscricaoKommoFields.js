@@ -2,7 +2,8 @@
  * Leitura e validação dos campos do lead no Kommo após o Form Sumar.
  */
 
-import { listLeadCustomFields } from './kommoClient.js'
+import { listLeadCustomFields, listLeadNotes } from './kommoClient.js'
+import { parseFormDataNoteFields } from '../libShared/inscricaoFormHeuristics.js'
 
 const KOMMO_FIELD_NOME = 304628
 
@@ -135,27 +136,60 @@ export async function fetchLeadFormSnapshot(env, leadId) {
   const modalidade = pickByAliases(custom, fieldsByName, FIELD_ALIASES.modalidade)
   const statusInscricao = pickByAliases(custom, fieldsByName, FIELD_ALIASES.statusInscricao)
 
-  return {
-    ok: true,
-    lead,
-    snapshot: {
-      nome: !isCampoAusente(nomeField) ? nomeField : nomeLead,
-      email,
-      cpf,
-      curso_inscricao: cursoInscricao,
-      tipo_inscricao: tipoInscricao,
-      polo_inscricao: poloInscricao,
-      data_nasc: dataNasc,
-      sexo,
-      unidade,
-      turno,
-      modalidade,
-      status_inscricao: statusInscricao,
-      responsible_user_id: Number(lead.responsible_user_id) || 0,
-      status_id: Number(lead.status_id) || 0,
-      pipeline_id: Number(lead.pipeline_id) || 0,
-    },
+  const snapshot = {
+    nome: !isCampoAusente(nomeField) ? nomeField : nomeLead,
+    email,
+    cpf,
+    curso_inscricao: cursoInscricao,
+    tipo_inscricao: tipoInscricao,
+    polo_inscricao: poloInscricao,
+    data_nasc: dataNasc,
+    sexo,
+    unidade,
+    turno,
+    modalidade,
+    status_inscricao: statusInscricao,
+    responsible_user_id: Number(lead.responsible_user_id) || 0,
+    status_id: Number(lead.status_id) || 0,
+    pipeline_id: Number(lead.pipeline_id) || 0,
   }
+
+  const enriched = await enrichSnapshotFromFormNote(env, id, snapshot)
+  return { ok: true, lead, snapshot: enriched }
+}
+
+function noteText(n) {
+  const p = n?.params || {}
+  return String(p.text || p.message || '').trim()
+}
+
+/**
+ * Preenche campos vazios do snapshot a partir da última nota de dados do
+ * formulário (o n8n grava esses dados na nota; às vezes não replica em TODOS
+ * os campos personalizados — ex.: o e-mail vai só na nota). Só preenche o que
+ * está ausente; nunca sobrescreve um valor já presente no campo do Kommo.
+ */
+async function enrichSnapshotFromFormNote(env, leadId, snapshot) {
+  const keys = ['nome', 'email', 'cpf', 'data_nasc', 'sexo']
+  const missing = keys.filter((k) => isCampoAusente(snapshot?.[k]))
+  if (missing.length === 0) return snapshot
+  let notes = []
+  try {
+    const res = await listLeadNotes(env, leadId, { limit: 30, order: 'desc' })
+    notes = res?.ok && Array.isArray(res.notes) ? res.notes : []
+  } catch {
+    return snapshot
+  }
+  for (const n of notes) {
+    const fields = parseFormDataNoteFields(noteText(n))
+    if (!fields || Object.keys(fields).length === 0) continue
+    const merged = { ...snapshot }
+    for (const k of keys) {
+      if (isCampoAusente(merged[k]) && fields[k]) merged[k] = fields[k]
+    }
+    return merged
+  }
+  return snapshot
 }
 
 /**
@@ -187,12 +221,21 @@ const FIELD_LABELS = {
  * @param {Record<string,string>} env
  * @param {{ nome, email, cpf, curso_inscricao, tipo_inscricao, polo_inscricao }} snapshot
  */
+function isValidEmailShape(val) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(val || '').trim())
+}
+
 export function validateFormSnapshot(env, snapshot) {
   const required = getRequiredFormFieldKeys(env)
   const missing = []
   for (const key of required) {
     const val = snapshot?.[key]
     if (isCampoAusente(val)) {
+      missing.push(FIELD_LABELS[key] || key)
+      continue
+    }
+    // E-mail sem formato válido (ex.: "@" corrompido na nota) conta como ausente.
+    if (key === 'email' && !isValidEmailShape(val)) {
       missing.push(FIELD_LABELS[key] || key)
     }
   }

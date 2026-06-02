@@ -295,6 +295,49 @@ export function messageIsFormularioSumarPreenchidoMarker(text) {
   return String(text || '').trim() === FORM_SUMAR_FLOW_COMPLETED_MARKER
 }
 
+/**
+ * Extrai campos rotulados de uma NOTA de dados do formulário (escrita pelo n8n
+ * no Kommo após o Flow), ex.:
+ *   "CPF: 48281105852\nDATA DE NASCIMENTO: 02/04/1999\nNOME: ...\nEMAIL: ...\n
+ *    TELEFONE INSCRICAO: ...\nSEXO: Masculino"
+ * Devolve só os campos com valor real (ignora vazio / n/a / "não informado").
+ * Usado como FALLBACK quando o campo personalizado do Kommo veio vazio
+ * (ex.: o n8n grava o e-mail só na nota e não no campo `sum_Email`).
+ */
+export function parseFormDataNoteFields(text) {
+  const raw = String(text || '')
+  if (!raw) return {}
+  const pick = (labelPattern) => {
+    const re = new RegExp(`(?:^|\\n)\\s*(?:${labelPattern})\\s*[:=]\\s*([^\\n]+)`, 'i')
+    const m = raw.match(re)
+    if (!m) return ''
+    const v = String(m[1] || '').trim()
+    if (!v) return ''
+    if (/^n\/a$/i.test(v)) return ''
+    if (/^n[ãa]o informad[oa]\.?$/i.test(v)) return ''
+    if (v === '-' || v === '—') return ''
+    return v
+  }
+  const out = {}
+  const nome = pick('nome completo|nome')
+  const cpf = pick('cpf|documento')
+  const emailRaw = pick('e-?mail')
+  // Só aceita e-mail com formato válido — a nota do n8n às vezes corrompe o "@"
+  // (ex.: "...0204@gmail.com" vira "...02042gmail.com"). E-mail inválido =
+  // ausente, para não matricular com lixo nem pausar o lead indevidamente.
+  const email = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailRaw) ? emailRaw : ''
+  const dataNasc = pick('data de nascimento|data nascimento|data_nasc|nascimento')
+  const telefone = pick('telefone inscri[cç][aã]o|telefone|celular')
+  const sexo = pick('sexo|g[eê]nero')
+  if (nome) out.nome = nome
+  if (cpf) out.cpf = cpf
+  if (email) out.email = email
+  if (dataNasc) out.data_nasc = dataNasc
+  if (telefone) out.telefone = telefone
+  if (sexo) out.sexo = sexo
+  return out
+}
+
 /** Texto normalizado para o buffer quando o Kommo/WhatsApp sinaliza Flow concluído. */
 export function inboundTextForFormFlowCompletion(text) {
   if (messageIsFlowResponsesReceived(text)) return FORM_SUMAR_FLOW_COMPLETED_MARKER
