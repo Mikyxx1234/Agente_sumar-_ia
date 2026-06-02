@@ -68,7 +68,8 @@ export async function fetchAllCaptacaoCursos(env = process.env) {
 export async function resolveCursoCodigoFromDb(cursoInscricao, env = process.env) {
   const raw = String(cursoInscricao || '').trim()
   if (!raw) return ''
-  if (/^[A-Z0-9_]{4,32}$/i.test(raw)) return raw.toUpperCase()
+  // Código já pronto = token_token (ex.: GAST_EAD). Nome humano cai na busca.
+  if (/^[A-Z0-9]+(?:_[A-Z0-9]+)+$/i.test(raw)) return raw.toUpperCase()
 
   const key = normalizeCursoKey(raw)
   if (!key) return ''

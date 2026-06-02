@@ -151,7 +151,11 @@ const CURSO_NOME_TO_CODIGO = new Map(
 /** Código curso API (ex. ECON_EAD) — aceita valor já codificado, mapa por nome ou default env. */
 export function resolveCursoCodigo(cursoInscricao, env = process.env) {
   const raw = String(cursoInscricao || '').trim()
-  if (/^[A-Z0-9_]{4,32}$/i.test(raw)) return raw.toUpperCase()
+  // Só tratar como código de API já pronto quando tiver o formato real
+  // (token_token, ex.: GAST_EAD, ADM_EAD). Nomes humanos de curso como
+  // "Gastronomia"/"Administração" devem cair no mapa/catálogo, não virar
+  // código literal inexistente no Lyceum.
+  if (/^[A-Z0-9]+(?:_[A-Z0-9]+)+$/i.test(raw)) return raw.toUpperCase()
   const key = normalizeCursoNomeKey(raw)
   const fromEnv = parseCursoMapEnv(env)
   if (fromEnv?.has(key)) return fromEnv.get(key)

@@ -12,6 +12,43 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-06-02 - Código de curso só é "código pronto" se tiver formato token_token (ex.: GAST_EAD)
+
+- **Decisão**
+  - Em `resolveCursoCodigo` (`server/sumareCaptacaoClient.js`) e
+    `resolveCursoCodigoFromDb` (`server/sumareCaptacaoCursoStore.js`), o atalho que
+    considera o valor "já um código de API" passou de `/^[A-Z0-9_]{4,32}$/i` para
+    `/^[A-Z0-9]+(?:_[A-Z0-9]+)+$/i` — exige o formato real de código (token_token,
+    ex.: `GAST_EAD`, `ADM_EAD`). Nomes humanos de curso ("Gastronomia",
+    "Administração") deixam de casar e passam a cair no mapa estático e no catálogo
+    `sumare_captacao_curso` (Supabase), que resolve o código correto.
+
+- **Contexto**
+  - Matrícula do lead `#23841399` (curso "Gastronomia") falhava com HTTP 500 da API
+    de Captação: `Cannot insert the value NULL into column 'CANDIDATO'
+    (LYCEUM.dbo.TSCU_INSCRICAO_FINANCEIRO_CANDIDATO)`. O snapshot do Kommo estava
+    completo e válido (nome, CPF, e-mail, data nasc., sexo). A causa era o curso:
+    `resolveCursoCodigo` casava a palavra "Gastronomia" no regex permissivo e
+    devolvia o literal `GASTRONOMIA` (inexistente no Lyceum), pulando inclusive a
+    consulta ao Supabase. Diagnóstico confirmado: `GASTRONOMIA`→500;
+    `GAST_EAD`→200 OK (candidato gerado, página Contrato).
+
+- **Alternativas descartadas**
+  - Adicionar "gastronomia" ao mapa estático `CURSO_NOME_TO_CODIGO`: resolveria só
+    esse curso; o regex permissivo continuaria mascarando outros nomes presenciais.
+  - Validar o código contra o catálogo antes de enviar: mais robusto, porém maior;
+    o catálogo Supabase já é a fonte de verdade e passa a ser consultado com o fix.
+
+- **Impacto**
+  - "Gastronomia" e demais nomes humanos passam a resolver pelo catálogo
+    (`GAST_EAD` etc.); a matrícula da Sumaré deixa de receber código inválido.
+  - Valores que JÁ são código (`GAST_EAD`) continuam aceitos sem ida ao catálogo.
+  - Requer deploy em produção para o agente resolver automaticamente; o lead
+    `#23841399` foi matriculado manualmente (candidato `2026700000004826`, link de
+    contrato enviado por WhatsApp) para validar o fluxo ponta a ponta.
+
+---
+
 ### 2026-06-02 - Formulário vazio (n/a) não dispara matrícula nem pausa a IA
 
 - **Decisão**
