@@ -3,7 +3,12 @@
  *
  * O agente automático (scheduler + flush WhatsApp) só pode atender leads em:
  *   pipeline_id = 13756724 (Agente-Sumaré)
- *   status_id   = 106140284 (Atendimento)
+ *   status_id   ∈ { 106140284 (Atendimento), 106804680 (inscrição) }
+ *
+ * Em "inscrição" a IA segue conversando para encaminhar os dados até o
+ * candidato mandar o comprovante de pagamento — quando o comprovante chega, o
+ * lead é movido para "aguardando pagamento" (106426128) e a IA pausa. Portanto
+ * "aguardando pagamento" NÃO entra no funil atendido (de propósito).
  *
  * Valores de KOMMO_AGENT_* no .env que divergirem são ignorados (com warn no boot).
  */
@@ -13,8 +18,17 @@ import { findLeadByPhone, getLeadById } from './kommoClient.js'
 /** @type {const} */
 export const AGENT_FUNNEL_PIPELINE_ID = 13756724
 
-/** @type {const} */
+/** Etapa "Atendimento" (primária). @type {const} */
 export const AGENT_FUNNEL_STATUS_ID = 106140284
+
+/** Etapa "inscrição" — IA continua atendendo até o comprovante. @type {const} */
+export const AGENT_FUNNEL_STATUS_INSCRICAO = 106804680
+
+/** Todas as etapas atendidas pela IA (NÃO inclui "aguardando pagamento"). */
+export const AGENT_FUNNEL_STATUS_IDS = [
+  AGENT_FUNNEL_STATUS_ID,
+  AGENT_FUNNEL_STATUS_INSCRICAO,
+]
 
 let warnedEnvMismatch = false
 
@@ -25,13 +39,13 @@ function warnEnvMismatchOnce(env) {
   const envCsv = String(env.KOMMO_AGENT_STATUS_IDS || '').trim()
   const mismatch =
     (Number.isFinite(envPipe) && envPipe > 0 && envPipe !== AGENT_FUNNEL_PIPELINE_ID) ||
-    (Number.isFinite(envStatus) && envStatus > 0 && envStatus !== AGENT_FUNNEL_STATUS_ID) ||
+    (Number.isFinite(envStatus) && envStatus > 0 && !AGENT_FUNNEL_STATUS_IDS.includes(envStatus)) ||
     Boolean(envCsv)
   if (!mismatch) return
   warnedEnvMismatch = true
   console.warn(
     '[funnel-gate] KOMMO_AGENT_PIPELINE_ID / KOMMO_AGENT_STATUS_ID(S) no .env divergem do funil fixo — ' +
-      `usando pipeline=${AGENT_FUNNEL_PIPELINE_ID} status=${AGENT_FUNNEL_STATUS_ID} apenas.`,
+      `usando pipeline=${AGENT_FUNNEL_PIPELINE_ID} status=[${AGENT_FUNNEL_STATUS_IDS.join(',')}] apenas.`,
   )
 }
 
@@ -43,7 +57,7 @@ export function resolveAgentFunnelFromEnv(env) {
   warnEnvMismatchOnce(env)
   return {
     pipelineId: AGENT_FUNNEL_PIPELINE_ID,
-    statusIds: [AGENT_FUNNEL_STATUS_ID],
+    statusIds: [...AGENT_FUNNEL_STATUS_IDS],
   }
 }
 
@@ -54,7 +68,7 @@ export function leadMatchesAgentFunnel(lead) {
   if (!lead || typeof lead !== 'object') return false
   return (
     Number(lead.pipeline_id) === AGENT_FUNNEL_PIPELINE_ID &&
-    Number(lead.status_id) === AGENT_FUNNEL_STATUS_ID
+    AGENT_FUNNEL_STATUS_IDS.includes(Number(lead.status_id))
   )
 }
 

@@ -272,7 +272,7 @@ export async function runSchedulerTick(env) {
       console.warn(
         `[scheduler] nenhum lead em pipeline_id=${pipelineId} status_ids=[${statusIds.join(',')}]. ` +
           'O poll de notas/eventos NAO roda para leads fora dessas etapas. ' +
-          'A fila da IA é fixa: pipeline 13756724 + status 106140284 (Atendimento). Realoque o lead nessa etapa.',
+          'A fila da IA é fixa: pipeline 13756724 + status 106140284 (Atendimento) e 106804680 (inscrição). Realoque o lead numa dessas etapas.',
       )
     }
     await tryFlushWebhookOrphanSessions(env, { debounceMs, stats })

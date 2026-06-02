@@ -12,6 +12,39 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-06-02 - Funil da IA passa a atender também a etapa "inscrição" (não "aguardando pagamento")
+
+- **Decisão**
+  - `server/kommoAgentFunnelGate.js`: o funil fixo da IA deixa de ser um único
+    status e passa a ser uma lista `AGENT_FUNNEL_STATUS_IDS = [106140284
+    (Atendimento), 106804680 (inscrição)]`. `leadMatchesAgentFunnel` e
+    `resolveAgentFunnelFromEnv` usam a lista; o scheduler/listador já iteravam
+    `statusIds`, então nenhuma outra mudança foi necessária.
+  - "aguardando pagamento" (106426128) **continua fora** do funil — quando o
+    candidato envia o comprovante, `tryHandleMatriculaAceitePagamentoFlow` move o
+    lead para essa etapa e pausa a IA (`atendimento_ia=pause`).
+
+- **Contexto**
+  - Após a matrícula o lead fica na etapa "inscrição" (aguardando aceite/contrato
+    e o comprovante). Com o funil antigo (só "Atendimento"), o scheduler/poll não
+    processava o lead nessa etapa → a IA ficava muda justamente quando precisava
+    encaminhar dados e receber o comprovante. Pedido do produto: atender em
+    "inscrição" até o comprovante; parar em "aguardando pagamento".
+
+- **Alternativas descartadas**
+  - Mover o lead de volta para "Atendimento" a cada inbound: exigiria automação
+    externa (n8n) e mexer no estágio do CRM a cada mensagem — frágil e ruidoso.
+  - Tornar o funil configurável por env: o arquivo é trava fixa de propósito
+    (env divergente é ignorado com warn); manter os IDs no código preserva esse
+    contrato e evita drift de configuração entre ambientes.
+
+- **Impacto**
+  - A IA conversa em "Atendimento" e "inscrição"; ao receber o comprovante o lead
+    vai para "aguardando pagamento" e a IA não atende mais ali (handoff humano).
+  - Vale para TODOS os leads do pipeline 13756724. Requer deploy em produção.
+
+---
+
 ### 2026-06-02 - Código de curso só é "código pronto" se tiver formato token_token (ex.: GAST_EAD)
 
 - **Decisão**
