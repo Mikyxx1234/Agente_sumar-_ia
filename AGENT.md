@@ -12,6 +12,52 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-06-02 - Diagnóstico: chats WABA da conta `academicosoead` não são legíveis (dispatcher é de OUTRA conta)
+
+- **Decisão / desfecho**
+  - **Mantido `KOMMO_INBOUND_POLL_MODE=notes`** em produção. Uma troca experimental
+    para `dispatcher` foi feita e **revertida** no mesmo dia ao descobrir que o
+    `banco-kommo-dispatcher` sincroniza **outra conta Kommo**, não a do agente.
+  - Não há mudança de código. Decisão de configuração/arquitetura pendente de
+    definição do canal correto (ver abaixo).
+
+- **Contexto (evidências)**
+  - Lead real #23583611 (conta `academicosoead.kommo.com`, account_id 31697347,
+    pipeline 13756724 etapa Atendimento, com telefone +5511993537209) não recebia
+    atendimento. Funil/allowlist/scheduler estão corretos.
+  - O talk dele é `origin='waba'` ("Suporte ao Aluno - Sumaré EaD",
+    chat_id `bb2f4644…`). As mensagens "oi" de hoje **não existem** como
+    `incoming_chat_message` nem como nota v4 (só um `entity_direct_message` antigo de
+    março). Texto, se existir, está só na camada Chats/Amojo — e Amojo não está
+    configurado (`KOMMO_CHANNEL_SECRET/SCOPE_ID` ausentes).
+  - `banco-kommo-dispatcher`: saudável (~1,8M msgs, ~83k chats), mas
+    `by-lead`/`by-chat`/`sync-chat` retornam **0** para os 3 leads do funil do
+    agente. Sessão logada como `felipe.nolasco@cruzeiroead.com.br`
+    (LAST_PLACE_DEALS pipeline 5481944). Leads que o dispatcher possui (ex.:
+    21317945, 20885141) retornam **HTTP 204 (inexistentes)** na conta do agente →
+    **o dispatcher é de outra conta** (comercial cruzeiroead), não `academicosoead`.
+  - Conclusão: para os leads do agente, **nenhum** caminho lê esse canal WABA hoje
+    (Evolution só cobre a instância `SUMARE_IA`; poll `notes` não vê WABA do Kommo;
+    Amojo não configurado; dispatcher é de outra conta).
+
+- **Alternativas em aberto (a decidir com o produto)**
+  - (a) Conectar o número "Suporte ao Aluno - Sumaré EaD" à instância Evolution
+    (`SUMARE_IA`) → webhook passa a entregar inbound direto ao buffer.
+  - (b) Configurar Amojo da conta `academicosoead` (`KOMMO_CHANNEL_SECRET` +
+    `KOMMO_CHANNEL_SCOPE_ID`) e usar `KOMMO_INBOUND_POLL_MODE=amojo`.
+  - (c) Apontar um dispatcher para a conta `academicosoead` (o atual é de outra).
+  - (d) Usar o webhook nativo da Meta Cloud (já implementado) se esse número estiver
+    no app Meta do projeto.
+  - Hipótese a validar: o "oi" pode ter sido digitado no widget de chat do Kommo
+    (Salesbot), e não enviado como WhatsApp real do telefone do contato — nesse caso
+    nenhum webhook dispara. Testar com mensagem real do telefone do cliente.
+
+- **Impacto**
+  - Produção segue em `notes` (estado anterior, sem regressão). O atendimento por
+    Evolution (`SUMARE_IA`) não depende disso e continua funcionando.
+
+---
+
 ### 2026-06-02 - Funil da IA passa a atender também a etapa "inscrição" (não "aguardando pagamento")
 
 - **Decisão**
@@ -931,3 +977,86 @@ Histórico das decisões estruturais do agente. Formato por entrada:
     (`npm run test:form-notes-age-cap`, 6/6) cobre sem cap, nota velha
     ignorada, nota recente mantida, mistura, sem nota e cap desativado.
     Suíte `test:inscricao-flow` segue 139/139.
+
+---
+
+### 2026-06-02 - Agente como porta principal do inbound (override de webhook na Meta)
+
+- **Decisão**
+  - Tornar o **agente a porta principal** de recebimento das mensagens da Meta,
+    repontando o **override de webhook no nível do NÚMERO** (`794200977108142`)
+    para `https://banco-agente-sumare.6tqx2r.easypanel.host/api/whatsapp/webhook`.
+    O override de número tem prioridade sobre WABA e sobre o callback do app, então
+    o n8n deixa de receber este número (a ser desativado pelo cliente — só limpeza).
+  - Produção: `WHATSAPP_OUTBOUND_MODE=cloud` (respostas direto pela Cloud API,
+    sem depender da Evolution) e `WHATSAPP_APP_SECRET` setado com o secret real
+    do app `978458407905051` (valida `X-Hub-Signature-256`).
+  - Scripts: `scripts/meta-repoint-webhook.mjs agent|n8n|status` (repoint +
+    rollback), `scripts/ep-set-env.mjs` (env genérico), `scripts/diag-app-webhook.mjs`
+    e `scripts/diag-waba-subscribers.mjs` (diagnóstico de topologia de webhook).
+
+- **Contexto**
+  - Diagnóstico definitivo: TODO o inbound do WhatsApp entrava primeiro no **n8n**
+    (callback da WABA e override do número apontavam para o n8n), que era o
+    roteador único e só repassava alguns leads à Evolution → agente. Por isso
+    leads reais do funil (ex.: #23875217, #23583611) não eram atendidos enquanto
+    outros (ex.: #23841399) eram. n8n, Evolution e agente usam o MESMO app Meta.
+  - Limites rígidos da Cloud API: não há API para "puxar" inbound (só webhook);
+    **um callback por objeto/app**; o override do número *substitui*, não soma.
+    Logo, "uma camada extra paralela" só com o mesmo app é impossível — exigiria
+    um 2º app inscrito na WABA. O cliente optou por agente principal + desligar n8n.
+
+- **Alternativas descartadas**
+  - Ajustar a lógica de roteamento dentro do n8n: mais cirúrgico e preservaria
+    todas as funções do n8n, mas exigia acesso ao n8n (não disponibilizado).
+  - 2º app Meta inscrito na WABA (entrega paralela real): exigia id+secret de um
+    app distinto, que não temos.
+  - Relay (agente recebe e re-encaminha ao n8n): mantém n8n vivo, mas adiciona
+    complexidade; o cliente preferiu desligar o n8n.
+
+- **Impacto**
+  - Inbound em tempo real direto Meta→agente; a regra de funil é preservada
+    (o agentScheduler só responde leads nas pipelines/status configurados —
+    `AGENT_FUNNEL_STATUS_IDS`). Outbound deixa de depender da Evolution.
+  - **Ponto único de entrada:** se o agente cair, não há fallback (n8n não recebe
+    mais). Mitigação: redeploy estável + rollback imediato via
+    `node scripts/meta-repoint-webhook.mjs n8n`.
+  - **Validar** com mensagem real do número de teste (texto → áudio → imagem →
+    resposta) e confirmar `lastBufferWrite`/`lastSyncOutcome` em
+    `GET /api/evolution/health` antes de o cliente desligar o n8n.
+  - **Validado em 02/06**: mensagem real do lead #23841399 chegou direto da Meta
+    (`event=meta_webhook`, `outcome=buffer_ok`, `5511944690752@s.whatsapp.net`)
+    e o agente respondeu. Webhook nativo confirmado em produção.
+
+---
+
+### 2026-06-02 - Desligar o poll de inbound do Kommo (Meta vira fonte única)
+
+- **Decisão**
+  - `KOMMO_INBOUND_POLL_ENABLED=false` em produção. Com o webhook nativo da Meta
+    repontado para o agente, o poll do Kommo (notes/events) virou redundante.
+
+- **Contexto / causa raiz de um LOOP**
+  - O lead #23841399 entrou em loop de handoff: a cada poucos minutos surgia a
+    nota `Encaminhamento automático: lead pediu atendimento humano via WhatsApp
+    (agente IA).` e o agente respondia "um consultor entrará em contato".
+  - Origem: essa nota é escrita pelo PRÓPRIO agente em `distribuirHumanoTool.js`
+    (handoff humano) como `note_type:common` SEM o sufixo `EX-<execId>`. O poll
+    de **notas** do Kommo não a reconhecia como outbound (o filtro de outbound
+    usa o sufixo `EX-`), então re-ingeria a nota como se fosse mensagem do lead
+    → novo handoff → nova nota → loop. Confirmado na memória
+    (`human: "ola Encaminhamento automático…"`). O loop começou 18:54Z,
+    ANTES do repoint, descartando o webhook como causa.
+
+- **Alternativas descartadas**
+  - Filtrar no poll as notas autorais do agente (ex.: prefixo "Encaminhamento
+    automático"/"Inscrição – salesbot"): trata o sintoma e ainda deixaria o poll
+    duplicando mensagens que agora também chegam pela Meta.
+  - Adicionar sufixo `EX-` às notas de handoff: arriscado (várias notas/sistemas)
+    e não resolve a duplicação Meta×poll.
+
+- **Impacto**
+  - Inbound passa a ter **fonte única** (webhook Meta), sem loop e sem
+    duplicação. Rollback: `KOMMO_INBOUND_POLL_ENABLED=true` (volta o poll).
+  - O problema antigo de mensagens só visíveis no canal nativo do Kommo (amojo)
+    deixa de exigir o poll: o webhook Meta recebe todas as mensagens do número.

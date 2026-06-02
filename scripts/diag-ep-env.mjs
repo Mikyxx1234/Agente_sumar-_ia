@@ -51,6 +51,20 @@ const KEYS = [
   'KOMMO_AGENT_TEST_LEAD_IDS',
   'SUMARE_CAPTACAO_TEST_ALLOW',
   'SUMARE_CAPTACAO_ENABLED',
+  'KOMMO_CHANNEL_SECRET',
+  'KOMMO_CHANNEL_SCOPE_ID',
+  'KOMMO_DISPATCHER_URL',
+  'KOMMO_INBOUND_POLL_NOTES_ALSO_EVENTS',
+  'KOMMO_INBOUND_POLL_DISPATCHER_FALLBACK',
+  'EVOLUTION_INSTANCE',
+  'EVOLUTION_INSTANCE_NAME',
+  'WHATSAPP_PHONE_NUMBER_ID',
+  'WHATSAPP_ACCESS_TOKEN',
+  'WHATSAPP_WABA_ID',
+  'WHATSAPP_BUSINESS_ID',
+  'WHATSAPP_APP_SECRET',
+  'WHATSAPP_GRAPH_VERSION',
+  'WHATSAPP_CLOUD_PHONE_E164',
 ]
 const map = new Map()
 for (const line of String(envText).split(/\r?\n/)) {
@@ -60,5 +74,8 @@ for (const line of String(envText).split(/\r?\n/)) {
 }
 console.log('\n=== chaves criticas em producao ===')
 for (const k of KEYS) {
-  console.log(`${k} = ${map.has(k) ? JSON.stringify(map.get(k)) : '(NAO DEFINIDA)'}`)
+  const secret = /SECRET|TOKEN/.test(k)
+  const val = map.get(k)
+  const shown = secret && val ? `(set, ${String(val).length} chars)` : JSON.stringify(val)
+  console.log(`${k} = ${map.has(k) ? shown : '(NAO DEFINIDA)'}`)
 }
