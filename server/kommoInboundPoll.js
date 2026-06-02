@@ -62,6 +62,7 @@ import {
   FORM_SUMAR_FLOW_COMPLETED_MARKER,
   inboundTextForFormFlowCompletion,
   messageIsFlowResponsesReceived,
+  messageLooksLikeFormSumarResponse,
 } from '../libShared/inscricaoFormHeuristics.js'
 import { maybeNotifyN8nFormBridge } from './kommoN8nFormBridge.js'
 
@@ -344,6 +345,13 @@ function classifyInboundNote(n, env, contactDigits, types) {
   if (messageIsFlowResponsesReceived(rawText)) {
     const flowText = bufferTextFromInboundRaw(rawText)
     if (flowText) return { kind: 'push', text: flowText, nid }
+  }
+  // Nota com dados do formulário (CPF:/NOME:/EMAIL:…) é DADO de CRM, não mensagem
+  // do candidato — não deve ir pro buffer (senão a IA responde a "CPF: n/a …").
+  // A conclusão real do formulário é detectada por detectFormSumarRecebidoNoKommo
+  // (via snapshot do Kommo), não por esta nota.
+  if (messageLooksLikeFormSumarResponse(rawText) && !messageIsFlowResponsesReceived(rawText)) {
+    return { kind: 'skip', reason: 'form_data_note', advance: true, nid }
   }
   if (isAgentOutboundEcho(rawText) || isLikelyAgentEcho(rawText) || isKommoSystemOrIntegrationNote(rawText)) {
     return { kind: 'skip', reason: 'echo', advance: true, nid }

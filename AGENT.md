@@ -12,6 +12,54 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-06-02 - Formulário vazio (n/a) não dispara matrícula nem pausa a IA
+
+- **Decisão**
+  - **A) Gate de detecção por dados reais** (`server/inscricaoPostFormPipeline.js`,
+    `detectFormSumarRecebidoNoKommo`): uma nota com ESTRUTURA de formulário
+    (`CPF:`/`NOME:`/`EMAIL:`…) só conta como "formulário recebido" se o
+    `fetchLeadFormSnapshot` do Kommo tiver os campos obrigatórios preenchidos
+    (`validateFormSnapshot`, que trata `n/a`/"não informado"/vazio como ausente).
+    O marcador real do Flow ("Flow responses received") continua detectando.
+  - **B) Rede de segurança anti-pause espúrio** (`server/dadosClienteStore.js`,
+    `decideHoldOnIaPause`/`shouldHoldOnIaPause`): se o lead está `atendimento_ia=pause`
+    mas o `inscricao_form_status='aguardando_form_sumar'`, o pause é considerado
+    indevido (a IA deveria estar conversando nesse estágio) — limpa o pause
+    (`await`, antes do gate secundário do `agentRunner`) e deixa o atendimento seguir.
+  - **Higiene de buffer** (`server/kommoInboundPoll.js`, `classifyInboundNote`):
+    nota de dados de formulário (estrutura, sem marcador de Flow) é DADO de CRM,
+    não mensagem do candidato — passa a ser `skip` (`form_data_note`) e não entra
+    no buffer (evitava a IA responder a "CPF: n/a …").
+
+- **Contexto**
+  - Lead `#23841399` ficou sem resposta: o bridge/poll gravou nota de formulário
+    com todos os campos `n/a`; a heurística tratou como submissão real → pipeline
+    pós-formulário chamou a API de Captação → falhou (sem CPF/nome) →
+    `pauseAtendimentoIa` + `distribuir_consultor`. Toda mensagem seguinte caía no
+    gate de pause = silêncio. A matrícula lê os dados dos campos do Kommo
+    (`fetchLeadFormSnapshot`), não do texto da nota.
+
+- **Alternativas descartadas**
+  - Guard puramente textual ("tudo n/a") em `messageLooksLikeFormSumarResponse`:
+    frágil (o telefone vem preenchido) e não reflete a fonte real da matrícula
+    (campos do Kommo). Optou-se por validar o snapshot.
+  - Auto-despausar em qualquer estágio: arriscado (reabriria handoffs legítimos
+    em `aguardando_aceite`/`distribuir_consultor`). Restringiu-se a
+    `aguardando_form_sumar`.
+
+- **Impacto**
+  - Formulário incompleto não pausa mais a IA nem estrangula o lead; a matrícula
+    só é acionada quando os dados reais chegam aos campos do Kommo.
+  - **Dependência de origem (C, fora deste repo):** a matrícula só efetiva quando
+    o Meta Flow → n8n gravar CPF/nome/email/curso nos campos do lead no Kommo,
+    com nomes compatíveis com `FIELD_ALIASES` (`server/inscricaoKommoFields.js`):
+    nome (`sum_nome`/id 304628), e-mail (`e-mail`/`sum_email`), CPF (`cpf`/`documento`),
+    curso (`curso inscrição`/`sum_curso`/`código curso`). Sem isso, não há dado
+    para matricular. Obrigatórios configuráveis via `INSCRICAO_FORM_REQUIRED_FIELDS`
+    (default `nome,email,cpf,curso_inscricao`).
+
+---
+
 ### 2026-06-02 - Webhook nativo WhatsApp Cloud API (Meta) sem Evolution
 
 - **Decisão**

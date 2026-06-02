@@ -252,17 +252,43 @@ export async function detectFormSumarRecebidoNoKommo(env, leadId, options = {}) 
     formSentMs > 0 ? formSentMs - 60_000 : 0,
   )
 
+  // Snapshot do lead no Kommo (CPF/nome/email/curso) validado uma única vez.
+  // A matrícula lê os dados DAQUI (fetchLeadFormSnapshot), não do texto da nota —
+  // então uma nota com estrutura de formulário mas campos ausentes/`n/a` NÃO é
+  // uma submissão real. Tratá-la como tal disparava matrícula vazia e pausava a IA.
+  let _snapCache
+  async function getSnapValidation() {
+    if (_snapCache) return _snapCache
+    const snapRes = await fetchLeadFormSnapshot(env, id)
+    if (snapRes.ok && snapRes.snapshot) {
+      _snapCache = { ...validateFormSnapshot(env, snapRes.snapshot), snapshot: snapRes.snapshot, ok: true }
+    } else {
+      _snapCache = { valid: false, missingFields: [], snapshot: null, ok: false }
+    }
+    return _snapCache
+  }
+
+  let incompleteFormSample = null
   for (const n of notes) {
     const ts = noteCreatedMs(n)
     if (ts && now - ts > maxAgeMs) continue
     if (afterMs && ts && ts < afterMs) continue
     const blob = noteBlob(n)
-    if (messageLooksLikeFormSumarResponse(blob) || messageIsFlowResponsesReceived(blob)) {
-      return {
-        detected: true,
-        source: messageIsFlowResponsesReceived(blob) ? 'kommo_note_flow' : 'kommo_note',
-        sample: blob.slice(0, 120),
+    // Marcador real do Flow ("Flow responses received"): conclusão legítima do Flow.
+    if (messageIsFlowResponsesReceived(blob)) {
+      return { detected: true, source: 'kommo_note_flow', sample: blob.slice(0, 120) }
+    }
+    // Nota com ESTRUTURA de formulário (CPF:/NOME:/EMAIL:…): só conta como recebida
+    // se os campos obrigatórios chegaram de fato no lead do Kommo. Sem isso, era a
+    // causa do lead pausado com formulário vazio (`n/a`) — agora não pausa e a IA
+    // continua atendendo até o formulário real chegar.
+    if (messageLooksLikeFormSumarResponse(blob)) {
+      const snap = await getSnapValidation()
+      if (!snap.valid) {
+        incompleteFormSample = blob.slice(0, 120)
+        continue
       }
+      return { detected: true, source: 'kommo_note', sample: blob.slice(0, 120) }
     }
   }
 
@@ -288,21 +314,23 @@ export async function detectFormSumarRecebidoNoKommo(env, leadId, options = {}) 
       }
     }
 
-    const snapRes = await fetchLeadFormSnapshot(env, id)
-    if (snapRes.ok && snapRes.snapshot) {
-      const val = validateFormSnapshot(env, snapRes.snapshot)
+    const snap = await getSnapValidation()
+    if (snap.ok && snap.snapshot) {
       // No tick do scheduler: snapshot preenchido não significa "formulário
       // acabou de chegar" — senão bloqueia flush de mensagens novas (ex.: "olá").
-      if (val.valid && !options.schedulerTick) {
+      if (snap.valid && !options.schedulerTick) {
         return {
           detected: true,
           source: 'kommo_snapshot',
-          sample: `nome=${String(snapRes.snapshot.nome || '').slice(0, 40)} email=${String(snapRes.snapshot.email || '').slice(0, 40)}`,
+          sample: `nome=${String(snap.snapshot.nome || '').slice(0, 40)} email=${String(snap.snapshot.email || '').slice(0, 40)}`,
         }
       }
     }
   }
 
+  if (incompleteFormSample) {
+    return { detected: false, reason: 'form_fields_incomplete', incomplete: true, sample: incompleteFormSample }
+  }
   return { detected: false, reason: formSentMs > 0 ? 'not_found_after_form_sent' : 'no_formulario_sum_note' }
 }
 

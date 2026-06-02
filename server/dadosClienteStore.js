@@ -69,6 +69,12 @@ export function decideHoldOnIaPause(row) {
   if (row?.inscricao_form_status === 'desistencia_concluida') {
     return { hold: false, paused: true, reason: 'desistencia_concluida' }
   }
+  // Rede de segurança: pause NUNCA é legítimo no estágio 'aguardando_form_sumar'
+  // (a IA deveria estar conversando enquanto espera o formulário). Pause aqui é
+  // resíduo de um disparo indevido (ex.: formulário vazio `n/a`) — destrava.
+  if (String(row?.inscricao_form_status || '').toLowerCase() === 'aguardando_form_sumar') {
+    return { hold: false, paused: true, reason: 'spurious_form_pause', clearPause: true }
+  }
   return { hold: true, paused: true, reason: null }
 }
 
@@ -93,7 +99,14 @@ export async function shouldHoldOnIaPause(env, telefone) {
     telefone,
     'atendimento_ia,inscricao_form_status',
   )
-  return decideHoldOnIaPause(row)
+  const decision = decideHoldOnIaPause(row)
+  if (decision.clearPause) {
+    // Limpa o pause AGORA (await) para o gate secundário do agentRunner
+    // (isAtendimentoIaPaused) não reler 'pause' defasado e bloquear a resposta.
+    await updateDadosCliente(env, { telefone, fields: { atendimento_ia: null } }).catch(() => {})
+    console.log(`[ia_pause] pause espúrio limpo (aguardando_form_sumar) telefone=${telefone}`)
+  }
+  return decision
 }
 
 function getConfig(env) {
