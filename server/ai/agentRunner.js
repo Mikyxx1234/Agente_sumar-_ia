@@ -50,6 +50,7 @@ import { applyMetaFlowFormToKommo } from '../metaFlowFormSync.js'
 import { tryHandleCaptacaoInscricaoExistenteFlow } from '../captacaoInscricaoExistenteFlow.js'
 import { tryHandlePoloPreFormFlow, tryHandlePoloEscolhaFlow } from '../inscricaoPoloFlow.js'
 import { tryHandleInscricaoFromKommoCard } from '../inscricaoKommoPreFilledFlow.js'
+import { tryHandleMatriculaResumoConfirmacao } from '../inscricaoMatriculaConfirmFlow.js'
 import {
   tryHandleInscricaoDesistenciaFlow,
   tryHandleDesistenciaJaRegistrada,
@@ -460,6 +461,23 @@ export async function runAgent(env, input) {
       )
     } catch (err) {
       console.warn(`[${executionId}] INSCRICAO_CTX log_err:`, err?.message || err)
+    }
+  }
+
+  // Passo de CONFIRMAÇÃO antes do formulário: quando o lead confirma a matrícula,
+  // envia o resumo (curso/valor/taxa) e pede autorização ANTES de disparar o
+  // formulário. Só depois do "autorizo" o fluxo de envio existente roda.
+  if (telefone) {
+    const resumoFlow = await tryHandleMatriculaResumoConfirmacao(env, formFlowCtx)
+    if (resumoFlow?.handled) {
+      console.log(
+        `[${executionId}] MATRICULA_RESUMO_CONFIRMACAO curso="${resumoFlow.result?.orchestratorSteps?.[0]?.curso ?? 'n/a'}"`,
+      )
+      return {
+        ...resumoFlow.result,
+        historyLoaded: historyMessages.length,
+        aiMeta: ctx.toAiMeta(),
+      }
     }
   }
 

@@ -12,6 +12,54 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-06-03 - Confirmação ANTES da matrícula (resumo + autorização) — IMPLEMENTADO
+
+- **Decisão / desfecho**
+  - Inserido um passo de CONFIRMAÇÃO antes do envio do formulário: quando o lead confirma que
+    quer se matricular, o agente envia um resumo (curso, duração, mensalidade, taxa de
+    matrícula = 1 mensalidade) e pergunta "Você autoriza a conclusão da matrícula?". Só após o
+    "autorizo" o fluxo de envio do formulário existente roda. Recusa/dúvida → atendimento
+    normal; consultor só se necessário.
+  - **Gate determinístico** novo (`server/inscricaoMatriculaConfirmFlow.js`,
+    `tryHandleMatriculaResumoConfirmacao`) chamado cedo no `agentRunner` (após carregar
+    histórico, antes dos flows de polo/desistência/card e do envio determinístico do form).
+    Usa um novo status `inscricao_form_status = 'aguardando_autorizacao_matricula'`:
+    - status null + lead confirma matrícula + curso/preço resolvidos → grava status e envia o
+      resumo (short-circuit; NÃO envia formulário).
+    - status aguardando_autorizacao + lead autoriza → reseta status p/ null e devolve null
+      (o fluxo de envio existente, INTACTO, dispara o formulário).
+    - status aguardando_autorizacao + dúvida/recusa → devolve null (LLM faz atendimento normal).
+    - sem curso/preço resolvido → devolve null (degrada para o fluxo atual, sem bloquear).
+  - Valores do resumo vêm das tabelas `grad_preco`/`pos_preco` (mensalidade = "preco com
+    desconto"; duração só existe em grad_preco). Match de curso por sobreposição de tokens
+    (limiar 0.5), curso vindo de `detectCursoConfirmadoPeloLead`/histórico/`sum_Curso`.
+  - **Helpers** em `libShared/inscricaoFormHeuristics.js`: novo status
+    `INSCRICAO_FORM_STATUS_AGUARDANDO_AUTORIZACAO`, `assistantAskedMatriculaAuthorization`, e
+    `assistantInEnrollmentStep` estendido p/ reconhecer a pergunta de autorização (assim o
+    "sim" após o resumo reaproveita o envio de formulário já existente, sem alterá-lo).
+  - **Reforço por prompt**: nova regra 25 (hardcoded + AGENT_RULES_CATALOG + DB agent_rules,
+    via `scripts/add-rule-confirmacao-matricula.mjs`) instrui o LLM a fazer o resumo antes de
+    chamar enviar_form_sumar_inscricao — cobre os caminhos guiados pelo modelo. DB agora 1–25.
+- **Contexto**
+  - O envio do formulário tem vários pontos (atalho determinístico p/ "sim" curto, tool
+    enviar_form_sumar_inscricao do LLM, ensure pós-LLM, scheduler). Para minimizar blast radius,
+    o gate é um único handler com short-circuit + status; o caminho de envio existente NÃO foi
+    modificado (só estendido o reconhecimento da pergunta de autorização).
+- **Alternativas descartadas**
+  - Resumo gerado pelo LLM como mecanismo principal: risco de o disparo automático
+    (nfm_reply/scheduler) não passar pelo LLM. Mantido o gate determinístico + regra de reforço.
+  - Confirmação DEPOIS do formulário (antes da captação): rejeitado pelo usuário — preferiu
+    antes do formulário (menos disrupção do fluxo pós-form).
+- **Impacto**
+  - Duração da pós: a planilha oficial define TODA pós com 6 meses. Gravado `duracao: 6 Meses`
+    em `pos_preco` (content + metadata, re-embedado) via `scripts/add-duracao-pos.mjs`; o lookup
+    passou a ler `duracao` para grad e pós. Resumo da pós agora mostra "com duração de 6 meses".
+  - Reversão: remover a chamada do gate no agentRunner + `DELETE agent_rules?id=eq.25`
+    (+ versions) + apagar `server/inscricaoMatriculaConfirmFlow.js`. O status
+    `aguardando_autorizacao_matricula` é aditivo (nenhum fluxo legado o consome).
+
+---
+
 ### 2026-06-03 - Regra 24: desconto por pagamento antecipado — informar 1× junto com o valor — IMPLEMENTADO
 
 - **Decisão / desfecho**

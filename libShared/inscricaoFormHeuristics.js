@@ -19,6 +19,8 @@ export const INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM = 'aguardando_escolh
 export const INSCRICAO_FORM_STATUS_AGUARDANDO_POLO = 'aguardando_escolha_polo'
 /** Inscrição na API Sumaré feita; aguardando aceite do contrato no portal. */
 export const INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE = 'aguardando_aceite_contrato'
+/** Resumo enviado (curso/valor/taxa) — aguardando o lead AUTORIZAR a matrícula antes do formulário. */
+export const INSCRICAO_FORM_STATUS_AGUARDANDO_AUTORIZACAO = 'aguardando_autorizacao_matricula'
 
 /** Marcador interno quando o WhatsApp Flow / Kommo sinaliza formulário preenchido. */
 export const FORM_SUMAR_FLOW_COMPLETED_MARKER = '[FORMULARIO_SUMAR_PREENCHIDO]'
@@ -104,6 +106,17 @@ export function messageIsCourseCatalogRequest(text) {
   return false
 }
 
+/** Assistente perguntou ao lead se autoriza a CONCLUSÃO da matrícula (resumo pré-formulário). */
+export function assistantAskedMatriculaAuthorization(lastAssist) {
+  const a = String(lastAssist || '').toLowerCase()
+  if (!a) return false
+  return (
+    /\bautoriz\w*\b[\s\S]{0,40}\b(conclus|matr[ií]cula|inscri)\b/i.test(a) ||
+    /\bvoc[eê]\s+autoriza\b/i.test(a) ||
+    /\b(taxa\s+de\s+matr[ií]cula)\b[\s\S]{0,120}\bautoriz/i.test(a)
+  )
+}
+
 /** Assistente já apresentou curso e perguntou se o lead quer seguir com inscrição/matrícula. */
 export function assistantInEnrollmentStep(lastAssist) {
   const a = String(lastAssist || '').toLowerCase()
@@ -116,7 +129,9 @@ export function assistantInEnrollmentStep(lastAssist) {
     /\b(ajud(e|ar)|te\s+ajud)\b[\s\S]{0,45}\b(com\s+a\s+)?(inscri|matricul)/i.test(a) ||
     /\binscri[cç][aã]o\s+nesse\s+curso\b/i.test(a) ||
     /\bquer\s+que\s+eu\b[\s\S]{0,55}\b(inscri|matricul)/i.test(a) ||
-    /\b(posso|pode)\b[\s\S]{0,40}\b(seguir|continuar)\b[\s\S]{0,30}\b(inscri|matricul)/i.test(a)
+    /\b(posso|pode)\b[\s\S]{0,40}\b(seguir|continuar)\b[\s\S]{0,30}\b(inscri|matricul)/i.test(a) ||
+    // Resumo de confirmação pré-formulário ("...Você autoriza a conclusão da matrícula?")
+    assistantAskedMatriculaAuthorization(a)
   )
 }
 

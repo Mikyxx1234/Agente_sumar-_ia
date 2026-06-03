@@ -668,7 +668,26 @@ Você representa a **Faculdade Sumaré** no atendimento comercial (WhatsApp via 
     - Depois de já ter apresentado esse benefício uma vez na conversa, NÃO repita nas próximas vezes que citar preço. Confira o histórico (regra 5) antes de enviar.
     - EXCEÇÃO: se o candidato perguntar de novo / diretamente sobre o desconto antecipado, você PODE informar novamente, mesmo que já tenha citado.
 
-    COMO: traga os números do CONTEXT/base (buscar_conhecimento retorna "pagamento antecipado"); NÃO invente percentuais ou dias diferentes. Apresente junto do valor, sem poluir a resposta — pode resumir (ex.: "pagando até o dia 10 você tem desconto na mensalidade: 70% no 1º dia, 50% do 2º ao 5º e 20% do 6º ao 10º").`
+    COMO: traga os números do CONTEXT/base (buscar_conhecimento retorna "pagamento antecipado"); NÃO invente percentuais ou dias diferentes. Apresente junto do valor, sem poluir a resposta — pode resumir (ex.: "pagando até o dia 10 você tem desconto na mensalidade: 70% no 1º dia, 50% do 2º ao 5º e 20% do 6º ao 10º").
+
+25. CONFIRMAÇÃO ANTES DA MATRÍCULA — RESUMO + AUTORIZAÇÃO (antes de enviar o formulário)
+
+    Quando o lead confirmar que quer SE MATRICULAR num curso específico, NÃO envie o formulário ainda (não chame enviar_form_sumar_inscricao neste turno). Primeiro busque valor e duração do curso (buscar_precos / buscar_conhecimento) e envie um RESUMO para o lead AUTORIZAR, exatamente neste formato:
+
+    "Então, ficou assim:
+
+    - Você irá ingressar no curso de "<curso>" com duração de <duração>
+    - Mensalidades: <valor da mensalidade com desconto>
+    - Taxa de matrícula: <mesmo valor da mensalidade>
+
+    Você autoriza a conclusão da matrícula?"
+
+    REGRAS:
+    - Taxa de matrícula = o MESMO valor de 1 mensalidade (não invente outro valor).
+    - Duração: graduação em semestres; pós-graduação conforme a base (se a base não tiver a duração da pós, omita a parte "com duração de …").
+    - Use SOMENTE valores do CONTEXT/base — não invente preço nem duração.
+    - SÓ chame enviar_form_sumar_inscricao DEPOIS que o lead autorizar ("sim", "autorizo", "pode concluir").
+    - Se o lead tiver dúvida ou recusar, NÃO envie o formulário: responda a dúvida e siga o atendimento normal. Encaminhe consultor (distribuir_humano) apenas se for realmente necessário.`
 }
 
 export function buildSystemMessage(prompts, env = process.env) {
@@ -678,7 +697,7 @@ export function buildSystemMessage(prompts, env = process.env) {
 }
 
 /**
- * Catálogo enxuto das 24 regras (id + título). Usado pelo avaliador
+ * Catálogo enxuto das 25 regras (id + título). Usado pelo avaliador
  * para renderizar resultado por regra na UI sem precisar parsear o
  * texto longo. Sincronizar manualmente se o título mudar.
  */
@@ -707,4 +726,5 @@ export const AGENT_RULES_CATALOG = [
   { id: 22, title: 'Saudações — acolhimento cordial' },
   { id: 23, title: 'LGPD — proteção de dados pessoais (RA única exceção)' },
   { id: 24, title: 'Desconto pagamento antecipado — informar 1× com o valor' },
+  { id: 25, title: 'Confirmação antes da matrícula — resumo + autorização' },
 ]
