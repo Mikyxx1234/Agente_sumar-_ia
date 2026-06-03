@@ -51,18 +51,31 @@ export function messageExpressesFrustrationAlreadySaid(text) {
 }
 
 export function extractDiscussedCourseFromHistory(historyMessages) {
-  const re =
-    /\bcurso\s+de\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s]{2,48}?)(?:\s+que|\s+no|\s+na|\?|\.|,|$)/i
+  // Captura o NOME do curso logo após o enunciado do tópico
+  // ("O curso de graduação em Redes de Computadores está disponível…"),
+  // ignorando o grau (graduação/tecnólogo/…). O lookahead encerra no verbo/
+  // preposição que segue o nome, então o nome composto é capturado inteiro.
+  const introRe =
+    /\bcurso\s+de\s+(?:(?:p[oó]s(?:-?\s*gradua[cç][aã]o)?|gradua[cç][aã]o|tecn[oó]logo|bacharelado|licenciatura)\s+(?:em\s+)?)?([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s]{2,48}?)(?=\s+(?:est[aá]|dispon[ií]ve|é\b|tem\b|custa|no\b|na\b|com\b|por\b|\()|[,.?!\n]|$)/i
   for (let i = (historyMessages || []).length - 1; i >= 0; i--) {
     const m = historyMessages[i]
     if (m.role !== 'assistant' && m.role !== 'assistente') continue
     const content = String(m.content || '')
-    const hit = content.match(re)
+    const hit = content.match(introRe)
     if (hit?.[1]) {
       const name = hit[1].trim().replace(/\s+/g, ' ')
+      // Normaliza para o nome canônico de um curso conhecido quando o trecho
+      // capturado o contém (evita capturas tortas tipo "Direito não é ofertado").
+      const canonical = extractCursoAreaFromText(name)
+      if (canonical) return canonical
       if (name.length >= 3) return name
     }
-    const area = extractCursoAreaFromText(content)
+    // Fallback: varre SOMENTE a 1ª frase (o enunciado do tópico), não a
+    // descrição inteira — evita casar uma palavra de curso citada
+    // incidentalmente na descrição de OUTRO curso (ex.: "administração" dentro
+    // de "…foco em administração e segurança de redes…" para Redes de Computadores).
+    const firstSentence = content.split(/(?<=[.!?\n])\s+/)[0] || content
+    const area = extractCursoAreaFromText(firstSentence)
     if (area) return area
   }
   return ''

@@ -12,6 +12,40 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-06-03 - Fix: curso errado no card (sum_Curso) por palavra-chave incidental na descrição
+
+- **Decisão / desfecho**
+  - Corrigido `extractDiscussedCourseFromHistory` (`libShared/conversationContextHeuristics.js`)
+    para extrair o curso pelo **enunciado do tópico** ("curso de [graduação/tecnólogo] em X")
+    e, no fallback, varrer **só a 1ª frase** do texto do assistente — não a descrição inteira.
+    A captura é normalizada para o nome canônico de curso conhecido.
+  - Reforçada a regra #17 do prompt (`promptsLoader.js`) com o padrão exato
+    "Quer mais detalhes ou informações sobre outro curso?" → "sim" → perguntar qual,
+    NUNCA redespejar a descrição do curso atual.
+
+- **Contexto (evidências)**
+  - Lead real #23877563 (Leandra, +5511910144847): card `sum_Curso` mudou Direito → **Administração**
+    enquanto a conversa era sobre **Redes de Computadores**. O agente também **repetiu**
+    a mesma resposta de Redes ao receber "sim".
+  - Causa raiz do curso errado: ao responder "sim", `detectCursoConfirmadoPeloLead` chamava
+    `extractDiscussedCourseFromHistory`, que caía no fallback `extractCursoAreaFromText` e
+    varria a descrição inteira do curso de Redes, casando a palavra "administração" presente
+    em "…foco em **administração** e segurança de redes corporativas…". "Administração" vem
+    antes de "Redes de Computadores" na lista `CURSO_PATTERNS`. Reproduzido com os dados reais.
+  - Causa da repetição: violação da regra #17b do prompt (LLM redespejou a info em vez de
+    perguntar qual opção). Reforço de prompt aplicado; guard determinístico fica como opção.
+
+- **Alternativas descartadas**
+  - Reordenar `CURSO_PATTERNS` — não resolve (a palavra ainda aparece na descrição).
+  - Guard determinístico anti-repetição no `agentRunner` — adiado (maior risco de falso
+    positivo); prompt reforçado primeiro.
+
+- **Impacto**
+  - Heurística de "curso em discussão" usada em vários pontos (sum_Curso, continuação de
+    assunto). Agora prioriza o enunciado do tópico e o nome canônico, evitando falsos positivos.
+
+---
+
 ### 2026-06-02 - Diagnóstico: chats WABA da conta `academicosoead` não são legíveis (dispatcher é de OUTRA conta)
 
 - **Decisão / desfecho**
