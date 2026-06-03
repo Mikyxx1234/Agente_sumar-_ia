@@ -9,9 +9,9 @@
  *
  * Campos personalizados do card (mesmos IDs usados pelo n8n; sobrescrevíveis por env):
  *   1475361 nome (text) | 1475363 cpf (numeric) | 1475397 telefone (text)
- *   1475467 data nascimento (text) | 1475971 sexo (select)
- * O e-mail vai SÓ na nota (o n8n não gravava e-mail no card) — o snapshot do
- * agente já lê e-mail da nota via enrichSnapshotFromFormNote.
+ *   1475395 email (text) | 1475467 data nascimento (text) | 1475971 sexo (select)
+ * O n8n não gravava e-mail no card (só na nota); aqui também gravamos no campo
+ * 1475395 para o snapshot ler direto do card, além de manter o e-mail na nota.
  */
 
 import { createLeadNote } from './kommoClient.js'
@@ -21,6 +21,7 @@ const DEFAULT_FIELD_IDS = {
   nome: 1475361,
   cpf: 1475363,
   telefone: 1475397,
+  email: 1475395,
   data_nasc: 1475467,
   sexo: 1475971,
 }
@@ -50,6 +51,9 @@ function buildCustomFields(env, parsed) {
     cf.push({ field_id: fieldId(env, 'telefone'), values: [{ value: parsed.telefone_normalizado }] })
   if (parsed.data_nascimento)
     cf.push({ field_id: fieldId(env, 'data_nasc'), values: [{ value: parsed.data_nascimento }] })
+  // E-mail: o n8n gravava só na nota, mas o campo existe no card (1475395) —
+  // gravar aqui torna o snapshot mais confiável (lê do campo, não só da nota).
+  if (parsed.email) cf.push({ field_id: fieldId(env, 'email'), values: [{ value: parsed.email }] })
   // Campo select: a API casa pelo texto da opção (ex.: "Masculino").
   if (parsed.sexo) cf.push({ field_id: fieldId(env, 'sexo'), values: [{ value: parsed.sexo }] })
   return cf
