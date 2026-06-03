@@ -45,6 +45,8 @@ import {
 } from '../inscricaoFormFlow.js'
 import { filterHistoryMessagesForAgent } from '../../libShared/historySanitize.js'
 import { detectFormSumarRecebidoNoKommo } from '../inscricaoPostFormPipeline.js'
+import { parseMetaFlowResponseJson, messageIsMetaFlowFormReply } from '../../libShared/metaFlowFormParser.js'
+import { applyMetaFlowFormToKommo } from '../metaFlowFormSync.js'
 import { tryHandleCaptacaoInscricaoExistenteFlow } from '../captacaoInscricaoExistenteFlow.js'
 import { tryHandlePoloPreFormFlow, tryHandlePoloEscolhaFlow } from '../inscricaoPoloFlow.js'
 import { tryHandleInscricaoFromKommoCard } from '../inscricaoKommoPreFilledFlow.js'
@@ -587,6 +589,30 @@ export async function runAgent(env, input) {
   }
 
   if (telefone) {
+    // n8n takeover: se a mensagem é o retorno cru do Meta Flow (nfm_reply),
+    // parseia + AJUSTA os dados (telefone/data/sexo/cpf) e grava no card do
+    // Kommo (+ nota de auditoria + move p/ inscrição) ANTES do pipeline pós-form,
+    // que então lê o card já preenchido (fetchLeadFormSnapshot) e segue p/ matrícula.
+    if (leadId && messageIsMetaFlowFormReply(userMessage)) {
+      try {
+        const parsed = parseMetaFlowResponseJson(userMessage)
+        if (parsed.ok) {
+          const sync = await applyMetaFlowFormToKommo(env, {
+            leadId,
+            parsed,
+            executionId,
+          })
+          console.log(
+            `[${executionId}] META_FLOW_KOMMO_SYNC lead=${leadId} card_ok=${sync.cardOk} note_ok=${sync.noteOk} moved=${sync.statusMoved} fields=${sync.fieldsWritten ?? 0} skipped=${sync.skipped || 'no'} cpf=${parsed.cpf_digits || 'n/a'}`,
+          )
+        } else {
+          console.warn(`[${executionId}] META_FLOW_PARSE_FAIL ${parsed.error || ''}`)
+        }
+      } catch (err) {
+        console.warn(`[${executionId}] META_FLOW_KOMMO_SYNC erro: ${err.message}`)
+      }
+    }
+
     // Pós-form só quando a mensagem indica formulário respondido — evita pular
     // direto para "cadastro validado" em "sim"/"oi" com notas antigas no Kommo.
     const wantsNewForm = leadExplicitlyRequestsInscricaoForm(userMessage, historyMessages)

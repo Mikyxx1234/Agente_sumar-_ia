@@ -12,6 +12,54 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-06-03 - Agente assume a função do n8n após o formulário (parse + card + matrícula)
+
+- **Decisão / desfecho**
+  - O agente passa a cumprir, **sem n8n**, o que o workflow `log_inscricao_feita_sum`
+    fazia ao receber o Meta Flow (`nfm_reply`): parsear o `response_json`, AJUSTAR os
+    dados e preencher o card do Kommo, depois seguir para a matrícula.
+  - Novos módulos:
+    - `libShared/metaFlowFormParser.js` — porte fiel do node "Code in JavaScript3":
+      `parseMetaFlowResponseJson` + helpers de normalização (`normalizeBrazilPhone`
+      → DDI 55; `formatDateToDDMMYYYY`; `mapSexo` enum→texto; CPF só dígitos).
+      Mapeia por **field_id embutido na chave** (`<Tipo>_<fieldId>_<idx>`) — resiliente
+      a mudança de tipo/índice. IDs: 1475361 nome, 1475363 cpf, 1475397 telefone,
+      1475395 email, 1475971 sexo, 1475467 nascimento.
+    - `server/metaFlowFormSync.js` — `applyMetaFlowFormToKommo`: PATCH dos campos
+      personalizados (nome/cpf/telefone/nascimento/sexo) + move o lead para
+      pipeline 13756724 / status 106804680 (inscrição) + cria a nota de auditoria
+      no MESMO formato do n8n (CPF/DATA/NOME/EMAIL/TELEFONE/SEXO). Dedupe em memória
+      (10 min) evita PATCH/nota duplicados em retries.
+  - Ligação no `agentRunner.js`: ao detectar o `nfm_reply` cru
+    (`messageIsMetaFlowFormReply`), sincroniza o Kommo ANTES do pipeline pós-form.
+    O pipeline existente (`fetchLeadFormSnapshot` → `detectFormSumarRecebidoNoKommo`
+    → `stepMatriculaPosForm`) então lê o card já preenchido e segue para a matrícula.
+
+- **Contexto (evidências)**
+  - Com o n8n desativado (webhook Meta repontado p/ o agente), ninguém preenchia o
+    card após o formulário; o snapshot vinha vazio e o pós-form não avançava.
+  - O webhook Meta já entrega o reply no buffer como `[FORMULARIO SUMAR]: {response_json}`
+    (`server/whatsapp/metaWebhook.js`), mas o `parseFormDataNoteFields` só lia o
+    formato de NOTA (CPF:/NOME:), não o `response_json` (chaves `TextInput_<id>`).
+  - O e-mail vai SÓ na nota (igual ao n8n, que não gravava e-mail no card); o snapshot
+    já lê e-mail da nota via `enrichSnapshotFromFormNote`.
+  - Curso/polo/tipo_ingresso continuam vindo da conversa (sum_Curso + passo de polo
+    pré-form), não do formulário — idêntico ao n8n.
+  - Parser validado com o sample do `pinData` do workflow.
+
+- **Alternativas descartadas**
+  - Reativar o n8n — contraria a decisão de ter o agente como único receptor (evita conflito).
+  - Casar a string literal completa da chave do Flow — frágil a mudanças de tipo/índice;
+    optou-se por mapear pelo field_id numérico embutido.
+
+- **Impacto**
+  - Funil/IDs configuráveis por env (`AGENT_FUNNEL_PIPELINE_ID`,
+    `AGENT_FUNNEL_STATUS_INSCRICAO`, `KOMMO_FIELD_FORM_*_ID`); defaults = os do n8n.
+  - Move o lead para "inscrição" automaticamente ao receber o formulário — coerente
+    com a regra de o agente atender em Atendimento + inscrição.
+
+---
+
 ### 2026-06-03 - Fix: curso errado no card (sum_Curso) por palavra-chave incidental na descrição
 
 - **Decisão / desfecho**
