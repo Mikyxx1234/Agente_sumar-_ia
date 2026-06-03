@@ -104,20 +104,22 @@ export function isPosTipo(tipo) {
   return /(p[óo]s|mba|especializa)/i.test(String(tipo).toLowerCase())
 }
 
-/** Faculdade Sumaré: unidades ofertam somente EAD (catálogo legado pode trazer Semi-Presencial/Presencial). */
+/**
+ * Faculdade Sumaré oferta EAD e Semipresencial (a planilha oficial define a
+ * modalidade real de cada curso). Aqui apenas padronizamos a grafia para
+ * "Semipresencial" — NÃO forçamos mais tudo para EAD.
+ */
 export function normalizeModalidadeForSumare(value) {
   const s = String(value || '').trim()
   if (!s) return s
-  if (/semi-?\s*presen|^\s*presencial\s*$/i.test(s)) return 'EAD'
+  if (/semi-?\s*presen/i.test(s)) return 'Semipresencial'
   return s
 }
 
 export function normalizeModalidadeInText(text) {
   return String(text || '')
-    .replace(/modalidade:\s*Semi-?\s*Presencial/gi, 'modalidade: EAD')
-    .replace(/modalidade:\s*Presencial\b/gi, 'modalidade: EAD')
-    .replace(/Semi-?\s*Presencial/gi, 'EAD')
-    .replace(/(?<=[a-záéíóúãõç])Presencial(?=[A-ZÁÉÍÓÚÃÕÇ])/gi, 'EAD')
+    .replace(/modalidade:\s*Semi-?\s*Presencial/gi, 'modalidade: Semipresencial')
+    .replace(/(?<![A-Za-zÁÉÍÓÚÃÕÇ])Semi-?\s*Presencial/gi, 'Semipresencial')
 }
 
 const NOISE_KEYS = new Set([

@@ -1,0 +1,198 @@
+[
+  {
+    "table": "pos_preco",
+    "id": 128,
+    "curso": "Pós-Graduação em Ensino Lúdico",
+    "content": "chave: Pós-Graduação em Ensino LúdicoEAD | curso: Pós-Graduação em Ensino Lúdico | preco cheio: 623 | preco com desconto: 187 | grad ou pos: 187 | col6: POS",
+    "metadata": {
+      "kind": "csv_row",
+      "source": "PRODUTO_POS_SUMARE_MODELO.csv",
+      "row_index": 5,
+      "total_rows": 41,
+      "uploaded_at": "2026-05-16T17:51:07.411Z",
+      "price_source": "catalog:exato",
+      "price_sync_at": "2026-05-27T13:14:54.832Z"
+    }
+  },
+  {
+    "table": "pos_preco",
+    "id": 132,
+    "curso": "MBA em Gestão de Projeto",
+    "content": "chave: MBA em Gestão de ProjetoEAD | curso: MBA em Gestão de Projeto | preco cheio: 623 | preco com desconto: 187 | grad ou pos: 187 | col6: POS",
+    "metadata": {
+      "kind": "csv_row",
+      "source": "PRODUTO_POS_SUMARE_MODELO.csv",
+      "row_index": 9,
+      "total_rows": 41,
+      "uploaded_at": "2026-05-16T17:51:07.411Z",
+      "price_source": "catalog:exato",
+      "price_sync_at": "2026-05-27T13:14:54.833Z"
+    }
+  },
+  {
+    "table": "pos_preco",
+    "id": 135,
+    "curso": "MBA em Negócios e Vendas",
+    "content": "chave: MBA em Negócios e VendasEAD | curso: MBA em Negócios e Vendas | preco cheio: 623 | preco com desconto: 187 | grad ou pos: 187 | col6: POS",
+    "metadata": {
+      "kind": "csv_row",
+      "source": "PRODUTO_POS_SUMARE_MODELO.csv",
+      "row_index": 12,
+      "total_rows": 41,
+      "uploaded_at": "2026-05-16T17:51:07.411Z",
+      "price_source": "catalog:exato",
+      "price_sync_at": "2026-05-27T13:14:54.833Z"
+    }
+  },
+  {
+    "table": "pos_preco",
+    "id": 141,
+    "curso": "Pós-Graduação em Ciência de Dados",
+    "content": "chave: Pós-Graduação em Ciência de DadosEAD | curso: Pós-Graduação em Ciência de Dados | preco cheio: 623 | preco com desconto: 187 | grad ou pos: 187 | col6: POS",
+    "metadata": {
+      "kind": "csv_row",
+      "source": "PRODUTO_POS_SUMARE_MODELO.csv",
+      "row_index": 18,
+      "total_rows": 41,
+      "uploaded_at": "2026-05-16T17:51:07.411Z",
+      "price_source": "catalog:exato",
+      "price_sync_at": "2026-05-27T13:14:54.835Z"
+    }
+  },
+  {
+    "table": "pos_preco",
+    "id": 159,
+    "curso": "MBA Em Controladoria e Contabilidade gerencial",
+    "content": "chave: MBA Em Controladoria e Contabilidade gerencialEAD | curso: MBA Em Controladoria e Contabilidade gerencial | preco cheio: 623 | preco com desconto: 187 | grad ou pos: 187 | col6: POS",
+    "metadata": {
+      "kind": "csv_row",
+      "source": "PRODUTO_POS_SUMARE_MODELO.csv",
+      "row_index": 36,
+      "total_rows": 41,
+      "uploaded_at": "2026-05-16T17:51:07.411Z",
+      "price_source": "tier_fix_wrong_desc",
+      "price_sync_at": "2026-05-27T13:14:54.841Z"
+    }
+  },
+  {
+    "table": "pos_preco",
+    "id": 162,
+    "curso": "MBA Executivo em Gestão de Negócios e Estratégia Corporativa",
+    "content": "chave: MBA Executivo em Gestão de Negócios e Estratégia CorporativaEAD | curso: MBA Executivo em Gestão de Negócios e Estratégia Corporativa | preco cheio: 623 | preco com desconto: 187 | grad ou pos: 187 | col6: POS",
+    "metadata": {
+      "kind": "csv_row",
+      "source": "PRODUTO_POS_SUMARE_MODELO.csv",
+      "row_index": 39,
+      "total_rows": 41,
+      "uploaded_at": "2026-05-16T17:51:07.411Z",
+      "price_source": "tier_fix_wrong_desc",
+      "price_sync_at": "2026-05-27T13:14:54.841Z"
+    }
+  },
+  {
+    "table": "pos_preco",
+    "id": 164,
+    "curso": "MBA em Logística — Lean Supply Chain e Gestão Estratégica de Compras",
+    "content": "chave: MBA em Logística — Lean Supply Chain e Gestão Estratégica de ComprasEAD | curso: MBA em Logística — Lean Supply Chain e Gestão Estratégica de Compras | preco cheio: 623 | preco com desconto: 187 | grad ou pos: 187 | col6: POS",
+    "metadata": {
+      "kind": "csv_row",
+      "source": "PRODUTO_POS_SUMARE_MODELO.csv",
+      "row_index": 41,
+      "total_rows": 41,
+      "uploaded_at": "2026-05-16T17:51:07.411Z",
+      "price_source": "corrupt_rebuild",
+      "price_sync_at": "2026-05-27T13:14:54.842Z"
+    }
+  },
+  {
+    "table": "pos_info",
+    "id": 87,
+    "curso": "Pós-Graduação em Ensino Lúdico",
+    "content": "chave: Pós-Graduação em Ensino LúdicoEAD | curso: Pós-Graduação em Ensino Lúdico | modalidade: EAD | duracao: 6 meses | grad ou pos: POS",
+    "metadata": {
+      "kind": "csv_row",
+      "source": "sumare info pos.csv",
+      "row_index": 5,
+      "total_rows": 41,
+      "uploaded_at": "2026-05-16T17:51:09.527Z"
+    }
+  },
+  {
+    "table": "pos_info",
+    "id": 91,
+    "curso": "MBA em Gestão de Projeto",
+    "content": "chave: MBA em Gestão de ProjetoEAD | curso: MBA em Gestão de Projeto | modalidade: EAD | duracao: 6 meses | grad ou pos: POS",
+    "metadata": {
+      "kind": "csv_row",
+      "source": "sumare info pos.csv",
+      "row_index": 9,
+      "total_rows": 41,
+      "uploaded_at": "2026-05-16T17:51:09.527Z"
+    }
+  },
+  {
+    "table": "pos_info",
+    "id": 94,
+    "curso": "MBA em Negócios e Vendas",
+    "content": "chave: MBA em Negócios e VendasEAD | curso: MBA em Negócios e Vendas | modalidade: EAD | duracao: 6 meses | grad ou pos: POS",
+    "metadata": {
+      "kind": "csv_row",
+      "source": "sumare info pos.csv",
+      "row_index": 12,
+      "total_rows": 41,
+      "uploaded_at": "2026-05-16T17:51:09.527Z"
+    }
+  },
+  {
+    "table": "pos_info",
+    "id": 100,
+    "curso": "Pós-Graduação em Ciência de Dados",
+    "content": "chave: Pós-Graduação em Ciência de DadosEAD | curso: Pós-Graduação em Ciência de Dados | modalidade: EAD | duracao: 6 meses | grad ou pos: POS",
+    "metadata": {
+      "kind": "csv_row",
+      "source": "sumare info pos.csv",
+      "row_index": 18,
+      "total_rows": 41,
+      "uploaded_at": "2026-05-16T17:51:09.527Z"
+    }
+  },
+  {
+    "table": "pos_info",
+    "id": 118,
+    "curso": "MBA Em Controladoria e Contabilidade gerencial",
+    "content": "chave: MBA Em Controladoria e Contabilidade gerencialEAD | curso: MBA Em Controladoria e Contabilidade gerencial | modalidade: EAD | duracao: 6 meses | grad ou pos: POS",
+    "metadata": {
+      "kind": "csv_row",
+      "source": "sumare info pos.csv",
+      "row_index": 36,
+      "total_rows": 41,
+      "uploaded_at": "2026-05-16T17:51:09.527Z"
+    }
+  },
+  {
+    "table": "pos_info",
+    "id": 121,
+    "curso": "MBA Executivo em Gestão de Negócios e Estratégia Corporativa",
+    "content": "chave: MBA Executivo em Gestão de Negócios e Estratégia CorporativaEAD | curso: MBA Executivo em Gestão de Negócios e Estratégia Corporativa | modalidade: EAD | duracao: 6 meses | grad ou pos: POS",
+    "metadata": {
+      "kind": "csv_row",
+      "source": "sumare info pos.csv",
+      "row_index": 39,
+      "total_rows": 41,
+      "uploaded_at": "2026-05-16T17:51:09.527Z"
+    }
+  },
+  {
+    "table": "pos_info",
+    "id": 123,
+    "curso": "Lean Supply Chain e Gestão Estratégica de ComprasEAD",
+    "content": "chave: MBA em Logística | curso: Lean Supply Chain e Gestão Estratégica de ComprasEAD | modalidade: MBA em Logística | duracao: Lean Supply Chain e Gestão Estratégica de Compras | grad ou pos: EAD | col6: 6 meses | col7: POS",
+    "metadata": {
+      "kind": "csv_row",
+      "source": "sumare info pos.csv",
+      "row_index": 41,
+      "total_rows": 41,
+      "uploaded_at": "2026-05-16T17:51:09.527Z"
+    }
+  }
+]

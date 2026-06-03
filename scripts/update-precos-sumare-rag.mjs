@@ -19,6 +19,19 @@ import {
 
 const EMBED_BATCH = 40
 const DRY_RUN = process.argv.includes('--dry-run')
+const FORCE = process.argv.includes('--force')
+
+// DEPRECADO (2026-06): a fonte de verdade de preço/modalidade passou a ser a
+// planilha oficial aplicada por scripts/apply-cursos-sumare.mjs. Este script
+// usa o catálogo legado (sem modalidade) e REVERTERIA a coluna modalidade
+// das tabelas. Só roda com --force.
+if (!FORCE) {
+  console.error(
+    'DEPRECADO: use scripts/apply-cursos-sumare.mjs (planilha oficial é a fonte de verdade).\n' +
+      'Este script legado reverteria a modalidade (EAD/Semipresencial). Se realmente precisar, rode com --force.',
+  )
+  process.exit(1)
+}
 
 function loadEnv() {
   const env = { ...process.env }

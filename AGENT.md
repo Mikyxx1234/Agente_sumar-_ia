@@ -12,6 +12,79 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-06-03 - RAG preços por modalidade (EAD + Semipresencial) — IMPLEMENTADO
+
+- **Decisão / desfecho**
+  - Fonte de verdade: planilha oficial "cursos Sumaré.xlsx" (41 graduações, 34 pós).
+    Cada curso tem **uma única modalidade** (EAD ou Semipresencial) — não é multi-modalidade
+    por curso. Pós é tudo EAD.
+  - `grad_preco` (41 linhas) atualizado: `modalidade: EAD|Semipresencial` + grau + duração +
+    preços novos. 18 graduações migraram EAD→Semipresencial (Arquitetura, Biomedicina,
+    Engenharias, Farmácia, Fisioterapia, Nutrição, Ed. Física Bach/Lic, Geografia, História,
+    Letras, Matemática, Pedagogia, Saneamento, Serviço Social). Corrigido id=168 (nome_curso
+    corrompido → "Sistemas de Informação").
+  - `pos_preco` (34 linhas) atualizado: preços (vários 187/623 → 191/637) + `modalidade: EAD`.
+  - `grad_info`: 18 linhas semipresenciais tiveram `modalidade` trocada para Semipresencial.
+  - **Removidos 7 cursos de pós** fora da planilha (Ensino Lúdico, MBA Gestão de Projeto,
+    MBA Negócios e Vendas, Ciência de Dados, MBA Controladoria, MBA Gestão de Negócios e
+    Estratégia, MBA Logística Lean) em `pos_preco` e `pos_info`. Backup em
+    `scripts/backup-pos-removidos-*.json`.
+  - Tudo re-embeddado (text-embedding-3-small / 1536 dims).
+  - Código: `normalizeModalidadeForSumare`/`normalizeModalidadeInText`
+    (`libShared/knowledgeRowFormat.js`) NÃO forçam mais Presencial/Semi → EAD (só padronizam
+    grafia para "Semipresencial"). Prompts EAD-only ajustados no hardcoded
+    (`server/ai/promptsLoader.js`) E no DB (`agent_rules` regras 2, 6, 15, 18 → v2).
+  - Script de migração: `scripts/apply-cursos-sumare.mjs` (mapa explícito por id, `--dry-run`).
+    O legado `update-precos-sumare-rag.mjs` foi marcado DEPRECADO (exige `--force`) para não
+    reverter a modalidade.
+
+- **Contexto / evidências**
+  - Site multi-modalidade (`/graduacao/{ead|semi|presencial}/{curso}`) mas preços via JS
+    (não raspáveis) → usamos a planilha oficial.
+  - `sumare_captacao_curso`: Presencial=0 (sem código de matrícula) → presencial fica de fora.
+  - Validado: Farmácia volta Semipresencial R$227 (cheio 757); Administração EAD 107/357.
+
+- **Alternativas descartadas**
+  - Presencial agora: sem código de matrícula. 1 linha por curso+modalidade: desnecessário
+    (cada curso tem 1 modalidade na planilha). Raspar preço do site: inviável (JS).
+
+- **Impacto / pendência**
+  - Mudanças de DADOS (tabelas RAG) e de REGRAS (agent_rules via cache TTL) já valem em
+    produção. As mudanças de CÓDIGO (`knowledgeRowFormat.js` e header de `promptsLoader.js`)
+    exigem **deploy** para a normalização parar de exibir "EAD" nos semipresenciais.
+
+---
+
+### 2026-06-03 - RAG: plano de pagamento antecipado em grad_info / pos_info
+
+- **Decisão**
+  - Adicionada **1 linha nova em `grad_info` e 1 em `pos_info`** (id=125 e id=124)
+    com o "Plano de Benefício para Pagamento Antecipado Facultativo" (descontos
+    70%/50%/20% conforme o dia do mês; sem desconto após o dia 10), para o agente
+    responder quando o candidato perguntar **quais dias pode pagar a mensalidade**.
+  - Conteúdo geral (não por curso), com cabeçalho de palavras-chave para retrieval.
+    Embedding gerado com o mesmo modelo do RAG (`text-embedding-3-small`, 1536 dims).
+  - Script reutilizável: `scripts/add-plano-pagamento-info.mjs` (`--dry-run`,
+    idempotente via `metadata.topic = 'pagamento_antecipado'`).
+
+- **Contexto**
+  - `grad_info`/`pos_info` são tabelas RAG (content + embedding) consultadas por
+    `match_grad_info`/`match_pos_info`. O `queryClassifier` roteia perguntas de
+    pagamento para `ambiguous` (busca as 4 tabelas) ou `mista` (inclui `*_info`),
+    então a informação em `*_info` é alcançável. Validado: as linhas novas voltam
+    em 1º lugar (similarity ~0.64–0.70 vs ~0.30–0.50 dos cursos).
+
+- **Alternativas descartadas**
+  - Anexar o texto a cada uma das 41 linhas de curso e re-embeddar tudo: polui os
+    embeddings por curso e é redundante para uma informação geral.
+  - Colocar em `*_preco`: o usuário pediu `*_info`; o roteamento já cobre `*_info`.
+
+- **Impacto**
+  - Aditivo e reversível (basta apagar as linhas com `metadata.topic=pagamento_antecipado`).
+    Sem mudança de código do agente; só dado de RAG.
+
+---
+
 ### 2026-06-03 - Agente assume a função do n8n após o formulário (parse + card + matrícula)
 
 - **Decisão / desfecho**
