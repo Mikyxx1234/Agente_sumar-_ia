@@ -11,7 +11,12 @@
 
 import { getDefaultTipoIngresso } from './inscricaoConfig.js'
 import { matchPoloFromUserMessage, resolvePoloUnidadeCode } from '../libShared/sumarePoloCatalog.js'
-import { resolveCursoCodigoFromDb } from './sumareCaptacaoCursoStore.js'
+import { resolveCursoOfertaFromDb } from './sumareCaptacaoCursoStore.js'
+import {
+  turnoFromCursoCodigo,
+  normalizeModalidade,
+  TURNO_SEMIPRESENCIAL,
+} from '../libShared/cursoModalidade.js'
 import {
   parseGerarCandidatoPayload,
   classifyGerarCandidatoOutcome,
@@ -331,12 +336,40 @@ export function buildGerarCandidatoQuery(snapshot, telefone, env = process.env) 
   }
 }
 
-/** Igual a buildGerarCandidatoQuery, mas consulta sumare_captacao_curso no Supabase se curso vazio. */
+/**
+ * Igual a buildGerarCandidatoQuery, mas resolve curso + turno pela oferta oficial
+ * (planilha) no Supabase. Garante que cursos Semipresenciais (ex.: Farmácia) sejam
+ * enviados com o código `_SEMI` e turno=SEMIPRESENCIAL — combinação que a API
+ * exige para gerar o financeiro (senão o portal mostra "R$ null/mês").
+ */
 export async function buildGerarCandidatoQueryAsync(snapshot, telefone, env = process.env) {
   const params = buildGerarCandidatoQuery(snapshot, telefone, env)
-  if (params.curso) return params
-  const fromDb = await resolveCursoCodigoFromDb(snapshot?.curso_inscricao, env)
-  if (fromDb) return { ...params, curso: fromDb }
+  const explicitTurno = String(snapshot?.turno || '').trim()
+
+  const oferta = await resolveCursoOfertaFromDb(snapshot?.curso_inscricao, env)
+  if (oferta?.codigo) {
+    const mod = normalizeModalidade(oferta.modalidade)
+    if (mod === 'Semipresencial') {
+      // Caso quebrado: a oferta oficial é Semipresencial. Força o código `_SEMI`
+      // e turno=SEMIPRESENCIAL (sobrescreve qualquer `_EAD` herdado do mapa/env).
+      params.curso = oferta.codigo
+      if (!explicitTurno) params.turno = oferta.turno || TURNO_SEMIPRESENCIAL
+      return params
+    }
+    // EAD/indefinida: só completa o curso se o resolvedor síncrono não tiver achado
+    // (preserva o mapeamento EAD já validado e evita trocar por variante errada).
+    if (!params.curso) {
+      params.curso = oferta.codigo
+      if (!explicitTurno && oferta.turno) params.turno = oferta.turno
+    }
+    return params
+  }
+
+  // Sem oferta resolvida: mantém curso do mapa/env e alinha o turno ao sufixo do código.
+  if (params.curso && !explicitTurno) {
+    const t = turnoFromCursoCodigo(params.curso)
+    if (t) params.turno = t
+  }
   return params
 }
 

@@ -2,9 +2,18 @@
  * Catálogo sumare_captacao_curso (Supabase) — mapeia nome do curso → codigo_original API.
  */
 
+import {
+  normalizeModalidade,
+  modalidadeToTurno,
+  turnoFromCursoCodigo,
+  modalidadeFromCursoCodigo,
+} from '../libShared/cursoModalidade.js'
+
 const CACHE_TTL_MS = 5 * 60 * 1000
 /** @type {{ at: number, rows: object[]|null, table: string }|null} */
 let cache = null
+/** @type {{ at: number, map: Map<string, Set<string>> }|null} */
+let ofertaCache = null
 
 function getTable(env) {
   return env.SUMARE_CAPTACAO_CURSO_TABLE || 'sumare_captacao_curso'
@@ -92,6 +101,110 @@ export async function resolveCursoCodigoFromDb(cursoInscricao, env = process.env
   return String(matches[0].codigo_original || '').trim().toUpperCase()
 }
 
+/**
+ * Modalidade(s) realmente ofertada(s) por curso, segundo a planilha oficial
+ * (grad_preco/pos_preco). Fonte de verdade para escolher o código/turno certo:
+ * Farmácia, por exemplo, só existe como Semipresencial.
+ * @returns {Promise<Map<string, Set<string>>>} chaveNormalizada → Set(modalidade normalizada)
+ */
+export async function fetchOfferedModalidadesByCourse(env = process.env) {
+  const now = Date.now()
+  if (ofertaCache && now - ofertaCache.at < CACHE_TTL_MS) return ofertaCache.map
+
+  const { url, key } = getSupabaseCfg(env)
+  const map = new Map()
+  if (!url || !key) {
+    ofertaCache = { at: now, map }
+    return map
+  }
+
+  const headers = { apikey: key, Authorization: `Bearer ${key}` }
+  for (const table of ['grad_preco', 'pos_preco']) {
+    try {
+      const res = await fetch(
+        `${url}/rest/v1/${table}?select=content,metadata&limit=1000`,
+        { headers },
+      )
+      if (!res.ok) continue
+      const rows = await res.json()
+      for (const row of Array.isArray(rows) ? rows : []) {
+        const chave =
+          (String(row?.content || '').match(/chave:\s*([^|]+)/i)?.[1] || '').trim()
+        if (!chave) continue
+        const mod = normalizeModalidade(row?.metadata?.modalidade)
+        if (!mod) continue
+        const k = normalizeCursoKey(chave)
+        if (!map.has(k)) map.set(k, new Set())
+        map.get(k).add(mod)
+      }
+    } catch {
+      // ignora falha de uma tabela; segue com o que tiver
+    }
+  }
+  ofertaCache = { at: now, map }
+  return map
+}
+
+/**
+ * Resolve a oferta correta (código API + modalidade + turno) para a inscrição.
+ * Prioriza a modalidade que a planilha oficial diz ser ofertada; cai no catálogo
+ * quando não há info oficial. Retorna null quando não há código compatível.
+ * @returns {Promise<{ codigo: string, modalidade: string, turno: string }|null>}
+ */
+export async function resolveCursoOfertaFromDb(cursoInscricao, env = process.env) {
+  const raw = String(cursoInscricao || '').trim()
+  if (!raw) return null
+
+  // Código já pronto (ex.: FARM_SEMI / ECON_EAD): deriva modalidade/turno do sufixo.
+  if (/^[A-Z0-9]+(?:_[A-Z0-9]+)+$/i.test(raw)) {
+    const codigo = raw.toUpperCase()
+    const modalidade = modalidadeFromCursoCodigo(codigo)
+    return { codigo, modalidade, turno: turnoFromCursoCodigo(codigo) }
+  }
+
+  const key = normalizeCursoKey(raw)
+  if (!key) return null
+
+  const rows = await fetchAllCaptacaoCursos(env)
+  if (!rows.length) return null
+
+  let candidatos = rows.filter((r) => normalizeCursoKey(r.curso_nome) === key)
+  if (!candidatos.length) {
+    candidatos = rows.filter((r) => {
+      const nk = normalizeCursoKey(r.curso_nome)
+      return nk && (nk.includes(key) || key.includes(nk))
+    })
+  }
+  if (!candidatos.length) return null
+
+  // Modalidade ofertada oficialmente (fonte de verdade).
+  const ofertaMap = await fetchOfferedModalidadesByCourse(env)
+  const oficiais = ofertaMap.get(key) || null
+
+  const pickByModalidade = (mod) =>
+    candidatos.find((r) => normalizeModalidade(r.modalidade) === mod)
+
+  let escolhido = null
+  if (oficiais && oficiais.size) {
+    // EAD funciona com turno EAD; prioriza EAD quando ofertado, senão Semipresencial.
+    if (oficiais.has('EAD')) escolhido = pickByModalidade('EAD')
+    if (!escolhido && oficiais.has('Semipresencial')) escolhido = pickByModalidade('Semipresencial')
+  }
+
+  // Sem info oficial: mantém preferência histórica (EAD), mas com turno coerente ao código.
+  if (!escolhido) {
+    candidatos.sort((a, b) => modalidadeRank(a.modalidade) - modalidadeRank(b.modalidade))
+    escolhido = candidatos[0]
+  }
+
+  const codigo = String(escolhido?.codigo_original || '').trim().toUpperCase()
+  if (!codigo) return null
+  const modalidade = normalizeModalidade(escolhido?.modalidade) || modalidadeFromCursoCodigo(codigo)
+  const turno = modalidadeToTurno(modalidade) || turnoFromCursoCodigo(codigo)
+  return { codigo, modalidade, turno }
+}
+
 export function invalidateCaptacaoCursoCache() {
   cache = null
+  ofertaCache = null
 }

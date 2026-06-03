@@ -1396,3 +1396,48 @@ Histórico das decisões estruturais do agente. Formato por entrada:
   - Negação explícita de consultor não dispara mais encaminhamento automático.
   - Pergunta sobre datas/forma de pagamento passa a ser respondida com o plano
     de pagamento da base, sem encaminhar a consultor.
+
+### 03/06 - "R$ null/mês" no portal = modalidade/turno errados na geração do candidato
+
+- **Decisão**
+  - A geração do candidato passa a enviar o código de curso E o `turno`
+    coerentes com a modalidade REALMENTE ofertada (planilha oficial
+    grad_preco/pos_preco como fonte de verdade):
+    - EAD → código `_EAD` + `turno=EAD`
+    - Semipresencial → código `_SEMI` + `turno=SEMIPRESENCIAL`
+  - Novo `libShared/cursoModalidade.js` (modalidade↔turno) +
+    `resolveCursoOfertaFromDb()` em `server/sumareCaptacaoCursoStore.js`
+    (lê grad_preco/pos_preco para descobrir a modalidade ofertada e casa com o
+    código do catálogo `sumare_captacao_curso`).
+  - `buildGerarCandidatoQueryAsync` só SOBRESCREVE quando a oferta oficial é
+    Semipresencial (caso quebrado); cursos EAD mantêm o mapeamento já validado
+    (evita trocar `ADM_EAD` por variante `ADM_4_EAD`).
+
+- **Contexto**
+  - Lead 23841399 (Farmácia): candidato gerado como `FARM_EAD` + `turno=EAD`.
+    Farmácia só é ofertada Semipresencial → a Sumaré não acha a oferta
+    financeira e o INSERT em `LYCEUM.dbo.TSCU_INSCRICAO_FINANCEIRO_CANDIDATO`
+    grava `CANDIDATO` nulo (HTTP 500) / o portal mostra `Valor: R$ null/mês`,
+    travando boleto/PIX.
+  - Sondagem confirmou: `FARM_SEMI`+`turno=SEMIPRESENCIAL` → HTTP 200 com
+    `valorBoleto1dia=227.00` (igual à planilha/site). `HIST_SEMI`→107,
+    `PED_SEMI`→117. `FARM_EAD`/`turno=EAD` e `FARM`+`SEMIPRESENCIAL` → 500.
+  - Polos confirmados: Barra Funda=ED_SP_P5 etc. (já no catálogo de polos).
+
+- **Alternativas descartadas**
+  - "Bug sistêmico de graduação da Sumaré" (hipótese anterior do AGENT.md): a
+    sondagem mostrou que graduação Semipresencial FUNCIONA quando enviamos a
+    modalidade/turno certos; o 500 era combinação inválida do nosso lado.
+  - Desativar linhas EAD no catálogo: não resolve os cursos sem código `_SEMI`
+    e é manual; a planilha oficial é fonte de verdade melhor.
+
+- **Impacto**
+  - Cursos Semipresenciais com código `_SEMI` no catálogo passam a gerar
+    candidato com valor correto (Farmácia, História, Pedagogia, Biomedicina,
+    Geografia, Ed. Física Bacharelado, Matemática). Cursos EAD inalterados.
+  - Gap remanescente (Sumaré precisa fornecer o código `_SEMI` no catálogo):
+    Engenharias (Produção/Civil/Elétrica/Mecânica), Fisioterapia, Nutrição,
+    Arquitetura e Saneamento Ambiental — hoje só têm código `_EAD` no
+    `sumare_captacao_curso`, então continuam sem oferta válida até cadastrar.
+  - O candidato já criado do lead 23841399 (`FARM_EAD`) continua quebrado;
+    precisa regerar com `FARM_SEMI` (ação de recuperação à parte).
