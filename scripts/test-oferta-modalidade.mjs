@@ -18,6 +18,12 @@ const casos = [
   { curso_inscricao: 'Pedagogia', polo_inscricao: 'Barra Funda' },
   { curso_inscricao: 'FARM_SEMI', polo_inscricao: 'Barra Funda' },
   { curso_inscricao: 'ECON_EAD', polo_inscricao: 'Barra Funda' },
+  { curso_inscricao: 'Engenharia Civil', polo_inscricao: 'Barra Funda' },
+  { curso_inscricao: 'Fisioterapia', polo_inscricao: 'Barra Funda' },
+  { curso_inscricao: 'Nutrição', polo_inscricao: 'Barra Funda' },
+  { curso_inscricao: 'Arquitetura e Urbanismo', polo_inscricao: 'Barra Funda' },
+  { curso_inscricao: 'Serviço Social', polo_inscricao: 'Barra Funda' },
+  { curso_inscricao: 'Engenharia de Produção', polo_inscricao: 'Barra Funda' },
 ]
 
 for (const c of casos) {

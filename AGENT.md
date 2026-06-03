@@ -1435,9 +1435,29 @@ Histórico das decisões estruturais do agente. Formato por entrada:
   - Cursos Semipresenciais com código `_SEMI` no catálogo passam a gerar
     candidato com valor correto (Farmácia, História, Pedagogia, Biomedicina,
     Geografia, Ed. Física Bacharelado, Matemática). Cursos EAD inalterados.
-  - Gap remanescente (Sumaré precisa fornecer o código `_SEMI` no catálogo):
-    Engenharias (Produção/Civil/Elétrica/Mecânica), Fisioterapia, Nutrição,
-    Arquitetura e Saneamento Ambiental — hoje só têm código `_EAD` no
-    `sumare_captacao_curso`, então continuam sem oferta válida até cadastrar.
   - O candidato já criado do lead 23841399 (`FARM_EAD`) continua quebrado;
-    precisa regerar com `FARM_SEMI` (ação de recuperação à parte).
+    precisa regerar com `FARM_SEMI` (ação de recuperação à parte —
+    `scripts/recover-farm-semi.mjs`, executado: candidato 202630000001041, R$227).
+
+### 03/06 - "Gap" de cursos Semipresenciais era falta de cadastro (códigos _SEMI)
+
+- **Decisão**
+  - Os códigos `_SEMI` desses cursos EXISTEM e funcionam na API Captação
+    (sondados, retornam valor): foram cadastrados em `sumare_captacao_curso`
+    via `scripts/add-captacao-semi-codes.mjs`:
+    ENGP_SEMI(237), FISIO_SEMI(227), NUTR_SEMI(237), ARUB_SEMI(257),
+    ENGC_SEMI(237), ENGE_SEMI(237), ENGM_SEMI(237), TSAMB_SEMI(147),
+    SERV_SEMI(167). (ED_F_SEMI e LETR_SEMI já existiam.)
+  - `resolveCursoOfertaFromDb`: o lookup da modalidade oficial passou a tolerar
+    diferença de nome entre catálogo e planilha (ex.: "Serviço Social" x
+    "Superior em Serviço Social") via inclusão mútua de chaves.
+
+- **Contexto**
+  - Mesmo forçando turno=SEMIPRESENCIAL, esses cursos davam R$ null porque o
+    catálogo só tinha o código `_EAD` (e `_EAD`+turno EAD não tem oferta
+    financeira para curso Semipresencial). Controle: `FISIO_EAD`+EAD → R$ null;
+    `FISIO_SEMI`+SEMIPRESENCIAL → R$ 227.
+
+- **Impacto**
+  - Não há mais gap: todos os cursos Semipresenciais resolvem para o código
+    `_SEMI` + turno=SEMIPRESENCIAL e geram valor correto.

@@ -146,6 +146,25 @@ export async function fetchOfferedModalidadesByCourse(env = process.env) {
 }
 
 /**
+ * Busca as modalidades ofertadas de um curso no mapa oficial, tolerando pequenas
+ * diferenças de nome entre catálogo e planilha (ex.: "Serviço Social" x
+ * "Superior em Serviço Social"). Exato primeiro; depois inclusão mútua de chaves.
+ * @returns {Set<string>|null}
+ */
+function lookupOfertaModalidades(map, key) {
+  if (!map || !key) return null
+  if (map.has(key)) return map.get(key)
+  let best = null
+  for (const [k, set] of map) {
+    if (!k || k.length < 5) continue
+    if (k.includes(key) || key.includes(k)) {
+      if (!best || k.length > best.k.length) best = { k, set }
+    }
+  }
+  return best?.set || null
+}
+
+/**
  * Resolve a oferta correta (código API + modalidade + turno) para a inscrição.
  * Prioriza a modalidade que a planilha oficial diz ser ofertada; cai no catálogo
  * quando não há info oficial. Retorna null quando não há código compatível.
@@ -179,7 +198,7 @@ export async function resolveCursoOfertaFromDb(cursoInscricao, env = process.env
 
   // Modalidade ofertada oficialmente (fonte de verdade).
   const ofertaMap = await fetchOfferedModalidadesByCourse(env)
-  const oficiais = ofertaMap.get(key) || null
+  const oficiais = lookupOfertaModalidades(ofertaMap, key)
 
   const pickByModalidade = (mod) =>
     candidatos.find((r) => normalizeModalidade(r.modalidade) === mod)
