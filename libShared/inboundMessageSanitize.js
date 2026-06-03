@@ -76,6 +76,24 @@ export function messageAsksCoursePrice(text) {
 }
 
 /**
+ * Mensagem do lead pergunta sobre FORMA/DATAS de pagamento da mensalidade
+ * (quando pagar, dia de vencimento, como pagar, desconto por pagamento antecipado).
+ * Deve ser respondida com o plano de pagamento da base — nunca encaminhar a consultor só por isso.
+ */
+export function messageAsksPaymentInfo(text) {
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (!t || t.length < 4) return false
+  if (
+    /\b(datas?\s+(de\s+|para\s+|pra\s+)?pagamento|forma\s+de\s+pagamento|como\s+(eu\s+)?pago|como\s+pagar|quando\s+(eu\s+)?(pago|pagar|vence)|quais?\s+dias?\s+(posso\s+)?pagar|dias?\s+(de\s+|para\s+|pra\s+)?(pagar|pagamento|vencimento)|vencimento|venc\w*|pagamento\s+antecipado|pagar\s+antecipad|desconto\s+(por\s+|no\s+)?pagamento)\b/i.test(
+      t,
+    )
+  ) {
+    return true
+  }
+  return false
+}
+
+/**
  * Remove ecos da IA e mantém o que o lead realmente escreveu.
  * Kommo costuma concatenar: "texto do agente - EX-…, qual o valor do curso".
  */

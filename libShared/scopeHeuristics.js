@@ -179,12 +179,32 @@ export function messageIsInboundMediaPlaceholder(text) {
 }
 
 /**
+ * Lead RECUSA explicitamente o atendimento humano/consultor
+ * (ex.: "não quero falar com consultor", "não precisa de consultor", "sem consultor").
+ * Não confundir com "não quero robô, quero humano" (aí ele QUER humano).
+ */
+export function messageRefusesHumanHandoff(text) {
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (!t) return false
+  const refuses =
+    /\b(n[aã]o\s+(quero|preciso|quer[oa]|desejo|vou\s+querer)|n[aã]o\s+precisa|sem|dispenso|nada\s+de)\b[\s\S]{0,25}\b(falar\s+com\s+)?(o\s+|um\s+|a\s+|uma\s+)?(consultor|humano|humana|atendente|operador|representante)\b/i.test(
+      t,
+    )
+  if (!refuses) return false
+  // "não quero robô/bot ... humano" = QUER humano (recusa o bot) → não é recusa do humano.
+  const wantsHumanRefusingBot =
+    /\bn[aã]o\s+quero\b[\s\S]{0,30}(rob[oô]|\bbot\b|\bia\b|assistente|m[aá]quina)/i.test(t)
+  return !wantsHumanRefusingBot
+}
+
+/**
  * Pedido explícito de humano/consultor (não confundir com "quero matrícula" ou "falar com alguém" genérico).
  */
 export function messageStrongHumanEscalation(text) {
   const t = normalizeMessageForScope(text).toLowerCase()
   if (!t || t.length < 5) return false
   if (messageIsInboundMediaPlaceholder(text)) return false
+  if (messageRefusesHumanHandoff(text)) return false
   if (messageLooksLikeOperationalChat(text) && !/\b(humano|consultor|atendente)\b/i.test(t)) return false
 
   if (/\batendimento\s+humano\b/i.test(t)) return true
@@ -207,6 +227,7 @@ export function messageStrongHumanEscalation(text) {
 export function messageRequestsHuman(text) {
   const t = normalizeMessageForScope(text).toLowerCase()
   if (!t || t.length < 5) return false
+  if (messageRefusesHumanHandoff(text)) return false
   if (isGreetingOnly(text) && !/\b(humano|atendente|consultor|algu[eé]m|pessoa)\b/i.test(t)) return false
 
   if (

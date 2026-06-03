@@ -1363,3 +1363,36 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 - **Alternativas descartadas**
   - Variar curso/tipoIngresso/planoPgto no nosso lado: testado, não resolve.
   - Mudar mapeamento de código de curso: o erro é idêntico para todos os códigos.
+
+### 03/06 - Handoff indevido em negação + datas de pagamento respondidas pela base
+
+- **Decisão**
+  - Tratar negação no handoff: nova `messageRefusesHumanHandoff()` em
+    `libShared/scopeHeuristics.js`, usada como guarda no início de
+    `messageStrongHumanEscalation()` e `messageRequestsHuman()`. Frases como
+    "não quero falar com consultor", "não precisa de consultor" deixam de
+    disparar o `shouldHandoffToHuman` determinístico (linha 736 do agentRunner).
+    A guarda preserva o caso "não quero robô, quero humano" (continua escalando).
+  - Perguntas sobre forma/datas de pagamento: nova `messageAsksPaymentInfo()`
+    em `libShared/inboundMessageSanitize.js` + `paymentInfoHint` no `agentRunner`
+    que OBRIGA `buscar_conhecimento` do plano de pagamento e PROÍBE encaminhar a
+    consultor só por causa de datas/forma de pagamento (a info está na base).
+
+- **Contexto**
+  - Lead 23841399: candidato escreveu "não quero falar com consultor, me fale
+    aonde vai ser as aulas" e o agente encaminhou ao consultor mesmo assim
+    (regex `falar...consultor` casava sem olhar a negação → handoff determinístico).
+  - No mesmo lead, ao perguntar "qual as datas para pagamento?", o agente
+    deflectia para consultor em vez de usar o PLANO DE BENEFÍCIO PARA PAGAMENTO
+    já cadastrado em `grad_info`/`pos_info`.
+
+- **Alternativas descartadas**
+  - Resolver só via regra/prompt do LLM: o handoff era determinístico, então a
+    correção precisa ser no heurístico (regra sozinha não impediria).
+  - Ampliar `messageAsksCoursePrice` para cobrir datas: conflataria preço com
+    forma de pagamento; criada heurística dedicada.
+
+- **Impacto**
+  - Negação explícita de consultor não dispara mais encaminhamento automático.
+  - Pergunta sobre datas/forma de pagamento passa a ser respondida com o plano
+    de pagamento da base, sem encaminhar a consultor.

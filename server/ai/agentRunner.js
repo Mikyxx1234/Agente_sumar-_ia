@@ -84,6 +84,7 @@ import {
 import { messageIsInboundMediaPlaceholder } from '../../libShared/scopeHeuristics.js'
 import {
   messageAsksCoursePrice,
+  messageAsksPaymentInfo,
   sanitizeLeadInboundMessage,
 } from '../../libShared/inboundMessageSanitize.js'
 import { userAsksCourseMoreDetails } from '../../libShared/courseMoreInfo.js'
@@ -1026,6 +1027,16 @@ export async function runAgent(env, input) {
       }
     : null
 
+  const paymentInfoHint = messageAsksPaymentInfo(userMessage)
+    ? {
+        role: 'system',
+        content:
+          'PERGUNTA SOBRE FORMA/DATAS DE PAGAMENTO: o lead quer entender quando/como pagar a mensalidade (dias, vencimento, desconto por pagamento antecipado). ' +
+          'OBRIGATÓRIO neste turno: chame buscar_conhecimento com query sobre pagamento da mensalidade (ex.: "pagamento da mensalidade quais dias pagar dia de vencimento desconto por pagamento antecipado") e responda com o PLANO DE PAGAMENTO da base (dias para pagar e descontos por pagamento antecipado). ' +
+          'PROIBIDO neste turno: encaminhar para consultor/humano apenas porque o lead perguntou sobre datas/forma de pagamento, ou dizer que só um consultor pode confirmar datas. Essa informação ESTÁ na base — entregue-a.',
+      }
+    : null
+
   const discussedForMore =
     extractDiscussedCourseFromHistory(historyMessages) ||
     extractCursoAreaFromText(userMessage) ||
@@ -1079,6 +1090,7 @@ export async function runAgent(env, input) {
     ...(courseInterestHint ? [courseInterestHint] : []),
     ...(activeFlowHint ? [activeFlowHint] : []),
     ...(priceQueryHint ? [priceQueryHint] : []),
+    ...(paymentInfoHint ? [paymentInfoHint] : []),
     ...(courseMoreDetailsHint ? [courseMoreDetailsHint] : []),
     ...(enrollmentConfirmHint ? [enrollmentConfirmHint] : []),
     ...(frustrationHint ? [frustrationHint] : []),
