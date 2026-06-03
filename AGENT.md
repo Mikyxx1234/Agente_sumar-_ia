@@ -12,6 +12,37 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-06-03 - Regra 24: desconto por pagamento antecipado — informar 1× junto com o valor — IMPLEMENTADO
+
+- **Decisão / desfecho**
+  - Nova regra de atendimento (id 24) governando QUANDO enviar o "Plano de Benefício para
+    Pagamento Antecipado Facultativo" (70%/50%/20% conforme o dia do mês) já cadastrado em
+    `grad_info`/`pos_info`.
+  - Comportamento: enviar o benefício **junto com o valor do curso**, mas **apenas uma vez por
+    conversa** (na primeira vez que citar preço); ou sempre que o candidato **perguntar
+    diretamente** sobre o desconto (aí pode repetir). Nas demais menções a preço, não repetir.
+  - Aplicado em 3 lugares para consistência: hardcoded (`server/ai/promptsLoader.js`, fallback),
+    `AGENT_RULES_CATALOG` (id 24) e tabela `agent_rules` do DB (id 24, v1 + espelho em
+    `agent_rule_versions`, source `seed`). O prompt ATIVO vem do DB — por isso o seed é
+    obrigatório. Script idempotente/reversível: `scripts/add-rule-pagamento-antecipado.mjs`.
+- **Contexto**
+  - `composeOverrideFromDB` monta o prompt ativo = cabeçalho hardcoded + corpos das regras do DB
+    (ordenados por id). Regra só vale se existir no DB.
+- **Alternativas descartadas**
+  - Embutir na regra 15 (preços): rejeitado — regra dedicada é mais fácil de avaliar/versionar
+    e de rastrear pelo avaliador por rule_id.
+  - Enforcement determinístico em código (contar envios no histórico): rejeitado por ora — o
+    pedido é uma "regra de atendimento" (prompt); o agente usa o histórico (regra 5) para não repetir.
+- **Impacto**
+  - Durante a implementação detectou-se que a regra 23 (LGPD) estava em hardcoded + catálogo
+    mas **nunca havia sido semeada no DB** → estava inativa no prompt real. Com aprovação do
+    usuário, a LGPD (23) foi semeada no DB (`scripts/add-rule-lgpd.mjs`, v1, source `seed`).
+    DB agora contíguo: ids 1–24.
+  - Reversão: `DELETE agent_rules?id=eq.24` (+ `agent_rule_versions?rule_id=eq.24`) e remover o
+    bloco "24." do hardcoded/catálogo. (LGPD/23 idem via `id=eq.23`.)
+
+---
+
 ### 2026-06-03 - RAG preços por modalidade (EAD + Semipresencial) — IMPLEMENTADO
 
 - **Decisão / desfecho**

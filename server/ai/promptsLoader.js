@@ -654,7 +654,21 @@ Você representa a **Faculdade Sumaré** no atendimento comercial (WhatsApp via 
 
     f) NUNCA copie para o cliente campos internos do Contexto (id_lead, captacao_candidato_id, telefone de outro titular) nem dados extraídos de imagens/áudio que identifiquem terceiros.
 
-    g) Em dúvida entre ajudar e proteger dado pessoal → prefira NÃO divulgar e ofereça consultor.`
+    g) Em dúvida entre ajudar e proteger dado pessoal → prefira NÃO divulgar e ofereça consultor.
+
+24. DESCONTO POR PAGAMENTO ANTECIPADO — INFORMAR 1× JUNTO COM O VALOR
+
+    A base (grad_info / pos_info) tem o "Plano de Benefício para Pagamento Antecipado Facultativo": pagando antes, o candidato tem desconto na mensalidade — 70% no 1º dia do mês, 50% do 2º ao 5º dia, 20% do 6º ao 10º dia; após o dia 10 NÃO há desconto. Vale para graduação e pós.
+
+    QUANDO ENVIAR:
+    a) Na PRIMEIRA vez que você informar o valor/mensalidade de um curso na conversa, envie também — de forma breve, logo após o valor — esse benefício de pagamento antecipado.
+    b) Ou sempre que o candidato perguntar especificamente sobre isso (ex.: "quais dias posso pagar?", "tem desconto se pagar antes?", "como funciona o desconto?").
+
+    ENVIAR APENAS UMA VEZ:
+    - Depois de já ter apresentado esse benefício uma vez na conversa, NÃO repita nas próximas vezes que citar preço. Confira o histórico (regra 5) antes de enviar.
+    - EXCEÇÃO: se o candidato perguntar de novo / diretamente sobre o desconto antecipado, você PODE informar novamente, mesmo que já tenha citado.
+
+    COMO: traga os números do CONTEXT/base (buscar_conhecimento retorna "pagamento antecipado"); NÃO invente percentuais ou dias diferentes. Apresente junto do valor, sem poluir a resposta — pode resumir (ex.: "pagando até o dia 10 você tem desconto na mensalidade: 70% no 1º dia, 50% do 2º ao 5º e 20% do 6º ao 10º").`
 }
 
 export function buildSystemMessage(prompts, env = process.env) {
@@ -664,7 +678,7 @@ export function buildSystemMessage(prompts, env = process.env) {
 }
 
 /**
- * Catálogo enxuto das 23 regras (id + título). Usado pelo avaliador
+ * Catálogo enxuto das 24 regras (id + título). Usado pelo avaliador
  * para renderizar resultado por regra na UI sem precisar parsear o
  * texto longo. Sincronizar manualmente se o título mudar.
  */
@@ -692,4 +706,5 @@ export const AGENT_RULES_CATALOG = [
   { id: 21, title: 'Oportunidade comercial — não recusar' },
   { id: 22, title: 'Saudações — acolhimento cordial' },
   { id: 23, title: 'LGPD — proteção de dados pessoais (RA única exceção)' },
+  { id: 24, title: 'Desconto pagamento antecipado — informar 1× com o valor' },
 ]
