@@ -5,42 +5,46 @@
 
 /** @typedef {{ id: string, nome: string, endereco: string, unidadeDefault: string, aliases: string[] }} SumarePoloEntry */
 
-/** @type {SumarePoloEntry[]} */
+/**
+ * Códigos `unidade` da API Captação por polo (confirmados pela Sumaré em 03/06):
+ *   Barra Funda=P5 · Santo Amaro=P6 · Tatuapé=P7 · Santana=P8 · São Miguel=P9.
+ * @type {SumarePoloEntry[]}
+ */
 export const SUMARE_POLOS_EAD = [
-  {
-    id: 'sao_miguel',
-    nome: 'São Miguel',
-    endereco: 'Rua Bernardo Bellotto, 8',
-    unidadeDefault: 'ED_SP_P1',
-    aliases: ['sao miguel', 'são miguel', 'bernardo bellotto'],
-  },
   {
     id: 'barra_funda',
     nome: 'Barra Funda',
     endereco: 'Av. Marquês de São Vicente, 405 - Loja 5',
-    unidadeDefault: 'ED_SP_P2',
+    unidadeDefault: 'ED_SP_P5',
     aliases: ['barra funda', 'marques de sao vicente', 'marquês de são vicente'],
   },
   {
     id: 'tatuape',
     nome: 'Tatuapé',
     endereco: 'Rua Martins Soares, 135',
-    unidadeDefault: 'ED_SP_P3',
+    unidadeDefault: 'ED_SP_P7',
     aliases: ['tatuape', 'tatuapé', 'martins soares'],
   },
   {
     id: 'santana',
     nome: 'Santana',
     endereco: 'Rua Dr. Olavo Egídio, 14',
-    unidadeDefault: 'ED_SP_P4',
+    unidadeDefault: 'ED_SP_P8',
     aliases: ['santana', 'olavo egidio', 'olavo egídio'],
   },
   {
-    id: 'pinheiros',
-    nome: 'Pinheiros',
-    endereco: 'Rua Amélia de Noronha, 130',
-    unidadeDefault: 'ED_SP_P5',
-    aliases: ['pinheiros', 'amelia de noronha', 'amélia de noronha'],
+    id: 'sao_miguel',
+    nome: 'São Miguel',
+    endereco: 'Rua Bernardo Bellotto, 8',
+    unidadeDefault: 'ED_SP_P9',
+    aliases: ['sao miguel', 'são miguel', 'bernardo bellotto'],
+  },
+  {
+    id: 'santo_amaro',
+    nome: 'Santo Amaro',
+    endereco: '',
+    unidadeDefault: 'ED_SP_P6',
+    aliases: ['santo amaro'],
   },
 ]
 
@@ -131,7 +135,9 @@ export function resolvePoloFromKommoSnapshot(snapshot, env = process.env) {
 
 /** Lista numerada dos 5 polos EAD (cadastro Sumaré). */
 export function formatPoloListaNumerada() {
-  return SUMARE_POLOS_EAD.map((p, i) => `${i + 1}. *${p.nome}* — ${p.endereco}`).join('\n')
+  return SUMARE_POLOS_EAD.map((p, i) =>
+    p.endereco ? `${i + 1}. *${p.nome}* — ${p.endereco}` : `${i + 1}. *${p.nome}*`,
+  ).join('\n')
 }
 
 /** Assistente acabou de pedir escolha de polo (lista 1–5) antes do Form Sumar. */
@@ -155,7 +161,7 @@ export function buildPoloEscolhaPreFormMessage(opts = {}) {
     `você prefere se cadastrar. Todos os cursos são EAD; o polo é o ponto de apoio presencial.\n\n` +
     `Por este canal oferecemos *somente* estes polos:\n\n` +
     `${formatPoloListaNumerada()}\n\n` +
-    `Responda com o *número* (1 a 5) ou o *nome do polo* (ex.: Pinheiros). ` +
+    `Responda com o *número* (1 a 5) ou o *nome do polo* (ex.: Barra Funda). ` +
     `Assim que confirmar, envio o formulário de dados básicos aqui no WhatsApp.`
   )
 }
@@ -176,8 +182,6 @@ export function messageMentionsUnlistedPoloLocation(text) {
   const t = normalizePoloText(text)
   if (!t || t.length < 4) return false
   if (matchPoloFromUserMessage(text)) return false
-  // Polo do card Kommo (ex.: Santo Amaro) fora dos 5 EAD deste WhatsApp
-  if (/\bsanto\s+amaro\b/.test(t)) return true
   if (/\b(outr[oa]s?\s+(cidade|polo|unidade|campus|local|regi[aã]o)|outro\s+polo|outra\s+cidade)\b/i.test(t)) {
     return true
   }

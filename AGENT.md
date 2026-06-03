@@ -1060,3 +1060,72 @@ Histórico das decisões estruturais do agente. Formato por entrada:
     duplicação. Rollback: `KOMMO_INBOUND_POLL_ENABLED=true` (volta o poll).
   - O problema antigo de mensagens só visíveis no canal nativo do Kommo (amojo)
     deixa de exigir o poll: o webhook Meta recebe todas as mensagens do número.
+
+---
+
+### 2026-06-03 - RESOLVIDO: "NULL CANDIDATO" era código de unidade (polo) errado
+
+- **Causa raiz real (NÃO era bug externo do Lyceum)**
+  - O catálogo `libShared/sumarePoloCatalog.js` tinha códigos de `unidade` errados:
+    Barra Funda=`ED_SP_P2`, São Miguel=`ED_SP_P1`, Tatuapé=`ED_SP_P3`,
+    Santana=`ED_SP_P4`, e um polo inexistente (Pinheiros=`ED_SP_P5`).
+  - Esses códigos não têm oferta no Lyceum → o `gerar` retornava HTTP 500
+    "Cannot insert NULL into column CANDIDATO".
+- **Mapeamento correto (confirmado pela Sumaré em 03/06)**
+  - Barra Funda=`ED_SP_P5` · Santo Amaro=`ED_SP_P6` · Tatuapé=`ED_SP_P7` ·
+    Santana=`ED_SP_P8` · São Miguel=`ED_SP_P9`. (Pinheiros removido; Santo Amaro
+    deixou de ser "polo indisponível".)
+- **Validação**
+  - `gerarCandidatoIngresso` com `curso=JORN_EAD` e unidade `ED_SP_P5..P9`
+    retorna **HTTP 200** para todos. Matrícula de graduação volta a funcionar.
+- **Mudanças**
+  - `libShared/sumarePoloCatalog.js`: catálogo corrigido + Santo Amaro adicionado.
+  - `server/inscricaoPostFormPipeline.js` (`preparePoloStepAfterForm`): passa a
+    preferir o código de unidade do catálogo ao valor salvo no Supabase
+    (auto-cura leads antigos com código defasado).
+  - Lead #23875607 (Tamires): `captacao_unidade` corrigido para `ED_SP_P5`.
+- **Pendência**: endereço do polo Santo Amaro (ficou em branco no catálogo).
+
+---
+
+### 2026-06-02 - [SUPERADO] Suspeita de erro externo (Lyceum/Captação) na graduação
+
+- **Sintoma**
+  - Candidato preenche o formulário, o agente DETECTA corretamente (eventos de
+    campo do Kommo + snapshot válido) e tenta a matrícula, mas o lead trava em
+    `inscricao_form_status=distribuir_consultor` + `atendimento_ia=pause` e só
+    recebe "Um consultor entrará em contato" em vez de concluir a inscrição.
+    Casos: #23875607 (Jornalismo), #23608285 (CAIO).
+
+- **Causa raiz (externa, lado Sumaré)**
+  - `GET https://api-captacao.sumare.edu.br/api-ingresso/candidato/gerar`
+    retorna **HTTP 500** com:
+    `com.microsoft.sqlserver.jdbc.SQLServerException: Cannot insert the value
+    NULL into column 'CANDIDATO', table 'LYCEUM.dbo.TSCU_INSCRICAO_FINANCEIRO_CANDIDATO'`.
+  - Nossos params são válidos e completos (CPF, e-mail, nascimento, unidade,
+    curso). O erro ocorre no INSERT do financeiro do Lyceum — o id do CANDIDATO
+    volta NULL no lado deles.
+
+- **Testes feitos (02/06, todos 500 NULL CANDIDATO)**
+  - `curso` com/sem EAD: `JORN_EAD`, `JORN`, `Jornalismo`, `Jornalismo EAD`,
+    `JORNALISMO`, `JORN_EAD_EAD`.
+  - `tipoIngresso`: Vestibular, Vestibular Online/Agendado, Processo Seletivo,
+    ENEM, Transferencia, Prova Agendada.
+  - `planoPgto`: vazio, `1`, `30`.
+  - Outros cursos de graduação: `ADM`, `ADM_EAD`, `ADS_EAD` → mesmo erro.
+  - Conclusão: NENHUM parâmetro que controlamos resolve. É falha sistêmica do
+    endpoint de graduação. A PÓS funciona porque usa outro fluxo (não passa por
+    `gerarCandidatoIngresso`/Lyceum).
+
+- **Decisão**
+  - Acionar a Sumaré/Lyceum: confirmar se a oferta/processo seletivo/plano de
+    pagamento de graduação EAD está habilitado para inscrição via API e por que
+    o `CANDIDATO` retorna NULL no INSERT do financeiro. Sem correção do lado
+    deles, o agente continua detectando o formulário e encaminhando ao consultor
+    (comportamento de fallback atual, correto).
+  - Após a Sumaré corrigir, reprocessar os leads travados com
+    `scripts/proceed-inscricao.mjs`.
+
+- **Alternativas descartadas**
+  - Variar curso/tipoIngresso/planoPgto no nosso lado: testado, não resolve.
+  - Mudar mapeamento de código de curso: o erro é idêntico para todos os códigos.

@@ -350,12 +350,17 @@ async function preparePoloStepAfterForm(env, { telefone, leadId, pushName }) {
   const unidadeDb = String(row?.captacao_unidade || '').trim()
   if (poloDb && unidadeDb) {
     const matched = matchPoloFromUserMessage(poloDb)
+    // Prefere o código de unidade do catálogo (fonte única, já corrigida) ao
+    // valor salvo no Supabase, que pode estar defasado (códigos antigos
+    // ED_SP_P1..P4 davam HTTP 500 "NULL CANDIDATO" na Captação). Fallback no
+    // valor salvo quando o polo não casa com o catálogo.
+    const unidade = matched ? resolvePoloUnidadeCode(matched.id, env) : unidadeDb
     return {
       askPolo: false,
-      snapshotOverride: { ...snapshot, unidade: unidadeDb, polo_inscricao: poloDb },
+      snapshotOverride: { ...snapshot, unidade, polo_inscricao: poloDb },
       poloResolved: {
         polo: matched || { nome: poloDb, id: 'supabase' },
-        unidade: unidadeDb,
+        unidade,
         source: 'supabase_pre_form',
       },
     }

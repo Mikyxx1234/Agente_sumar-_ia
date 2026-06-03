@@ -12,18 +12,21 @@ for (const line of fs.readFileSync('.env', 'utf8').split(/\r?\n/)) {
 const telefone = process.argv[2] || '5511944690752'
 const leadId = Number(process.argv[3] || 23841399)
 const email = process.argv[4] || 'williamsilveira0204@gmail.com'
+const pushName = process.argv[5] || ''
+const unidade = process.argv[6] || 'ED_SP_P5'
+const polo = process.argv[7] || 'Barra Funda'
 
-console.log(`\n=== matrícula manual lead ${leadId} (${telefone}) email=${email} ===`)
+console.log(`\n=== matrícula manual lead ${leadId} (${telefone}) email=${email} polo=${polo}/${unidade} ===`)
 
 const res = await runMatriculaCaptacaoAfterForm(env, {
   telefone,
   leadId,
-  pushName: 'William',
+  pushName,
   executionId: 'manual-proceed-' + Date.now(),
   snapshotOverride: {
     email,
-    unidade: 'ED_SP_P2',
-    polo_inscricao: 'Barra Funda',
+    unidade,
+    polo_inscricao: polo,
   },
 })
 
