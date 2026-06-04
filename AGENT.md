@@ -12,6 +12,41 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-06-03 - Guarda contra reenvio do Formulario_Sum após formulário preenchido — IMPLEMENTADO
+
+- **Decisão**
+  - Novo helper `inscricaoFormAlreadyFilled(row)` em `libShared/inscricaoFormHeuristics.js`:
+    retorna `true` quando o Form Sumar já foi preenchido — status pós-form
+    (`form_sumar_concluido`, `aguardando_distribuicao_form`, `aguardando_escolha_polo`,
+    `aguardando_aceite_contrato`, `comprovante_pagamento_recebido`, `distribuir_consultor`,
+    `desistencia_concluida`) ou `inscricao_form_recebido_at` setado. Estados PRÉ-formulário
+    (null, `aguardando_form_sumar`, `aguardando_escolha_polo_pre_form`,
+    `aguardando_autorizacao_matricula`, `aguardando_confirm_*`) ficam de fora de propósito.
+  - Guard aplicado em 3 pontos que disparam o salesbot `Formulario_Sum`:
+    `tryHandleInscricaoFormStart` e `tryEnsureInscricaoFormSent` (`server/inscricaoFormFlow.js`)
+    e `tryHandlePoloPreFormFlow` (`server/inscricaoPoloFlow.js`, que usava `forceResend:true`).
+    Se o formulário já foi preenchido → `return null` (não reativa o template). Exceção:
+    status `aguardando_confirm_nova_inscricao` (lead pedindo nova inscrição em outro curso).
+- **Contexto**
+  - Lead #23875607 já tinha o formulário preenchido (status `aguardando_aceite_contrato`,
+    `inscricao_form_recebido_at` às 11:51, contrato já enviado), voltou a conversar, o agente
+    tratou como conversa nova e re-disparou o `Salesbot Formulario_Sum`. A partir daí o salesbot
+    do Kommo (bot 49815) repetia "Preencha as informações do formulário" no timer interno dele.
+  - O guard anterior só bloqueava `form_sumar_concluido`/`aguardando_form_sumar`; status
+    intermediários pós-form (ex.: `aguardando_aceite_contrato`) escapavam e re-disparavam.
+- **Alternativas descartadas**
+  - Guard dentro de `deliverInscricaoForm`: é o sender de baixo nível e deve honrar `force`
+    (re-testes, tool/API explícita); colocar a regra lá quebraria reenvio legítimo.
+  - Reusar `matriculaPosFormAlreadyProcessed`: inclui estados PRÉ-form no conjunto
+    "em progresso" (ex.: `aguardando_escolha_polo_pre_form`), o que bloquearia a escolha de
+    polo legítima antes do formulário.
+- **Impacto**
+  - Agente nunca reativa o formulário depois de preenchido — quebra o loop de "preencha o
+    formulário". 7 testes novos em `scripts/test-inscricao-flow.mjs` (10.11x). Sem regressão
+    (143 passaram; as 3 falhas restantes são pré-existentes e não relacionadas).
+  - O loop interno do salesbot do Kommo (uma vez iniciado) é config do lado Kommo — revisar o
+    salesbot 49815 para sair/parar ao detectar o formulário recebido.
+
 ### 2026-06-03 - Confirmação ANTES da matrícula (resumo + autorização) — IMPLEMENTADO
 
 - **Decisão / desfecho**

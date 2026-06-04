@@ -9,6 +9,8 @@ import {
   INSCRICAO_FORM_STATUS_AGUARDANDO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM,
   INSCRICAO_FORM_STATUS_CONCLUIDO,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_NOVA_INSCRICAO,
+  inscricaoFormAlreadyFilled,
   messageConfirmsProceedToInscricaoForm,
   messageExpressesCourseInterestOnly,
   messageAsksForFormResend,
@@ -43,8 +45,17 @@ import {
   filterHistoryMessagesForAgent,
   isAssistantFormSendPromiseOnly,
 } from '../libShared/historySanitize.js'
+import { DADOS_CLIENTE_INSCRICAO_SELECT } from './dadosClienteInscricaoFields.js'
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
+
+/**
+ * Lê status + inscricao_form_recebido_at para o guard de "formulário já preenchido".
+ * @returns {Promise<{ inscricao_form_status: string|null, inscricao_form_recebido_at: string|null }|null>}
+ */
+async function getFormGuardRow(env, telefone) {
+  return fetchDadosClienteByTelefone(env, telefone, DADOS_CLIENTE_INSCRICAO_SELECT)
+}
 
 function useWhatsappTemplateDelivery(env) {
   const mode = String(env.INSCRICAO_FORM_DELIVERY || 'kommo_salesbot').trim().toLowerCase()
@@ -240,7 +251,21 @@ export async function tryHandleInscricaoFormStart(env, input) {
   if (!telefone || (!wantsForm && !asksResend)) return null
   if (messageLooksLikeOperationalChat(userMessage) && !asksResend) return null
 
-  const status = await getFormStatus(env, telefone)
+  const guardRow = await getFormGuardRow(env, telefone)
+  const status = guardRow?.[FORM_STATUS_FIELD] ?? null
+  // Formulário já preenchido (status pós-form ou recebido_at setado) → NUNCA
+  // reativa o salesbot Formulario_Sum. Sem isto, o lead que já preencheu e volta
+  // a conversar reativa o template "preencha o formulário" em loop. Exceção: lead
+  // confirmando explicitamente uma NOVA inscrição em outro curso.
+  if (
+    inscricaoFormAlreadyFilled(guardRow) &&
+    status !== INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_NOVA_INSCRICAO
+  ) {
+    console.log(
+      `[inscricaoForm] lead=${leadIdHint ?? 'n/a'} telefone=${telefone} formulário já preenchido (status=${status}) — NÃO reativa Formulario_Sum`,
+    )
+    return null
+  }
   if (status === INSCRICAO_FORM_STATUS_CONCLUIDO) {
     return null
   }
@@ -448,7 +473,19 @@ export async function tryEnsureInscricaoFormSent(env, input) {
   const should = userConfirmed || messageAsksForFormResend(userMessage) || llmPromisedForm
   if (!should) return null
 
-  const status = await getFormStatus(env, telefone)
+  const guardRow = await getFormGuardRow(env, telefone)
+  const status = guardRow?.[FORM_STATUS_FIELD] ?? null
+  // Formulário já preenchido → não reativa o salesbot mesmo que o LLM tenha
+  // prometido enviar (caminho pós-LLM). Cobre form-start E polo pré-form.
+  if (
+    inscricaoFormAlreadyFilled(guardRow) &&
+    status !== INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_NOVA_INSCRICAO
+  ) {
+    console.log(
+      `[inscricaoForm] tryEnsure lead=${leadIdHint ?? 'n/a'} telefone=${telefone} formulário já preenchido (status=${status}) — guarda contra reenvio`,
+    )
+    return null
+  }
   if (status === INSCRICAO_FORM_STATUS_CONCLUIDO && !messageAsksForFormResend(userMessage)) return null
   if (
     status === INSCRICAO_FORM_STATUS_AGUARDANDO &&

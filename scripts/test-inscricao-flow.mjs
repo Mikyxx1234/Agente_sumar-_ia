@@ -58,7 +58,9 @@ import {
 import {
   INSCRICAO_FORM_STATUS_DISTRIBUIR_CONSULTOR,
   INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_POLO_KOMMO,
+  INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO,
   matriculaPosFormAlreadyProcessed,
+  inscricaoFormAlreadyFilled,
   buildComprovantePagamentoRecebidoReply,
 } from '../libShared/inscricaoFormHeuristics.js'
 import { resolvePosMatriculaTarget } from '../server/inscricaoAceitePagamentoFlow.js'
@@ -527,6 +529,33 @@ section('10. Plano_Inscricao_CardKommo — fluxo express via card Sumaré Comerc
       // polo pelo detectStateFromReply (terminal não vem de reply de polo).
       detectStateFromReply('blá blá') === null,
     '10.10 estado terminal não é regredido pelo auto-sync',
+  )
+
+  // 10.11 inscricaoFormAlreadyFilled — guarda contra reenvio do Formulario_Sum
+  assert(
+    inscricaoFormAlreadyFilled({ inscricao_form_status: INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE }),
+    '10.11 aguardando_aceite_contrato = formulário já preenchido',
+  )
+  assert(
+    inscricaoFormAlreadyFilled({ inscricao_form_status: INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO }),
+    '10.11b comprovante_recebido = formulário já preenchido',
+  )
+  assert(
+    inscricaoFormAlreadyFilled({ inscricao_form_recebido_at: '2026-06-03T11:51:04.831+00:00' }),
+    '10.11c inscricao_form_recebido_at setado = formulário já preenchido',
+  )
+  assert(
+    !inscricaoFormAlreadyFilled({ inscricao_form_status: INSCRICAO_FORM_STATUS_AGUARDANDO }),
+    '10.11d aguardando_form_sumar (form enviado, não preenchido) = NÃO conta como preenchido',
+  )
+  assert(
+    !inscricaoFormAlreadyFilled({ inscricao_form_status: INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM }),
+    '10.11e escolha de polo pré-form = NÃO conta como preenchido',
+  )
+  assert(!inscricaoFormAlreadyFilled(null), '10.11f row nula = não preenchido')
+  assert(
+    !inscricaoFormAlreadyFilled({ inscricao_form_status: null }),
+    '10.11g status null = não preenchido',
   )
 }
 

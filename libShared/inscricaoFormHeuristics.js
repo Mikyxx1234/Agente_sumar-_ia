@@ -73,6 +73,37 @@ export function matriculaPosFormAlreadyProcessed(row) {
   return false
 }
 
+/**
+ * Status que indicam que o Form Sumar JÁ FOI PREENCHIDO e a inscrição avançou
+ * além do envio do formulário. Nesses estados o salesbot Formulario_Sum NUNCA
+ * deve ser reativado (o lead já preencheu — reenviar gera o loop "preencha o
+ * formulário"). Estados PRÉ-formulário (null, aguardando_form_sumar,
+ * aguardando_escolha_polo_pre_form, aguardando_autorizacao_matricula,
+ * aguardando_confirm_*) ficam DE FORA de propósito.
+ */
+const INSCRICAO_FORM_FILLED_STATUSES = new Set([
+  INSCRICAO_FORM_STATUS_CONCLUIDO,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_POLO,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
+  INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO,
+  INSCRICAO_FORM_STATUS_DISTRIBUIR_CONSULTOR,
+  INSCRICAO_FORM_STATUS_DESISTENCIA_CONCLUIDA,
+])
+
+/**
+ * Formulário de inscrição já foi preenchido (não reenviar o Formulario_Sum).
+ * Usa apenas colunas seguras (inscricao_form_status + inscricao_form_recebido_at)
+ * presentes em DADOS_CLIENTE_INSCRICAO_SELECT.
+ */
+export function inscricaoFormAlreadyFilled(row) {
+  if (!row || typeof row !== 'object') return false
+  const status = String(row.inscricao_form_status || '').trim()
+  if (INSCRICAO_FORM_FILLED_STATUSES.has(status)) return true
+  if (row.inscricao_form_recebido_at) return true
+  return false
+}
+
 /** Lead cobra o formulário que ainda não chegou. */
 export function messageAsksForFormResend(text) {
   const t = normalizeMessageForScope(text).toLowerCase()

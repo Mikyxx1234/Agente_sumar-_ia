@@ -9,6 +9,7 @@ import {
   INSCRICAO_FORM_STATUS_AGUARDANDO_POLO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM,
   buildInscricaoFormSentReply,
+  inscricaoFormAlreadyFilled,
 } from '../libShared/inscricaoFormHeuristics.js'
 import {
   matchPoloFromUserMessage,
@@ -95,6 +96,15 @@ export async function tryHandlePoloPreFormFlow(env, input) {
 
   const row = await fetchDadosClienteByTelefone(env, telefone, DADOS_CLIENTE_INSCRICAO_SELECT)
   const status = row?.[FORM_STATUS_FIELD] ?? null
+  // Formulário já preenchido → não reabre escolha de polo pré-form nem redispara
+  // o Formulario_Sum (forceResend). Evita o loop "preencha o formulário" quando o
+  // lead já concluiu o formulário e voltou a conversar.
+  if (inscricaoFormAlreadyFilled(row)) {
+    console.log(
+      `[inscricaoPolo] lead=${leadIdHint ?? 'n/a'} telefone=${telefone} formulário já preenchido (status=${status}) — NÃO reabre polo pré-form`,
+    )
+    return null
+  }
   let inPoloChoiceStep =
     status === INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM || assistantAskedPoloPreFormChoice(lastAssist)
 
