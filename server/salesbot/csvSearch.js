@@ -24,6 +24,7 @@
 
 import { resolveModel } from '../ai/modelRegistry.js'
 import { listLeadCustomFields } from '../kommoClient.js'
+import { kommoRawFetch } from '../kommoRateLimiter.js'
 import { normalizeForEmbedding } from './reindexPos.js'
 
 // IDs dos custom fields do Kommo (Cruzeiro do Sul). Override via env
@@ -68,7 +69,7 @@ async function kommoFetch(env, path, { method = 'GET', body } = {}) {
   const base = String(env.KOMMO_BASE_URL || '').replace(/\/$/, '')
   const token = env.KOMMO_ACCESS_TOKEN || ''
   if (!base || !token) throw new Error('KOMMO_BASE_URL / KOMMO_ACCESS_TOKEN não configurados')
-  const res = await fetch(`${base}${path}`, {
+  const res = await kommoRawFetch(`${base}${path}`, {
     method,
     headers: {
       Accept: 'application/json',

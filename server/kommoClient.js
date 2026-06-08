@@ -13,6 +13,7 @@
  */
 
 import { AGENT_AUDIT_NOTE_MARKER } from '../libShared/inboundMessageSanitize.js'
+import { kommoRawFetch } from './kommoRateLimiter.js'
 
 function getConfig(env) {
   return {
@@ -32,7 +33,7 @@ async function kommoFetch(env, path, { method = 'GET', body } = {}) {
   }
   const requestUrl = `${base}${path}`
   try {
-    const res = await fetch(requestUrl, {
+    const res = await kommoRawFetch(requestUrl, {
       method,
       headers: {
         Accept: 'application/json',

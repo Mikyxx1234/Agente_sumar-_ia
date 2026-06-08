@@ -12,6 +12,87 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-06-08 - Rate limiter global da API Kommo (teto de 7 req/s) — IMPLEMENTADO
+
+- **Decisão**
+  - Novo módulo `server/kommoRateLimiter.js` é o ÚNICO ponto que garante que nunca
+    passamos do limite de **7 req/s** do Kommo (que bloqueou a conta):
+    - `runWithKommoRateLimit(fn)`: serializa TODA chamada ao Kommo numa fila única
+      (process-wide) e espaça os inícios por `1000 / KOMMO_MAX_RPS` ms.
+    - `KOMMO_MAX_RPS` default **5**, com **HARD CAP de 6** — mesmo configurando acima,
+      jamais chega aos 7/s.
+    - `kommoRawFetch(url, init)`: substituto de `fetch` para o host Kommo — passa pelo
+      limiter, adiciona timeout (`KOMMO_API_TIMEOUT_MS`, default 20s) e dispara
+      **backoff global em 429/403** respeitando `Retry-After` (pausa a fila inteira
+      em vez de continuar martelando — evita reentrar no bloqueio).
+  - TODOS os pontos que falavam com o Kommo foram roteados pelo limiter: `kommoFetch`
+    central (`kommoClient.js`) + wrappers locais (`inscricaoTool.js`,
+    `distribuirHumanoTool.js`, `salesbot/csvSearch.js`) + fetches diretos
+    (`kommoSalesbot.js`, `sumareLeadFields.js` ×3, `inscricaoKommoFields.js`,
+    `metaFlowFormSync.js`, `kommoAmojoHistory.js`).
+  - Cap de concorrência no scheduler: `mapWithConcurrency` substitui o `Promise.all`
+    sobre todos os leads. Default `KOMMO_SCHEDULER_LEAD_CONCURRENCY=3`.
+  - Observabilidade: `getKommoRateLimiterSnapshot()` exposto em `/api/agent/diagnose`
+    (`scheduler.kommoRateLimiter`).
+  - Teste `scripts/test-kommo-rate-limiter.mjs` prova que rajada de 40 chamadas tem
+    pico ≤ 6 req/s e que o backoff é respeitado. Adicionado ao gate de pré-deploy.
+- **Contexto**
+  - O suporte do Kommo informou (08/06) que a conta foi bloqueada em 06/03 por exceder
+    7 req/s, e que desbloqueia após ajustarmos o fluxo. Auditoria mostrou que `kommoFetch`
+    não tinha NENHUM controle de taxa (sem fila, sem limite de concorrência, sem backoff),
+    e o scheduler disparava todos os leads em paralelo (`Promise.all`) a cada 10s, com o
+    poll fazendo várias chamadas por lead — rajadas muito acima de 7/s.
+- **Alternativas descartadas**
+  - Limitar só no scheduler: não cobriria webhook/tools/salesbot que também chamam Kommo.
+  - Biblioteca externa (p-limit/bottleneck): dependência nova desnecessária para um
+    token-bucket simples; preferimos serialização própria sem dependências.
+- **Impacto**
+  - Throughput máximo ao Kommo agora é ~5 req/s (latência-bound, sempre < 7). Em picos,
+    as chamadas enfileiram e drenam suavemente. Configurável por env, com teto rígido.
+  - Após o deploy, avisar o suporte do Kommo que o fluxo foi ajustado para < 7 req/s
+    para que desbloqueiem a conta.
+
+---
+
+### 2026-06-05 - Agente sem atendimento em produção: causa raiz = 403 do Kommo no IP do servidor — DIAGNÓSTICO
+
+- **Decisão**
+  - Tratar a correção pela via real: **liberar o IP de saída do servidor (`168.231.99.126`) no Kommo**
+    (allowlist de IP nas configurações da conta OU ticket no suporte Kommo). Sem isso o agente
+    não funciona — toda chamada Kommo (listar funil, `findLeadByPhone`, gravar nota, mover etapa)
+    retorna 403.
+  - NÃO aplicar workaround "fail-open" na `funnel_gate` nem ligar `KOMMO_SCHEDULER_WEBHOOK_ORPHAN_FLUSH`
+    (opção descartada pelo dono — ver abaixo).
+- **Contexto**
+  - Sintoma: 4 leads na fila do agente (pipeline 13756724 / status 106140284 — Cintia #23829157,
+    juliana #23825835, CLÓVIS #23828353, AJ #23824633) com mensagens **de hoje** paradas no buffer
+    há ~3h, sem nenhuma resposta e sem linha em `dados_cliente_sum`.
+  - `GET /api/scheduler/funnel` (produção) retornou `kommoOk:false` com **HTTP 403 Forbidden
+    (página HTML/nginx — WAF, não JSON da API)** na URL
+    `…/api/v4/leads?filter[statuses][0][pipeline_id]=13756724&…`. É bloqueio de **IP/WAF**, não 401 de token.
+  - Cadeia da falha: inbound chega pelo webhook Meta → buffer OK; scheduler roda (`running:true`,
+    sem whitelist, funil correto); mas `listLeadsInAgentQueue` toma 403 → 0 leads no funil → sem flush.
+    `orphanFlush` está `false` e, mesmo ligado, a `funnel_gate` também depende do Kommo (403).
+  - Descartados na investigação: IA kill-switch (`app_settings.ai_enabled=true`), whitelist
+    `KOMMO_AGENT_TEST_LEAD_IDS` (vazia), `ia_paused` (`decideHoldOnIaPause(null)` = sem hold),
+    `clearBufferIfStaleRepush` (nunca flushou → sem hash), scheduler parado (uptime ~45h, `running:true`).
+  - Diagnóstico só foi possível do IP local (que NÃO está bloqueado) + endpoints públicos do app
+    (`/api/health`, `/api/agent/diagnose`, `/api/scheduler/funnel`).
+- **Alternativas descartadas**
+  - **Workaround fail-open** (funnel_gate tolerante a 403 + orphan flush + deploy): responderia os
+    leads do buffer via WhatsApp sem verificar o funil, mas notas e movimentação de etapa no Kommo
+    continuariam falhando, e a IA passaria a responder qualquer sessão com buffer sem checagem de
+    funil. Risco alto; descartado pelo dono em favor da correção de infra.
+  - **Proxy de saída com IP liberado**: viável, mas mais complexo que liberar o IP atual; fica como
+    plano B se o Kommo não permitir allowlist do IP do VPS.
+- **Impacto**
+  - Enquanto o IP não for liberado, o agente permanece sem atender (mensagens acumulam no buffer e
+    podem expirar por TTL). Assim que o IP for liberado, **não precisa redeploy**: o próximo tick do
+    scheduler (10s) drena o backlog que ainda estiver no buffer. Validar com `/api/scheduler/funnel`
+    (`kommoOk:true`) após a liberação.
+
+---
+
 ### 2026-06-03 - Guarda contra reenvio do Formulario_Sum após formulário preenchido — IMPLEMENTADO
 
 - **Decisão**

@@ -3,6 +3,7 @@
  */
 
 import { listLeadCustomFields, listLeadNotes } from './kommoClient.js'
+import { kommoRawFetch } from './kommoRateLimiter.js'
 import { parseFormDataNoteFields } from '../libShared/inscricaoFormHeuristics.js'
 
 const KOMMO_FIELD_NOME = 304628
@@ -85,7 +86,7 @@ async function kommoGetLead(env, leadId) {
   const base = (env.KOMMO_BASE_URL || '').replace(/\/$/, '')
   const token = env.KOMMO_ACCESS_TOKEN || ''
   if (!base || !token) return null
-  const res = await fetch(`${base}/api/v4/leads/${leadId}?with=contacts`, {
+  const res = await kommoRawFetch(`${base}/api/v4/leads/${leadId}?with=contacts`, {
     headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
   })
   if (!res.ok) return null

@@ -9,6 +9,7 @@
  */
 
 import { createLeadNote } from './kommoClient.js'
+import { kommoRawFetch } from './kommoRateLimiter.js'
 
 const DEFAULT_BOT_CONSULTOR = 49777
 const DEFAULT_BOT_DISTRIBUICAO_FORM = 49777
@@ -176,7 +177,7 @@ async function runKommoSalesbotOnce(env, ctx) {
   _salesbotRunCache.set(dedupeKey, Date.now())
 
   const url = `${kommoBase.replace(/\/$/, '')}/api/v2/salesbot/run`
-  const res = await fetch(url, {
+  const res = await kommoRawFetch(url, {
     method: 'POST',
     headers: {
       Accept: 'application/json',

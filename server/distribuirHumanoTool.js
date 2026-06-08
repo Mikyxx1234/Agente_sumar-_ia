@@ -16,6 +16,7 @@
 
 import { resolveModel } from './ai/modelRegistry.js'
 import { findLeadByPhone } from './kommoClient.js'
+import { kommoRawFetch } from './kommoRateLimiter.js'
 import { runKommoSalesbot, normalizeSalesbotMotivo } from './kommoSalesbot.js'
 import { updateDadosCliente } from './dadosClienteStore.js'
 
@@ -206,7 +207,7 @@ function pickConsultorDistribuicao(rows, topN = 5) {
 
 async function kommoFetch(base, token, path, { method = 'GET', body } = {}) {
   const url = `${base.replace(/\/$/, '')}${path}`
-  const res = await fetch(url, {
+  const res = await kommoRawFetch(url, {
     method,
     headers: {
       Accept: 'application/json',

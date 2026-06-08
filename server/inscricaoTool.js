@@ -28,6 +28,7 @@
 
 import { resolveModel } from './ai/modelRegistry.js'
 import { findLeadByPhone, listLeadCustomFields } from './kommoClient.js'
+import { kommoRawFetch } from './kommoRateLimiter.js'
 import { runKommoSalesbot } from './kommoSalesbot.js'
 import { getDefaultTipoIngresso } from './inscricaoConfig.js'
 
@@ -273,7 +274,7 @@ async function openaiSummarize(env, apiKey, conversation) {
 
 async function kommoFetch(base, token, path, { method = 'GET', body } = {}) {
   const url = `${base.replace(/\/$/, '')}${path}`
-  const res = await fetch(url, {
+  const res = await kommoRawFetch(url, {
     method,
     headers: {
       Accept: 'application/json',

@@ -197,6 +197,14 @@ if (-not $SkipDeploy) {
       exit 1
     }
     Write-Host "[pre-deploy] test:outbound-dedupe-race OK"
+
+    Write-Host "[pre-deploy] rodando test:kommo-rate-limiter..."
+    & node scripts/test-kommo-rate-limiter.mjs
+    if ($LASTEXITCODE -ne 0) {
+      Write-Error "test:kommo-rate-limiter FALHOU (exit=$LASTEXITCODE). O limite de 7 req/s do Kommo PRECISA ser respeitado."
+      exit 1
+    }
+    Write-Host "[pre-deploy] test:kommo-rate-limiter OK"
   } finally {
     Pop-Location
   }

@@ -5,6 +5,7 @@
  */
 
 import crypto from 'crypto'
+import { kommoRawFetch } from './kommoRateLimiter.js'
 
 function rfc2822KommoDate() {
   return new Date().toUTCString().replace('GMT', '+0000')
@@ -44,7 +45,7 @@ export async function fetchAmojoChatHistory(env, { scopeId, conversationId, limi
   const url = `${base}${path}?${qs}`
 
   try {
-    const res = await fetch(url, {
+    const res = await kommoRawFetch(url, {
       method: 'GET',
       headers: {
         Date: dateStr,

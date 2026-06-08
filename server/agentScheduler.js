@@ -188,6 +188,38 @@ function getDebounceMs(env) {
   return sec * 1000
 }
 
+/**
+ * Quantos leads processar em paralelo por tick. Cada lead pode disparar várias
+ * chamadas ao Kommo; mesmo com o rate limiter global (kommoRateLimiter.js)
+ * garantindo ≤ 7 req/s, manter um teto de concorrência evita acumular fila e
+ * segura o uso de memória/CPU. Default conservador.
+ */
+const DEFAULT_LEAD_CONCURRENCY = 3
+function getLeadConcurrency(env) {
+  const v = Number(env.KOMMO_SCHEDULER_LEAD_CONCURRENCY)
+  const n = Number.isFinite(v) && v > 0 ? Math.floor(v) : DEFAULT_LEAD_CONCURRENCY
+  return Math.min(10, Math.max(1, n))
+}
+
+/**
+ * Roda `worker(item)` sobre `items` com no máximo `limit` execuções simultâneas.
+ * @template T
+ * @param {T[]} items
+ * @param {(item: T) => Promise<void>} worker
+ * @param {number} limit
+ */
+async function mapWithConcurrency(items, worker, limit) {
+  const max = Math.max(1, Math.min(limit, items.length))
+  let cursor = 0
+  const runners = Array.from({ length: max }, async () => {
+    while (cursor < items.length) {
+      const idx = cursor++
+      await worker(items[idx])
+    }
+  })
+  await Promise.all(runners)
+}
+
 function isEnabled(env) {
   const flag = String(env.KOMMO_SCHEDULER_ENABLED || '').trim().toLowerCase()
   if (flag === 'false' || flag === '0' || flag === 'no') return false
@@ -299,7 +331,7 @@ export async function runSchedulerTick(env) {
 
   // 3) Pra cada lead, achar telefone, ver buffer, processar se tiver fila
   // pronta. Processamos em paralelo mas com lock por sessão (no flushSession).
-  const tasks = leads.map(async (lead) => {
+  const processLead = async (lead) => {
     try {
       const cs = lead?._embedded?.contacts || []
       let phone = null
@@ -508,9 +540,9 @@ export async function runSchedulerTick(env) {
       stats.errors += 1
       console.error('[scheduler] erro processando lead', lead?.id, err.message)
     }
-  })
+  }
 
-  await Promise.all(tasks)
+  await mapWithConcurrency(leads, processLead, getLeadConcurrency(env))
 
   // Lead no funil mas sem telefone no Kommo (ou bulk falhou): mensagens podem estar só no buffer Evolution.
   if (stats.processed === 0 && (stats.skippedNoPhone || 0) > 0) {

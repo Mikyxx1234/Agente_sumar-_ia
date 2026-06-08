@@ -15,6 +15,7 @@
  */
 
 import { createLeadNote } from './kommoClient.js'
+import { kommoRawFetch } from './kommoRateLimiter.js'
 import { AGENT_FUNNEL_PIPELINE_ID, AGENT_FUNNEL_STATUS_INSCRICAO } from './kommoAgentFunnelGate.js'
 
 const DEFAULT_FIELD_IDS = {
@@ -76,7 +77,7 @@ async function patchLead(env, leadId, body) {
   const token = env.KOMMO_ACCESS_TOKEN || ''
   if (!base || !token) return { ok: false, code: 'KOMMO_NOT_CONFIGURED' }
   try {
-    const res = await fetch(`${base}/api/v4/leads/${leadId}`, {
+    const res = await kommoRawFetch(`${base}/api/v4/leads/${leadId}`, {
       method: 'PATCH',
       headers: {
         Accept: 'application/json',

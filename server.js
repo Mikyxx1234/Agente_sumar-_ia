@@ -86,6 +86,7 @@ import { getDebounceMs } from './server/evolution/debouncer.js'
 import { runAgent } from './server/ai/agentRunner.js'
 import { classifyMessageScope } from './server/ai/scopeClassifier.js'
 import { startAgentScheduler, runSchedulerTick, isSchedulerRunning } from './server/agentScheduler.js'
+import { getKommoRateLimiterSnapshot } from './server/kommoRateLimiter.js'
 import { maybeFallbackPollModeWhenDispatcherDown, normalizeKommoInboundPollMode } from './server/kommoInboundPoll.js'
 import { runSalesbotCsv, extractLeadIdFromWebhookBody, probePos } from './server/salesbot/csvSearch.js'
 import { saveSalesbotExecution } from './server/salesbot/telemetry.js'
@@ -2120,6 +2121,8 @@ app.get('/api/agent/diagnose', async (req, res) => {
       inboundPollEnabled: String(env.KOMMO_INBOUND_POLL_ENABLED || 'false').toLowerCase() === 'true',
       inboundPollMode: normalizeKommoInboundPollMode(env.KOMMO_INBOUND_POLL_MODE),
       warmupFreshSec: env.KOMMO_INBOUND_WARMUP_FRESH_SEC || '120 (default)',
+      leadConcurrency: Number(env.KOMMO_SCHEDULER_LEAD_CONCURRENCY) || 3,
+      kommoRateLimiter: getKommoRateLimiterSnapshot(),
     },
     secrets: {
       kommoConfigured: Boolean(env.KOMMO_BASE_URL && env.KOMMO_ACCESS_TOKEN),

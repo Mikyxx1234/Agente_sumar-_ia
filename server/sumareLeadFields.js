@@ -9,6 +9,7 @@
  */
 
 import { listLeadCustomFields, findLeadByPhone } from './kommoClient.js'
+import { kommoRawFetch } from './kommoRateLimiter.js'
 
 const SUM_CURSO_ALIASES = [
   'sum_curso',
@@ -153,7 +154,7 @@ async function patchLeadCustomFieldEnum(env, leadId, fieldId, enumId) {
   const token = env.KOMMO_ACCESS_TOKEN || ''
   if (!base || !token) return { ok: false, code: 'KOMMO_NOT_CONFIGURED' }
   try {
-    const res = await fetch(`${base}/api/v4/leads/${leadId}`, {
+    const res = await kommoRawFetch(`${base}/api/v4/leads/${leadId}`, {
       method: 'PATCH',
       headers: {
         Accept: 'application/json',
@@ -176,7 +177,7 @@ async function patchLeadCustomField(env, leadId, fieldId, value) {
   const token = env.KOMMO_ACCESS_TOKEN || ''
   if (!base || !token) return { ok: false, code: 'KOMMO_NOT_CONFIGURED' }
   try {
-    const res = await fetch(`${base}/api/v4/leads/${leadId}`, {
+    const res = await kommoRawFetch(`${base}/api/v4/leads/${leadId}`, {
       method: 'PATCH',
       headers: {
         Accept: 'application/json',
@@ -199,7 +200,7 @@ async function getCurrentSumCurso(env, leadId, fieldId) {
   const token = env.KOMMO_ACCESS_TOKEN || ''
   if (!base || !token) return ''
   try {
-    const res = await fetch(`${base}/api/v4/leads/${leadId}`, {
+    const res = await kommoRawFetch(`${base}/api/v4/leads/${leadId}`, {
       headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
     })
     if (!res.ok) return ''
