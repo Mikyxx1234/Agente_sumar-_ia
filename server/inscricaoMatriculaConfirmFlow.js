@@ -3,7 +3,7 @@
  *
  * Quando o lead confirma que quer se matricular num curso, em vez de já
  * disparar o formulário, o agente envia um resumo (curso, duração, mensalidade,
- * taxa de matrícula = 1 mensalidade) e pede autorização:
+ * taxa de matrícula = primeira mensalidade, mesmo valor) e pede autorização:
  *
  *   "Você autoriza a conclusão da matrícula?"
  *
@@ -179,7 +179,7 @@ export function buildMatriculaResumoReply({ cursoNome, duracao, mensalidade, pus
     '',
     linhaCurso,
     `- Mensalidades: ${mensalidade}`,
-    `- Taxa de matrícula: ${mensalidade}`,
+    `- A taxa de matrícula é a primeira mensalidade, no valor de ${mensalidade}.`,
     '',
     'Você autoriza a conclusão da matrícula?',
   ].join('\n')
