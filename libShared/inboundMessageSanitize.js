@@ -145,6 +145,17 @@ export function messageAsksLocationInfo(text) {
 }
 
 /**
+ * Lead pergunta sobre promoção de Pós-Graduação 100% gratuita ao final da graduação.
+ */
+export function messageAsksPosGratisPromocao(text) {
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (!t || t.length < 4) return false
+  return /\b(p[oó]s\s*(100%|gr[aá]tis|gratuita)|p[oó]s-gradua[cç][aã]o\s*(100%|gr[aá]tis|gratuita)|mais\s+uma\s+p[oó]s|ganhar\s+(uma\s+)?p[oó]s|promo[cç][aã]o\s+(da\s+)?p[oó]s|p[oó]s\s+gr[aá]t\w*\s+ao\s+final|passaram.*p[oó]s.*gr[aá]t|p[oó]s\s+100%\s+gr[aá]t)\b/i.test(
+    t,
+  )
+}
+
+/**
  * Lead quer contato com a Ouvidoria (reclamação formal, sugestão, elogio institucional).
  */
 export function messageAsksOuvidoria(text) {

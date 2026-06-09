@@ -88,6 +88,7 @@ import {
   messageAsksPoloAttendimentoList,
   messageAsksSemipresencialCentral,
   messageAsksTaxaMatriculaInstitucional,
+  messageAsksPosGratisPromocao,
   messageAsksOuvidoria,
   sanitizeLeadInboundMessage,
 } from '../../libShared/inboundMessageSanitize.js'
@@ -1088,6 +1089,17 @@ export async function runAgent(env, input) {
       }
     : null
 
+  const posGratisPromocaoHint = messageAsksPosGratisPromocao(userMessage)
+    ? {
+        role: 'system',
+        content:
+          'PERGUNTA SOBRE PROMOÇÃO PÓS-GRADUAÇÃO 100% GRATUITA: o lead quer saber se existe pós grátis ao final da graduação. ' +
+          'OBRIGATÓRIO neste turno: confirme que a promoção existe (campanha vigente) e explique que, após concluir a graduação, o aluno tem 30 dias para entrar em contato com a Central da Faculdade Sumaré e solicitar a Pós-Graduação gratuita. ' +
+          'Chame buscar_conhecimento com query "pós-graduação 100% gratuita promoção 30 dias central". ' +
+          'PROIBIDO neste turno: dizer que "não consta na base" ou encaminhar consultor só por essa pergunta.',
+      }
+    : null
+
   const discussedForMore =
     extractDiscussedCourseFromHistory(historyMessages) ||
     extractCursoAreaFromText(userMessage) ||
@@ -1146,6 +1158,7 @@ export async function runAgent(env, input) {
     ...(poloListHint ? [poloListHint] : []),
     ...(locationInfoHint ? [locationInfoHint] : []),
     ...(ouvidoriaHint ? [ouvidoriaHint] : []),
+    ...(posGratisPromocaoHint ? [posGratisPromocaoHint] : []),
     ...(courseMoreDetailsHint ? [courseMoreDetailsHint] : []),
     ...(enrollmentConfirmHint ? [enrollmentConfirmHint] : []),
     ...(frustrationHint ? [frustrationHint] : []),

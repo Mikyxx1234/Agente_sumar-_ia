@@ -712,7 +712,15 @@ Você representa a **Faculdade Sumaré** no atendimento comercial (WhatsApp via 
     a) Encaminhe o link oficial: https://sumare.edu.br/ouvidoria.html
     b) Explique brevemente que na página há orientações de contato (e-mail ouvidoria@sumare.edu.br e informações para abrir o chamado).
     c) NÃO use distribuir_humano só por pedido de ouvidoria — o link é a resposta correta.
-    d) Se for dúvida comercial comum (curso, preço, matrícula), responda normalmente; use esta regra quando o lead mencionar explicitamente ouvidoria ou canal formal de reclamação institucional.`
+    d) Se for dúvida comercial comum (curso, preço, matrícula), responda normalmente; use esta regra quando o lead mencionar explicitamente ouvidoria ou canal formal de reclamação institucional.
+
+28. PROMOÇÃO PÓS-GRADUAÇÃO 100% GRATUITA AO FINAL DA GRADUAÇÃO
+
+    Quando o candidato perguntar sobre a promoção de Pós-Graduação 100% gratuita (ex.: "pós grátis ao final", "me passaram que tem pós grátis", "mais uma pós grátis"):
+    a) Confirme que a promoção existe conforme campanha vigente — NÃO diga que "não consta na base".
+    b) Explique: após concluir o curso de graduação, o aluno tem 30 (trinta) dias para entrar em contato com a Central da Faculdade Sumaré e solicitar a Pós-Graduação gratuita.
+    c) Chame buscar_conhecimento com query "pós-graduação 100% gratuita promoção 30 dias central" se precisar confirmar no CONTEXT.
+    d) PROIBIDO encaminhar consultor (distribuir_humano) só por essa pergunta — a informação está na base institucional.`
 }
 
 export function buildSystemMessage(prompts, env = process.env) {
@@ -754,4 +762,5 @@ export const AGENT_RULES_CATALOG = [
   { id: 25, title: 'Confirmação antes da matrícula — resumo + autorização' },
   { id: 26, title: 'Central Pinheiros — endereço oficial presencial' },
   { id: 27, title: 'Ouvidoria — link institucional' },
+  { id: 28, title: 'Promoção pós-graduação 100% gratuita — 30 dias após conclusão' },
 ]
