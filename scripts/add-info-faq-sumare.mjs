@@ -3,6 +3,7 @@
  *   - central_presencial : endereço/Central em Pinheiros (atendimento e aulas presenciais)
  *   - reajuste_anual      : desconto mantido até o fim do curso; reajuste 8–12%/ano
  *   - rematricula_sem_taxa: Sumaré não cobra taxa de rematrícula
+ *   - ouvidoria_sumare    : link e contato da Ouvidoria institucional
  *
  * Aditivo, reversível e idempotente (metadata.topic). Embedding text-embedding-3-small (1536).
  *
@@ -48,6 +49,19 @@ const TOPICS = [
         'palavras-chave: taxa de rematrícula, paga rematrícula, custo de rematrícula, cobra para renovar matrícula, tem que pagar rematrícula a cada semestre',
         '',
         'A Sumaré não cobra valor adicional de rematrícula. Você paga somente as mensalidades.',
+      ].join('\n'),
+  },
+  {
+    topic: 'ouvidoria_sumare',
+    content: (nivel) =>
+      [
+        `assunto: ouvidoria — reclamação, sugestão, elogio institucional (${nivel})`,
+        'palavras-chave: ouvidoria, falar com a ouvidoria, contato ouvidoria, reclamação formal, sugestão institucional, elogio à faculdade',
+        '',
+        'Para contato com a Ouvidoria do Centro Universitário Sumaré, acesse:',
+        'https://sumare.edu.br/ouvidoria.html',
+        '',
+        'Na página você encontra orientações de contato, incluindo o e-mail ouvidoria@sumare.edu.br.',
       ].join('\n'),
   },
 ]

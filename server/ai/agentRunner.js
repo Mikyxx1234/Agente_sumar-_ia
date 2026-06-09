@@ -86,6 +86,7 @@ import {
   messageAsksCoursePrice,
   messageAsksPaymentInfo,
   messageAsksLocationInfo,
+  messageAsksOuvidoria,
   sanitizeLeadInboundMessage,
 } from '../../libShared/inboundMessageSanitize.js'
 import { userAsksCourseMoreDetails } from '../../libShared/courseMoreInfo.js'
@@ -1049,6 +1050,17 @@ export async function runAgent(env, input) {
       }
     : null
 
+  const ouvidoriaHint = messageAsksOuvidoria(userMessage)
+    ? {
+        role: 'system',
+        content:
+          'PEDIDO DE OUVIDORIA: o lead quer o canal institucional de ouvidoria (reclamação formal, sugestão ou elogio à instituição). ' +
+          'OBRIGATÓRIO neste turno: envie o link https://sumare.edu.br/ouvidoria.html e explique que lá estão as orientações de contato (inclui e-mail ouvidoria@sumare.edu.br). ' +
+          'Pode chamar buscar_conhecimento com query "ouvidoria Sumaré contato reclamação". ' +
+          'PROIBIDO neste turno: encaminhar consultor (distribuir_humano) em vez de informar o link da ouvidoria.',
+      }
+    : null
+
   const discussedForMore =
     extractDiscussedCourseFromHistory(historyMessages) ||
     extractCursoAreaFromText(userMessage) ||
@@ -1104,6 +1116,7 @@ export async function runAgent(env, input) {
     ...(priceQueryHint ? [priceQueryHint] : []),
     ...(paymentInfoHint ? [paymentInfoHint] : []),
     ...(locationInfoHint ? [locationInfoHint] : []),
+    ...(ouvidoriaHint ? [ouvidoriaHint] : []),
     ...(courseMoreDetailsHint ? [courseMoreDetailsHint] : []),
     ...(enrollmentConfirmHint ? [enrollmentConfirmHint] : []),
     ...(frustrationHint ? [frustrationHint] : []),

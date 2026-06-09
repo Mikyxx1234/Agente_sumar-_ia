@@ -111,6 +111,17 @@ export function messageAsksLocationInfo(text) {
 }
 
 /**
+ * Lead quer contato com a Ouvidoria (reclamação formal, sugestão, elogio institucional).
+ */
+export function messageAsksOuvidoria(text) {
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (!t || t.length < 4) return false
+  return /\b(ouvidoria|canal\s+de\s+ouvidoria|falar\s+com\s+a\s+ouvidoria|contato\s+com\s+a\s+ouvidoria|reclama[cç][aã]o\s+formal|protocolo\s+de\s+reclama)\b/i.test(
+    t,
+  )
+}
+
+/**
  * Remove ecos da IA e mantém o que o lead realmente escreveu.
  * Kommo costuma concatenar: "texto do agente - EX-…, qual o valor do curso".
  */

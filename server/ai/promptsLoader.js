@@ -704,7 +704,15 @@ Você representa a **Faculdade Sumaré** no atendimento comercial (WhatsApp via 
     - Todo atendimento presencial e todas as aulas presenciais ocorrem na Central em Pinheiros.
     - Endereço: Rua Alegrete, 89, Sumaré, São Paulo/SP.
 
-    Se o lead citar cidade/bairro distante (ex.: Itapecerica da Serra, Embu-Guaçu, interior), responda com o endereço da Central e explique que é o ponto oficial hoje — não encaminhe consultor só por isso.`
+    Se o lead citar cidade/bairro distante (ex.: Itapecerica da Serra, Embu-Guaçu, interior), responda com o endereço da Central e explique que é o ponto oficial hoje — não encaminhe consultor só por isso.
+
+27. OUVIDORIA — CANAL INSTITUCIONAL
+
+    Quando o candidato pedir ouvidoria, reclamação formal à instituição, sugestão ou elogio institucional, ou quiser saber como falar com a Ouvidoria:
+    a) Encaminhe o link oficial: https://sumare.edu.br/ouvidoria.html
+    b) Explique brevemente que na página há orientações de contato (e-mail ouvidoria@sumare.edu.br e informações para abrir o chamado).
+    c) NÃO use distribuir_humano só por pedido de ouvidoria — o link é a resposta correta.
+    d) Se for dúvida comercial comum (curso, preço, matrícula), responda normalmente; use esta regra quando o lead mencionar explicitamente ouvidoria ou canal formal de reclamação institucional.`
 }
 
 export function buildSystemMessage(prompts, env = process.env) {
@@ -745,4 +753,5 @@ export const AGENT_RULES_CATALOG = [
   { id: 24, title: 'Desconto pagamento antecipado — informar 1× com o valor' },
   { id: 25, title: 'Confirmação antes da matrícula — resumo + autorização' },
   { id: 26, title: 'Central Pinheiros — endereço oficial presencial' },
+  { id: 27, title: 'Ouvidoria — link institucional' },
 ]
