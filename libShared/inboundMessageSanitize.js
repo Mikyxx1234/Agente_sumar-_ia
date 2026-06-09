@@ -94,6 +94,23 @@ export function messageAsksPaymentInfo(text) {
 }
 
 /**
+ * Lead pergunta onde fica polo/unidade/endereço para atendimento ou aulas presenciais.
+ * Deve receber o endereço da Central em Pinheiros — nunca só "não temos polo" nem handoff.
+ */
+export function messageAsksLocationInfo(text) {
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (!t || t.length < 4) return false
+  if (
+    /\b(onde\s+fica|endere[cç]o|localiza[cç][aã]o|unidade|campus|polo\s+autorizado|polo\s+mais\s+pr[oó]ximo|mais\s+pr[oó]ximo|aulas?\s+presenciais?|atendimento\s+presencial|ir\s+presencialmente|me\s+deslocar|fica\s+em\s+qual|tem\s+polo|existe\s+polo|unidade\s+em)\b/i.test(
+      t,
+    )
+  ) {
+    return true
+  }
+  return false
+}
+
+/**
  * Remove ecos da IA e mantém o que o lead realmente escreveu.
  * Kommo costuma concatenar: "texto do agente - EX-…, qual o valor do curso".
  */

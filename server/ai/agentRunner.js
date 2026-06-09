@@ -85,6 +85,7 @@ import { messageIsInboundMediaPlaceholder } from '../../libShared/scopeHeuristic
 import {
   messageAsksCoursePrice,
   messageAsksPaymentInfo,
+  messageAsksLocationInfo,
   sanitizeLeadInboundMessage,
 } from '../../libShared/inboundMessageSanitize.js'
 import { userAsksCourseMoreDetails } from '../../libShared/courseMoreInfo.js'
@@ -1037,6 +1038,17 @@ export async function runAgent(env, input) {
       }
     : null
 
+  const locationInfoHint = messageAsksLocationInfo(userMessage)
+    ? {
+        role: 'system',
+        content:
+          'PERGUNTA SOBRE LOCALIZAÇÃO/POLO/ENDEREÇO PRESENCIAL: o lead quer saber onde ir para atendimento ou aulas presenciais (polo mais próximo, unidade, campus, cidade/bairro). ' +
+          'OBRIGATÓRIO neste turno: informe que atualmente TODO o atendimento e as aulas presenciais ocorrem na Central em Pinheiros — Rua Alegrete, 89, Sumaré, São Paulo/SP. ' +
+          'Chame buscar_conhecimento com query "central presencial Pinheiros endereço atendimento aulas Rua Alegrete". ' +
+          'PROIBIDO neste turno: dizer apenas que não há polo na região do lead; PROIBIDO encaminhar consultor (distribuir_humano) só por pergunta de endereço/localização.',
+      }
+    : null
+
   const discussedForMore =
     extractDiscussedCourseFromHistory(historyMessages) ||
     extractCursoAreaFromText(userMessage) ||
@@ -1091,6 +1103,7 @@ export async function runAgent(env, input) {
     ...(activeFlowHint ? [activeFlowHint] : []),
     ...(priceQueryHint ? [priceQueryHint] : []),
     ...(paymentInfoHint ? [paymentInfoHint] : []),
+    ...(locationInfoHint ? [locationInfoHint] : []),
     ...(courseMoreDetailsHint ? [courseMoreDetailsHint] : []),
     ...(enrollmentConfirmHint ? [enrollmentConfirmHint] : []),
     ...(frustrationHint ? [frustrationHint] : []),
