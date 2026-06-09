@@ -1237,7 +1237,9 @@ export async function runAgent(env, input) {
           })
           for (const s of ar.steps || []) orchestratorSteps.push(s)
           return {
-            ok: ar.ok !== false,
+            // replyOverride = turno tratado com texto pro lead; ar.ok só indica
+            // sucesso operacional da tool (ex. POLO_NEEDED ok=false ainda envia resposta).
+            ok: true,
             reply: ar.replyOverride,
             toolCalls: toolTrace,
             orchestratorSteps,
