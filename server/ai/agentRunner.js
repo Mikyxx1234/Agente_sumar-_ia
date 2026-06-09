@@ -91,6 +91,7 @@ import {
   messageAsksPosGratisPromocao,
   messageAsksModalidadeMecOrDistancia,
   messageAsksCourseInquiry,
+  messageAsksGradeCurricular,
   messageAsksOuvidoria,
   sanitizeLeadInboundMessage,
 } from '../../libShared/inboundMessageSanitize.js'
@@ -1115,6 +1116,22 @@ export async function runAgent(env, input) {
         }
       : null
 
+  const discussedCourse =
+    extractDiscussedCourseFromHistory(historyMessages) ||
+    extractCursoAreaFromText(userMessage) ||
+    'curso em pauta'
+  const gradeCurricularHint = messageAsksGradeCurricular(userMessage)
+    ? {
+        role: 'system',
+        content:
+          'PERGUNTA SOBRE GRADE CURRICULAR / DISCIPLINAS: o lead quer saber o que vai estudar (matérias, disciplinas, grade). ' +
+          `OBRIGATÓRIO neste turno: chame buscar_conhecimento com query incluindo curso e modalidade (ex.: "${discussedCourse} grade curricular disciplinas o que vai aprender"). ` +
+          'Use o CONTEXT da fonte grad_grade_curricular: cite disciplinas principais (5–8 exemplos) + total de disciplinas quando existir no CONTEXT. ' +
+          'Se o lead pedir a lista completa ou PDF: informe que pode enviar a grade completa em PDF e ofereça enviar — não encaminhe consultor só por isso. ' +
+          'PROIBIDO inventar disciplinas que não estejam no CONTEXT.',
+      }
+    : null
+
   const discussedForMore =
     extractDiscussedCourseFromHistory(historyMessages) ||
     extractCursoAreaFromText(userMessage) ||
@@ -1175,6 +1192,7 @@ export async function runAgent(env, input) {
     ...(ouvidoriaHint ? [ouvidoriaHint] : []),
     ...(posGratisPromocaoHint ? [posGratisPromocaoHint] : []),
     ...(courseInquiryHint ? [courseInquiryHint] : []),
+    ...(gradeCurricularHint ? [gradeCurricularHint] : []),
     ...(courseMoreDetailsHint ? [courseMoreDetailsHint] : []),
     ...(enrollmentConfirmHint ? [enrollmentConfirmHint] : []),
     ...(frustrationHint ? [frustrationHint] : []),

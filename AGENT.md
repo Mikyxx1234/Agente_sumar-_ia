@@ -1577,3 +1577,34 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 - **Impacto**
   - Não há mais gap: todos os cursos Semipresenciais resolvem para o código
     `_SEMI` + turno=SEMIPRESENCIAL e geram valor correto.
+
+### 09/06 - Grade curricular de todos os cursos no RAG (fallback grad_info)
+
+- **Decisão**
+  - Ingestão de **62 cursos/modalidades** com disciplinas em `grad_info`
+    (`metadata.kind = grade_curricular`, IDs 70001–78999) via
+    `scripts/register-grade-curricular-rag.mjs`.
+  - Enquanto `grad_grade_curricular` + RPC `match_grad_grade_curricular` não
+    existirem no Supabase, o agente busca via `match_grad_info`; o
+    `knowledgeSearch.js` ignora 404 da RPC dedicada sem quebrar a busca.
+  - Regra **30** em `agent_rules`: instrui o agente a usar CONTEXT de grade,
+    citar disciplinas reais e oferecer PDF quando pedirem lista completa.
+  - Formatação RAG: `knowledgeRowFormat.js` expande `metadata.disciplinas[]`
+    em lista numerada quando `kind === grade_curricular`.
+
+- **Contexto**
+  - Scrape oficial (`data/grade-curricular-sumare.json`) cobre 68 entradas;
+    6 sem grade no site (presencial Admin/Biomedicina/Contábeis/Pedagogia;
+    semi Gestão Ambiental/Hospitalar).
+  - `ensureGradGradeCurricularTable.mjs` falhou por falta de
+    `SUPABASE_DB_PASSWORD` / `SUPABASE_ACCESS_TOKEN`.
+
+- **Alternativas descartadas**
+  - IDs 10001+ em `grad_info`: colidiam com linhas existentes do catálogo.
+  - Bloquear ingestão até tabela dedicada: atrasaria o agente sem benefício
+    imediato — `grad_info` já tem RPC e embedding.
+
+- **Impacto**
+  - Agente responde grade/disciplinas de qualquer curso com dados no site.
+  - Próximo passo opcional: rodar `scripts/sql/grad_grade_curricular.sql` no
+    SQL Editor e re-ingerir na tabela dedicada (`npm run register:grade-curricular-rag`).

@@ -19,7 +19,13 @@
 import { resolveModel } from './modelRegistry.js'
 import { normalizeModalidadeForSumare, normalizeModalidadeInText } from '../../libShared/knowledgeRowFormat.js'
 
-export const ALLOWED_TABLES = new Set(['grad_info', 'grad_preco', 'pos_info', 'pos_preco'])
+export const ALLOWED_TABLES = new Set([
+  'grad_info',
+  'grad_preco',
+  'grad_grade_curricular',
+  'pos_info',
+  'pos_preco',
+])
 
 const EMBED_BATCH = 50
 const INSERT_BATCH = 200

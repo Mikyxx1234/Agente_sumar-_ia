@@ -22,7 +22,11 @@
     "test:form-notes-age-cap": "node scripts/test-form-notes-age-cap.mjs",
     "update:precos-rag": "node --env-file=.env scripts/update-precos-sumare-rag.mjs",
     "audit:precos": "node --env-file=.env scripts/audit-precos-sumare.mjs",
-    "build:curso-perfil-grad": "node --env-file=.env scripts/build-curso-perfil-grad.mjs"
+    "build:curso-perfil-grad": "node --env-file=.env scripts/build-curso-perfil-grad.mjs",
+    "scrape:grade-curricular": "node scripts/scrape-grade-curricular-sumare.mjs",
+    "db:ensure-grade-curricular": "node --env-file=.env scripts/ensureGradGradeCurricularTable.mjs",
+    "register:grade-curricular-rag": "node --env-file=.env scripts/register-grade-curricular-rag.mjs",
+    "register:grade-curricular-rule30": "node --env-file=.env scripts/register-grade-curricular-rule30.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.103.3",
@@ -32,6 +36,7 @@
     "lucide-react": "^0.510.0",
     "multer": "^2.1.1",
     "pdf-parse": "^1.1.4",
+    "pdfkit": "^0.19.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

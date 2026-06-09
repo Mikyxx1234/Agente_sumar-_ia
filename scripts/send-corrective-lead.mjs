@@ -7,6 +7,8 @@
  *   node scripts/send-corrective-lead.mjs --topic pos-gratis --lead-id 23861891,23589423 --apply
  */
 import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { getLeadSummary } from '../server/kommoClient.js'
 import { sendMessageWithNote } from '../server/whatsappSender.js'
 import { generateExecutionId } from '../server/ai/executionTelemetry.js'
@@ -26,6 +28,10 @@ const topic = String(args.find((a, i) => args[i - 1] === '--topic') || 'vivian')
 const dryRun = !args.includes('--apply')
 const delayMs = Number(args.find((a, i) => args[i - 1] === '--delay-ms') || 2500)
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const GRADE_JSON = path.join(__dirname, '../data/grade-curricular-sumare.json')
+
+const modalidadeArg = String(args.find((a, i) => args[i - 1] === '--modalidade') || 'semipresencial').toLowerCase()
 const leadIdArg = args.find((a, i) => args[i - 1] === '--lead-id') || ''
 const leadIds = leadIdArg
   .split(',')
@@ -34,7 +40,7 @@ const leadIds = leadIdArg
 
 if (!leadIds.length) {
   console.error(
-    'Uso: node scripts/send-corrective-lead.mjs --lead-id <id>[,id2,...] [--topic vivian|pos-gratis] [--apply] [--delay-ms 2500]',
+    'Uso: node scripts/send-corrective-lead.mjs --lead-id <id>[,id2,...] [--topic vivian|pos-gratis|pedagogia-curso|pedagogia-grade] [--modalidade ead|semipresencial] [--apply] [--delay-ms 2500]',
   )
   process.exit(1)
 }
@@ -45,7 +51,39 @@ function displayFirstName(name, leadId) {
   return raw.split(/\s+/)[0]
 }
 
+function loadPedagogiaGrade(modalidade = 'semipresencial') {
+  const modLabel =
+    modalidade === 'ead' ? 'EAD' : modalidade.startsWith('semi') ? 'Semipresencial' : 'Presencial'
+  const rows = JSON.parse(fs.readFileSync(GRADE_JSON, 'utf8'))
+  const row = rows.find(
+    (r) => r.id === 'pedagogia' && String(r.modalidade || '').toLowerCase() === modLabel.toLowerCase(),
+  )
+  if (!row?.pages?.length) throw new Error(`Grade Pedagogia ${modLabel} não encontrada em ${GRADE_JSON}`)
+  const disc = row.pages.flatMap((p) => p.disciplinas || []).filter(Boolean)
+  return { modLabel, disc, intro: row.intro || '', codigo: row.codigo || '' }
+}
+
+function buildPedagogiaGradeMessage(firstName, modalidade = 'semipresencial') {
+  const { modLabel, disc, codigo } = loadPedagogiaGrade(modalidade)
+  const investimento = modLabel === 'Semipresencial' ? 'R$ 117,00/mês' : modLabel === 'EAD' ? 'R$ 97,00/mês' : 'consulte valores'
+  const lista = disc.map((d, i) => `${i + 1}. ${d}`).join('\n')
+  return (
+    `Oi, ${firstName}! Conforme solicitado, segue a *grade curricular* de *Pedagogia* (${modLabel}):\n\n` +
+    `*Pedagogia* — Licenciatura · ${modLabel}\n` +
+    `*Duração:* 8 semestres\n` +
+    `*Investimento:* a partir de ${investimento}\n` +
+    `*Total de disciplinas:* ${disc.length}\n\n` +
+    `*O que você vai aprender:*\n${lista}\n\n` +
+    `Fonte oficial: sumare.edu.br · Código: ${codigo || 'PED_' + modLabel.slice(0, 4).toUpperCase()}\n\n` +
+    `Em breve também enviaremos essa grade em PDF. Posso te ajudar com mais alguma dúvida ou seguir com a inscrição?`
+  )
+}
+
 function buildMessage(topicName, firstName) {
+  if (topicName === 'pedagogia-grade') {
+    return buildPedagogiaGradeMessage(firstName, modalidadeArg)
+  }
+
   if (topicName === 'pos-gratis') {
     return (
       `Oi, ${firstName}! Peço desculpas pela resposta anterior sobre a promoção de Pós-Graduação.\n\n` +

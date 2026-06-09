@@ -28,6 +28,13 @@ const INFO_EXTRA = [
   'diploma', 'calendário', 'calendario', 'portal', 'secretaria', 'disciplina',
 ]
 
+const GRADE = [
+  'grade curricular', 'grade do curso', 'matriz curricular', 'ementa',
+  'o que vou aprender', 'o que você vai aprender', 'quais materias', 'quais matérias',
+  'quais disciplinas', 'disciplinas do curso', 'lista de materias', 'lista de matérias',
+  'conteudo do curso', 'conteúdo do curso', 'materias do curso', 'matérias do curso',
+]
+
 function norm(s) {
   return String(s || '')
     .toLowerCase()
@@ -42,7 +49,7 @@ function hasAny(hay, needles) {
 
 /**
  * @param {string} question
- * @returns {{ level: 'pos' | 'grad' | 'ambiguous', intent: 'preco' | 'info' | 'mista' }}
+ * @returns {{ level: 'pos' | 'grad' | 'ambiguous', intent: 'preco' | 'info' | 'mista' | 'grade' }}
  */
 export function classifyKnowledgeQuery(question) {
   const q = String(question || '')
@@ -52,6 +59,7 @@ export function classifyKnowledgeQuery(question) {
   const hasPos = hasAny(q, POS) || /\bpos\b/i.test(q)
   const hasGrad = hasAny(q, GRAD)
   const hasInfoExtra = hasAny(q, INFO_EXTRA)
+  const hasGrade = hasAny(q, GRADE)
 
   let level = 'ambiguous'
   if (hasPos && !hasGrad) level = 'pos'
@@ -59,7 +67,9 @@ export function classifyKnowledgeQuery(question) {
   else if (hasPos && hasGrad) level = 'ambiguous'
 
   let intent = 'info'
-  if (hasPreco && (hasInfoExtra || hasPos || hasGrad)) intent = 'mista'
+  if (hasGrade && !hasPreco) intent = 'grade'
+  else if (hasGrade && hasPreco) intent = 'mista'
+  else if (hasPreco && (hasInfoExtra || hasPos || hasGrad)) intent = 'mista'
   else if (hasPreco) intent = 'preco'
   else if (hasInfoExtra || n.length > 0) intent = 'info'
 
@@ -69,19 +79,25 @@ export function classifyKnowledgeQuery(question) {
 /**
  * Quais RPCs chamar (ordem de execução).
  * @param {{ level: string, intent: string }} c
- * @param {{ levelHint?: 'pos'|'grad'|null, intentHint?: 'preco'|'info'|'mista'|null }} hints
- * @returns {Array<{ rpc: string, source: 'pos_info'|'pos_preco'|'grad_info'|'grad_preco' }>}
+ * @param {{ levelHint?: 'pos'|'grad'|null, intentHint?: 'preco'|'info'|'mista'|'grade'|null }} hints
+ * @returns {Array<{ rpc: string, source: 'pos_info'|'pos_preco'|'grad_info'|'grad_preco'|'grad_grade_curricular' }>}
  */
 export function planKnowledgeRpcs(c, hints = {}) {
   let { level, intent } = c
   if (hints.levelHint === 'pos' || hints.levelHint === 'grad') {
     level = hints.levelHint
   }
-  if (hints.intentHint === 'preco' || hints.intentHint === 'info' || hints.intentHint === 'mista') {
+  if (
+    hints.intentHint === 'preco' ||
+    hints.intentHint === 'info' ||
+    hints.intentHint === 'mista' ||
+    hints.intentHint === 'grade'
+  ) {
     intent = hints.intentHint
   }
 
   const rpc = (name, source) => ({ rpc: name, source })
+  const gradeRpc = rpc('match_grad_grade_curricular', 'grad_grade_curricular')
 
   if (level === 'ambiguous') {
     return [
@@ -89,6 +105,7 @@ export function planKnowledgeRpcs(c, hints = {}) {
       rpc('match_pos_preco', 'pos_preco'),
       rpc('match_grad_info', 'grad_info'),
       rpc('match_grad_preco', 'grad_preco'),
+      gradeRpc,
     ]
   }
 
@@ -99,7 +116,15 @@ export function planKnowledgeRpcs(c, hints = {}) {
   }
 
   // grad
+  if (intent === 'grade') return [gradeRpc, rpc('match_grad_info', 'grad_info')]
   if (intent === 'preco') return [rpc('match_grad_preco', 'grad_preco')]
   if (intent === 'info') return [rpc('match_grad_info', 'grad_info')]
+  if (intent === 'mista') {
+    return [
+      gradeRpc,
+      rpc('match_grad_info', 'grad_info'),
+      rpc('match_grad_preco', 'grad_preco'),
+    ]
+  }
   return [rpc('match_grad_info', 'grad_info'), rpc('match_grad_preco', 'grad_preco')]
 }

@@ -151,13 +151,42 @@ export function summarizeMetadataForLLM(metadata) {
 }
 
 /**
- * @param {'pos_info'|'pos_preco'|'grad_info'|'grad_preco'} source
+ * @param {'pos_info'|'pos_preco'|'grad_info'|'grad_preco'|'grad_grade_curricular'} source
  * @param {{ content?: string, metadata?: object }} d
  */
 export function enrichRowContentForRag(source, d) {
   const base = normalizeModalidadeInText(d?.content || '')
 
+  if (source === 'grad_grade_curricular') {
+    const meta = d?.metadata && typeof d.metadata === 'object' ? d.metadata : {}
+    const partes = [base]
+    if (meta.curso_nome && meta.modalidade) {
+      partes.push(
+        `[GRADE CURRICULAR — ${meta.curso_nome} (${meta.modalidade}) | ${meta.total_disciplinas || 0} disciplinas | codigo: ${meta.codigo_api || 'n/a'}]`,
+      )
+    }
+    if (Array.isArray(meta.disciplinas) && meta.disciplinas.length) {
+      const lista = meta.disciplinas.map((disc, i) => `${i + 1}. ${disc}`).join('\n')
+      partes.push(`LISTA DE DISCIPLINAS:\n${lista}`)
+    }
+    if (meta.url_pagina) partes.push(`[FONTE OFICIAL: ${meta.url_pagina}]`)
+    return partes.join('\n\n')
+  }
+
   if (source === 'grad_info' || source === 'pos_info') {
+    const meta = d?.metadata && typeof d.metadata === 'object' ? d.metadata : {}
+    if (source === 'grad_info' && meta.kind === 'grade_curricular') {
+      const partes = [base]
+      partes.push(
+        `[GRADE CURRICULAR — ${meta.curso_nome || 'curso'} (${meta.modalidade || ''}) | ${meta.total_disciplinas || 0} disciplinas]`,
+      )
+      if (Array.isArray(meta.disciplinas) && meta.disciplinas.length) {
+        partes.push(`LISTA DE DISCIPLINAS:\n${meta.disciplinas.map((disc, i) => `${i + 1}. ${disc}`).join('\n')}`)
+      }
+      if (meta.url_pagina) partes.push(`[FONTE OFICIAL: ${meta.url_pagina}]`)
+      return partes.join('\n\n')
+    }
+
     const partes = [base]
     const courseLabel = extractCourseNameFromGradContent(base) || base
     const perfilBlock = formatPerfilBlockForRag(getCursoPerfil(courseLabel))

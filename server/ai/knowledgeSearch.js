@@ -1,7 +1,7 @@
 /**
  * RAG unificado — base vetorial Faculdade Sumaré (pgvector via RPC).
  *
- * RPCs: match_pos_info, match_pos_preco, match_grad_info, match_grad_preco
+ * RPCs: match_pos_info, match_pos_preco, match_grad_info, match_grad_preco, match_grad_grade_curricular
  */
 
 import { resolveModel } from './modelRegistry.js'
@@ -191,7 +191,12 @@ export async function searchKnowledgeBase(env, ctx, question, opts = {}) {
         merged.push(normalizeRow(source, raw))
       }
     } catch (e) {
-      console.error(`[knowledgeSearch] RPC ${rpc} falhou:`, e.message)
+      const msg = String(e?.message || e)
+      if (rpc === 'match_grad_grade_curricular' && /\b404\b/.test(msg)) {
+        console.warn(`[knowledgeSearch] RPC ${rpc} indisponível (tabela dedicada ausente) — usando grad_info`)
+        continue
+      }
+      console.error(`[knowledgeSearch] RPC ${rpc} falhou:`, msg)
       throw e
     }
   }

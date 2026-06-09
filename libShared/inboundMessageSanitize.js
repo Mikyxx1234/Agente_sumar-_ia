@@ -183,6 +183,17 @@ export function messageAsksCourseInquiry(text) {
 }
 
 /**
+ * Lead pergunta grade curricular / disciplinas / o que vai aprender.
+ */
+export function messageAsksGradeCurricular(text) {
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (!t || t.length < 6) return false
+  return /\b(grade\s+curricular|grade\s+do\s+curso|matriz\s+curricular|ementa|o\s+que\s+vou\s+aprender|o\s+que\s+voce\s+vai\s+aprender|quais\s+(materias|matérias|disciplinas)|disciplinas\s+do\s+curso|lista\s+de\s+(materias|matérias|disciplinas)|conteudo\s+do\s+curso|conteúdo\s+do\s+curso)\b/i.test(
+    t,
+  )
+}
+
+/**
  * Lead pergunta sobre promoção de Pós-Graduação 100% gratuita ao final da graduação.
  */
 export function messageAsksPosGratisPromocao(text) {
