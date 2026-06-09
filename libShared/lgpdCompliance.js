@@ -6,6 +6,8 @@
  * quando legítimo e disponível para o próprio titular.
  */
 
+import { SUMARE_POLOS_EAD } from './sumarePoloCatalog.js'
+
 export const DEFAULT_LGPD_SENSITIVE_REFUSAL =
   'Por segurança e em conformidade com a LGPD, não posso compartilhar dados pessoais ou cadastrais de candidatos ou alunos por aqui. ' +
   'Posso ajudar com informações da Faculdade Sumaré — cursos EAD, valores, duração, matrícula e inscrição. ' +
@@ -27,6 +29,23 @@ const BANK_LEAK_RX =
 const THIRD_PARTY_DATA_REQUEST_RX =
   /\b(cpf|e-?mail|email|telefone|celular|whatsapp|endereço|endereco|dados|informações|informacoes|cadastro|matrícula|matricula|inscrição|inscricao|nota|boletim|histórico|historico)\b[\s\S]{0,50}\b(de|do|da|d[oa]s)\b[\s\S]{0,40}\b(outr[oa]|terceir[oa]|alun[oa]|candidat[oa]|pessoa|fulano|cliente|lead|colega|amig[oa]|namorad[oa]|espos[oa]|marido|esposa|filh[oa]|mãe|mae|pai)\b/i
 const RA_ALLOWED_CONTEXT_RX = /\b(ra|registro acad[eê]mico|n[úu]mero do aluno|n[úu]mero de matr[ií]cula acad[eê]mica)\b/i
+
+const INSTITUTIONAL_LOCATION_RX =
+  /\b(polos?\s+(ead|de\s+atendimento|abaixo|listados|cadastrados)|por este (n[uú]mero|canal|whatsapp|contato)|faculdade\s+sumar[eé]|central\s+(em\s+)?pinheiros|rua\s+alegrete)\b/i
+
+/** Endereços dos polos EAD e da Central são informação institucional — não bloquear no guard. */
+export function replyContainsInstitutionalLocationInfo(text) {
+  const raw = String(text || '')
+  if (!raw || raw.length < 8) return false
+  if (INSTITUTIONAL_LOCATION_RX.test(raw)) return true
+  const low = raw.toLowerCase()
+  for (const polo of SUMARE_POLOS_EAD) {
+    if (low.includes(polo.nome.toLowerCase())) return true
+    const end = String(polo.endereco || '').trim()
+    if (end.length >= 8 && low.includes(end.toLowerCase())) return true
+  }
+  return false
+}
 
 /**
  * Lead pede dados sensíveis de terceiros (não do próprio atendimento comercial).
@@ -69,7 +88,7 @@ export function replyLeaksSensitiveCandidateData(reply, { userMessage = '' } = {
   if (PHONE_WITH_LABEL_RX.test(text)) {
     return { leak: true, code: 'lgpd_phone_leak' }
   }
-  if (ADDRESS_LEAK_RX.test(text)) {
+  if (ADDRESS_LEAK_RX.test(text) && !replyContainsInstitutionalLocationInfo(text)) {
     return { leak: true, code: 'lgpd_address_leak' }
   }
   if (BANK_LEAK_RX.test(text)) {
@@ -106,8 +125,9 @@ export function buildLgpdSystemHint(userMessage) {
     )
   }
   return (
-    'LGPD — PROTEÇÃO DE DADOS: você só divulga informações institucionais da Faculdade Sumaré (cursos, valores, duração, processo de matrícula, EAD). ' +
-    'PROIBIDO informar dados pessoais/cadastrais de candidatos ou alunos (CPF, RG, e-mail, telefone, endereço, pagamento, notas, situação de outro titular). ' +
+    'LGPD — PROTEÇÃO DE DADOS: você só divulga informações institucionais da Faculdade Sumaré (cursos, valores, duração, taxa de matrícula, polos EAD com endereços, Central Pinheiros). ' +
+    'PERMITIDO informar endereços dos polos de atendimento e da Central — são dados institucionais públicos. ' +
+    'PROIBIDO informar dados pessoais/cadastrais de candidatos ou alunos (CPF, RG, e-mail, telefone, endereço residencial, pagamento, notas, situação de outro titular). ' +
     'Exceção: RA do próprio aluno quando ele pedir explicitamente e o dado estiver confirmado.'
   )
 }

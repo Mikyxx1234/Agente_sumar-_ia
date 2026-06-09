@@ -85,10 +85,13 @@ import { messageIsInboundMediaPlaceholder } from '../../libShared/scopeHeuristic
 import {
   messageAsksCoursePrice,
   messageAsksPaymentInfo,
-  messageAsksLocationInfo,
+  messageAsksPoloAttendimentoList,
+  messageAsksSemipresencialCentral,
+  messageAsksTaxaMatriculaInstitucional,
   messageAsksOuvidoria,
   sanitizeLeadInboundMessage,
 } from '../../libShared/inboundMessageSanitize.js'
+import { formatPoloListaNumerada } from '../../libShared/sumarePoloCatalog.js'
 import { userAsksCourseMoreDetails } from '../../libShared/courseMoreInfo.js'
 import { isAtendimentoIaPaused } from '../dadosClienteStore.js'
 import { validateReplyBeforeSend } from '../replyGuard.js'
@@ -1033,17 +1036,41 @@ export async function runAgent(env, input) {
     ? {
         role: 'system',
         content:
-          'PERGUNTA SOBRE FORMA/DATAS DE PAGAMENTO: o lead quer entender quando/como pagar a mensalidade (dias, vencimento, desconto por pagamento antecipado). ' +
-          'OBRIGATÓRIO neste turno: chame buscar_conhecimento com query sobre pagamento da mensalidade (ex.: "pagamento da mensalidade quais dias pagar dia de vencimento desconto por pagamento antecipado") e responda com o PLANO DE PAGAMENTO da base (dias para pagar e descontos por pagamento antecipado). ' +
-          'PROIBIDO neste turno: encaminhar para consultor/humano apenas porque o lead perguntou sobre datas/forma de pagamento, ou dizer que só um consultor pode confirmar datas. Essa informação ESTÁ na base — entregue-a.',
+          'PERGUNTA SOBRE FORMA/DATAS DE PAGAMENTO: o lead quer entender quando/como pagar a mensalidade (dias, vencimento, desconto por pagamento antecipado, pagamento no prazo). ' +
+          'OBRIGATÓRIO neste turno: chame buscar_conhecimento com query sobre pagamento da mensalidade (ex.: "pagamento da mensalidade quais dias pagar dia de vencimento desconto por pagamento antecipado") e responda com o PLANO DE PAGAMENTO da base. ' +
+          'Se o lead perguntar se o desconto vale só na 1ª mensalidade ou em todas: explique que pagando no 1º dia de cada mês o desconto máximo (70%) é aplicado na mensalidade daquele mês — ou seja, mantendo o pagamento no dia 1, o benefício se repete todo mês. ' +
+          'PROIBIDO neste turno: encaminhar para consultor/humano apenas porque o lead perguntou sobre datas/forma de pagamento, ou recusa LGPD — essa informação É institucional e está na base.',
       }
     : null
 
-  const locationInfoHint = messageAsksLocationInfo(userMessage)
+  const taxaMatriculaHint = messageAsksTaxaMatriculaInstitucional(userMessage)
     ? {
         role: 'system',
         content:
-          'PERGUNTA SOBRE LOCALIZAÇÃO/POLO/ENDEREÇO PRESENCIAL: o lead quer saber onde ir para atendimento ou aulas presenciais (polo mais próximo, unidade, campus, cidade/bairro). ' +
+          'PERGUNTA SOBRE TAXA DE MATRÍCULA (institucional): o lead quer saber se há matrícula e quanto custa. ' +
+          'OBRIGATÓRIO neste turno: informe que a taxa de matrícula É a primeira mensalidade (mesmo valor promocional já informado no curso em pauta — ex.: R$ 97 ou conforme CONTEXT). ' +
+          'Chame buscar_precos ou buscar_conhecimento se precisar confirmar o valor. ' +
+          'PROIBIDO neste turno: recusa LGPD ou encaminhar consultor — pergunta sobre taxa institucional, não dado cadastral de terceiros.',
+      }
+    : null
+
+  const poloListHint = messageAsksPoloAttendimentoList(userMessage)
+    ? {
+        role: 'system',
+        content:
+          'PERGUNTA SOBRE POLOS DE ATENDIMENTO EAD: o lead quer saber quais polos/unidades atendemos ou qual é o mais próximo. ' +
+          'OBRIGATÓRIO neste turno: responda "Por este número de contato atendemos os seguintes polos:" e liste os 5 polos EAD com endereços:\n' +
+          `${formatPoloListaNumerada()}\n` +
+          'Todos os cursos são EAD; o polo é o ponto de apoio presencial. Não encaminhe consultor só por esta pergunta. ' +
+          'PROIBIDO responder com recusa LGPD — endereços dos polos institucionais são informação pública permitida.',
+      }
+    : null
+
+  const locationInfoHint = messageAsksSemipresencialCentral(userMessage)
+    ? {
+        role: 'system',
+        content:
+          'PERGUNTA SOBRE LOCALIZAÇÃO/ENDEREÇO PRESENCIAL (semipresencial): o lead quer saber onde ir para aulas presenciais ou atendimento na Central. ' +
           'OBRIGATÓRIO neste turno: informe que atualmente TODO o atendimento e as aulas presenciais ocorrem na Central em Pinheiros — Rua Alegrete, 89, Sumaré, São Paulo/SP. ' +
           'Chame buscar_conhecimento com query "central presencial Pinheiros endereço atendimento aulas Rua Alegrete". ' +
           'PROIBIDO neste turno: dizer apenas que não há polo na região do lead; PROIBIDO encaminhar consultor (distribuir_humano) só por pergunta de endereço/localização.',
@@ -1115,6 +1142,8 @@ export async function runAgent(env, input) {
     ...(activeFlowHint ? [activeFlowHint] : []),
     ...(priceQueryHint ? [priceQueryHint] : []),
     ...(paymentInfoHint ? [paymentInfoHint] : []),
+    ...(taxaMatriculaHint ? [taxaMatriculaHint] : []),
+    ...(poloListHint ? [poloListHint] : []),
     ...(locationInfoHint ? [locationInfoHint] : []),
     ...(ouvidoriaHint ? [ouvidoriaHint] : []),
     ...(courseMoreDetailsHint ? [courseMoreDetailsHint] : []),

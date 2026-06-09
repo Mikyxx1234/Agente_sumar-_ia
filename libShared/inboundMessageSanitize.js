@@ -84,7 +84,51 @@ export function messageAsksPaymentInfo(text) {
   const t = normalizeMessageForScope(text).toLowerCase()
   if (!t || t.length < 4) return false
   if (
-    /\b(datas?\s+(de\s+|para\s+|pra\s+)?pagamento|forma\s+de\s+pagamento|como\s+(eu\s+)?pago|como\s+pagar|quando\s+(eu\s+)?(pago|pagar|vence)|quais?\s+dias?\s+(posso\s+)?pagar|dias?\s+(de\s+|para\s+|pra\s+)?(pagar|pagamento|vencimento)|vencimento|venc\w*|pagamento\s+antecipado|pagar\s+antecipad|desconto\s+(por\s+|no\s+)?pagamento)\b/i.test(
+    /\b(datas?\s+(de\s+|para\s+|pra\s+)?pagamento|forma\s+de\s+pagamento|como\s+(eu\s+)?pago|como\s+pagar|quando\s+(eu\s+)?(pago|pagar|vence)|quais?\s+dias?\s+(posso\s+)?pagar|dias?\s+(de\s+|para\s+|pra\s+)?(pagar|pagamento|vencimento)|vencimento|venc\w*|pagamento\s+antecipado|pagar\s+antecipad|desconto\s+(por\s+|no\s+)?pagamento|pag(ar|amento)\s+no\s+prazo|pagar\s+no\s+prazo|no\s+primeiro\s+dia|1\s*[°ºoª]?\s*dia\s+do\s+m[eê]s|todas\s+se\s+eu\s+pag)\b/i.test(
+      t,
+    )
+  ) {
+    return true
+  }
+  return false
+}
+
+/**
+ * Lead pergunta sobre taxa de matrícula institucional (não dado cadastral de terceiros).
+ */
+export function messageAsksTaxaMatriculaInstitucional(text) {
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (!t || t.length < 4) return false
+  return /\b(tem\s+matr[ií]cula|taxa\s+de\s+matr[ií]cula|valor\s+da\s+matr[ií]cula|custo\s+da\s+matr[ií]cula|quanto\s+[ée]\s+a\s+matr[ií]cula|tem\s+taxa\s+de\s+matr[ií]cula|paga\s+matr[ií]cula)\b/i.test(
+    t,
+  )
+}
+
+/**
+ * Lead pergunta quais polos EAD atendemos / polo mais próximo — listar os 5 polos cadastrados neste canal.
+ */
+export function messageAsksPoloAttendimentoList(text) {
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (!t || t.length < 4) return false
+  if (
+    /\b(polo\s+mais\s+pr[oó]ximo|mais\s+pr[oó]ximo.{0,40}(polo|casa)|qual\s+p[oó]lo|tem\s+p[oó]lo|existe\s+p[oó]lo|ir\s+(a[o]?|no)\s+p[oó]lo|atendimento\s+no\s+p[oó]lo|polos?\s+de\s+atendimento|unidades?\s+de\s+atendimento|precisar\s+ir\s+algum\s+p[oó]lo)\b/i.test(
+      t,
+    )
+  ) {
+    return true
+  }
+  return false
+}
+
+/**
+ * Lead pergunta sobre aulas presenciais / Central semipresencial (não confundir com lista de polos EAD).
+ */
+export function messageAsksSemipresencialCentral(text) {
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (!t || t.length < 4) return false
+  if (messageAsksPoloAttendimentoList(text)) return false
+  if (
+    /\b(aulas?\s+presenciais?|atendimento\s+presencial|central\s+(em\s+)?pinheiros|semipresencial|onde\s+fica.{0,40}(aula|presencial)|rua\s+alegrete|ir\s+presencialmente|me\s+deslocar)\b/i.test(
       t,
     )
   ) {
@@ -95,19 +139,9 @@ export function messageAsksPaymentInfo(text) {
 
 /**
  * Lead pergunta onde fica polo/unidade/endereço para atendimento ou aulas presenciais.
- * Deve receber o endereço da Central em Pinheiros — nunca só "não temos polo" nem handoff.
  */
 export function messageAsksLocationInfo(text) {
-  const t = normalizeMessageForScope(text).toLowerCase()
-  if (!t || t.length < 4) return false
-  if (
-    /\b(onde\s+fica|endere[cç]o|localiza[cç][aã]o|unidade|campus|polo\s+autorizado|polo\s+mais\s+pr[oó]ximo|mais\s+pr[oó]ximo|aulas?\s+presenciais?|atendimento\s+presencial|ir\s+presencialmente|me\s+deslocar|fica\s+em\s+qual|tem\s+polo|existe\s+polo|unidade\s+em)\b/i.test(
-      t,
-    )
-  ) {
-    return true
-  }
-  return false
+  return messageAsksPoloAttendimentoList(text) || messageAsksSemipresencialCentral(text)
 }
 
 /**
