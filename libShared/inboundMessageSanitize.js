@@ -3,6 +3,7 @@
  */
 
 import { normalizeMessageForScope } from './scopeHeuristics.js'
+import { extractCursoAreaFromText } from './cursoConfirmation.js'
 
 export const AGENT_OUTBOUND_SUFFIX = /\s-\sEX-\d{6}-\d{4}-\d{3}\s*$/i
 
@@ -142,6 +143,43 @@ export function messageAsksSemipresencialCentral(text) {
  */
 export function messageAsksLocationInfo(text) {
   return messageAsksPoloAttendimentoList(text) || messageAsksSemipresencialCentral(text)
+}
+
+/**
+ * Lead pergunta sobre modalidade (EAD/online/distância), MEC ou preferência por estudo a distância.
+ */
+export function messageAsksModalidadeMecOrDistancia(text) {
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (!t || t.length < 4) return false
+  if (/\b(mec)\b/i.test(t) && /\b(online|100\s*%|dist[aâ]ncia|presencial|ead)\b/i.test(t)) return true
+  if (
+    /\b(100\s*%\s*online|a\s+dist[aâ]ncia|dist[aâ]ncia|semipresencial|modalidade|prefiro\s+(a\s+)?dist[aâ]ncia|curso\s+online)\b/i.test(
+      t,
+    )
+  ) {
+    return true
+  }
+  return false
+}
+
+/**
+ * Lead pede informações gerais sobre um curso (valores, como fazer/matricular) — não é pedido de humano.
+ */
+export function messageAsksCourseInquiry(text) {
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (!t || t.length < 8) return false
+  const hasCurso = Boolean(extractCursoAreaFromText(text)) || /\b(curso\s+de|curso\s+online)\b/i.test(t)
+  if (!hasCurso) {
+    if (!/\b(informa[cç][oõ]es?\s+sobre\s+o\s+curso|valores?\s+e\s+como)\b/i.test(t)) return false
+  }
+  if (
+    /\b(informa[cç]|valor|valores|pre[cç]o|mensalidade|como\s+fazer|matr[ií]cula|inscri|quero\s+saber|d[uú]vida)\b/i.test(
+      t,
+    )
+  ) {
+    return true
+  }
+  return false
 }
 
 /**

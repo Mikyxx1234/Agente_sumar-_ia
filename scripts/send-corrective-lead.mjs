@@ -55,6 +55,19 @@ function buildMessage(topicName, firstName) {
     )
   }
 
+  if (topicName === 'pedagogia-curso') {
+    return (
+      `Oi, ${firstName}! Peço desculpas pelo encaminhamento anterior — vou te passar as informações sobre *Pedagogia*:\n\n` +
+      `*Curso:* Graduação em Pedagogia (Licenciatura)\n` +
+      `*Duração:* 8 semestres\n` +
+      `*Modalidade:* *Semipresencial* — a maior parte do estudo é a distância, com encontros presenciais agendados na nossa *Central em Pinheiros* (Rua Alegrete, 89, Sumaré, São Paulo/SP).\n\n` +
+      `Sobre sua dúvida do MEC e 100% online: a Pedagogia na Sumaré é ofertada em *Semipresencial*, não em EAD 100% online, conforme a oferta oficial do curso e as exigências da formação em Licenciatura.\n\n` +
+      `*Valores:* mensalidade promocional de *R$ 117,00* (preço cheio R$ 390,00). A taxa de matrícula é a *primeira mensalidade*, no mesmo valor.\n\n` +
+      `*Como fazer a matrícula:* quando você quiser seguir, envio o *formulário de inscrição* aqui no WhatsApp — é rápido e você preenche os dados básicos por aqui mesmo.\n\n` +
+      `Quer que eu te envie o formulário para começar a inscrição em Pedagogia?`
+    )
+  }
+
   const poloList = formatPoloListaNumerada()
   return (
     `Oi, ${firstName}! Peço desculpas pela resposta anterior — vou esclarecer suas dúvidas:\n\n` +
