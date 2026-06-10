@@ -88,6 +88,70 @@ export function extractLeadTextAfterAgentEcho(text) {
   return raw
 }
 
+/**
+ * Detector POR CLÁUSULA de eco do agente. Diferente de `isLikelyAgentEcho`,
+ * NÃO usa o termo ambíguo "grade curricular em pdf" (que também aparece em
+ * pedido legítimo do lead, ex.: "me manda a grade curricular em pdf").
+ * Casa apenas frases iniciadas/escritas pelo próprio agente.
+ */
+function clauseIsAgentEcho(clause) {
+  const raw = String(clause || '').trim()
+  if (!raw) return false
+  if (AGENT_OUTBOUND_SUFFIX.test(raw)) return true
+  if (/\s-\sEX-\d{6}-\d{4}-\d{3}-[a-z0-9]{4}\b/i.test(raw)) return true
+  const low = raw.toLowerCase()
+  if (low.includes('salesbot formulario_sum ativado')) return true
+  if (low.includes('registramos o formul')) return true
+  if (
+    /\b(quer que eu (envie|mande|te envie|te mande|gere)|posso (te )?(enviar|mandar|gerar)|gostaria de saber o valor|segue (em )?anexo|sou o assistente|posso te ajudar com mais alguma|para seguir com (a )?(sua )?matr[ií]cula)\b/i.test(
+      low,
+    )
+  ) {
+    return true
+  }
+  return false
+}
+
+/**
+ * Remove cláusulas que são eco do próprio agente (oferta de grade, "quer que
+ * eu envie…", "segue em anexo…", sufixo EX-) e mantém só o que o lead escreveu.
+ * Mais robusto que `sanitizeLeadInboundMessage` para o caso em que o eco vem
+ * concatenado SEM vírgula — quebra também por pontuação de frase (? ! .).
+ */
+export function stripAgentEchoClauses(text) {
+  const raw = String(text || '').trim()
+  if (!raw) return ''
+  const clauses = raw
+    .split(/(?<=[?!.])\s+|,\s+/)
+    .map((c) => c.trim())
+    .filter(Boolean)
+  if (clauses.length === 0) return raw
+  const leadClauses = clauses
+    .filter((c) => !clauseIsAgentEcho(c))
+    .map((c) => c.replace(/\s*-?\s*EX-\d{6}-\d{4}-\d{3}-[a-z0-9]{4}\b/gi, '').trim())
+    .filter(Boolean)
+  return leadClauses.join(' ').replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * Lead perguntou algo ALÉM da grade (preço, custo da matrícula, início,
+ * forma de pagamento, campus/local, etc.). Quando há outros tópicos, o
+ * handler pré-LLM de PDF NÃO deve disparar sozinho — o LLM responde tudo.
+ */
+const OTHER_TOPIC_BESIDES_GRADE_RE =
+  /\b(custo|custa|valor|valores|pre[cç]o|pre[cç]os|mensalidade|investimento|parcela|taxa|matr[ií]cula|in[ií]cio|inicia|come[cç]a|quando|vital[ií]cio)\b/i
+
+export function messageAsksOtherTopicBesidesGrade(text) {
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (!t) return false
+  if (OTHER_TOPIC_BESIDES_GRADE_RE.test(t)) return true
+  if (messageAsksCampusOrPhoneContact(text)) return true
+  if (messageAsksLocationInfo(text)) return true
+  if (messageAsksPaymentInfo(text)) return true
+  if (messageAsksCourseInquiry(text)) return true
+  return false
+}
+
 /** Mensagem do lead pede preço/valores (não é confirmação de matrícula). */
 export function messageAsksCoursePrice(text) {
   const t = normalizeMessageForScope(text).toLowerCase()
@@ -288,7 +352,11 @@ export function sanitizeLeadInboundMessage(text) {
   if (inboundLooksLikeContratoLinkEcho(raw)) return ''
 
   const afterEcho = extractLeadTextAfterAgentEcho(raw)
-  const work = afterEcho !== raw ? afterEcho : raw
+  const base = afterEcho !== raw ? afterEcho : raw
+  // Remove ecos do agente em nível de frase ANTES da divisão por vírgula, para
+  // não perder pergunta do lead colada ao eco no mesmo trecho (sem vírgula).
+  const stripped = stripAgentEchoClauses(base)
+  const work = stripped && stripped.length >= 3 ? stripped : base
 
   const parts = work
     .split(/,(?=\s*(?:[A-Za-zÀ-ÿ0-9]|Salesbot|Boa|Olá|Perfeito|Desculpe))/)
@@ -301,6 +369,10 @@ export function sanitizeLeadInboundMessage(text) {
       /\b(qual\s+o\s+valor[^,?]*|quanto\s+custa[^,?]*|valores?\s+do\s+curso[^,?]*|pre[cç]o\s+do\s+curso[^,?]*)/i,
     )
     if (m?.[0]) return m[0].trim()
+    // Eco do agente veio concatenado SEM vírgula: quebra por frase e remove
+    // só as cláusulas escritas pelo agente, preservando as perguntas do lead.
+    const byClause = stripAgentEchoClauses(work)
+    if (byClause && byClause.length >= 3) return byClause
     return raw.replace(/\s-\sEX-\d{6}-\d{4}-\d{3}\b/gi, ' ').replace(/\s+/g, ' ').trim()
   }
 

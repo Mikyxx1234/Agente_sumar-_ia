@@ -17,6 +17,8 @@ import {
   messageAsksCoursePrice,
   messageAsksPaymentInfo,
   messageAsksCourseInquiry,
+  messageAsksOtherTopicBesidesGrade,
+  stripAgentEchoClauses,
   extractLeadTextAfterAgentEcho,
   sanitizeLeadInboundMessage,
   messageAsksCampusOrPhoneContact,
@@ -154,16 +156,21 @@ export async function runEnviarGradePdf(env, args, flowCtx = {}) {
 }
 
 function shouldAutoSendGradePdf(leadText) {
-  const asksGrade = messageAsksGradeCurricular(leadText) || messageAsksGradePdf(leadText)
+  // Remove cláusulas que são eco do próprio agente (ex.: "...grade curricular
+  // em PDF...") para não confundir a oferta passada do agente com pedido do lead.
+  const clean = stripAgentEchoClauses(leadText)
+  if (!clean || clean.length < 4) return false
+  const asksGrade = messageAsksGradeCurricular(clean) || messageAsksGradePdf(clean)
   if (!asksGrade) return false
-  if (messageAsksCampusOrPhoneContact(leadText) || messageAsksLocationInfo(leadText)) return false
-  if (messageAsksGradePdf(leadText)) return true
-  return (
-    messageAsksGradeCurricular(leadText) &&
-    !messageAsksCoursePrice(leadText) &&
-    !messageAsksPaymentInfo(leadText) &&
-    !messageAsksCourseInquiry(leadText)
-  )
+  if (messageAsksCampusOrPhoneContact(clean) || messageAsksLocationInfo(clean)) return false
+  // O lead também perguntou preço, custo, início, etc.: deixa o LLM responder
+  // tudo (ele chama enviar_grade_pdf + responde os demais pontos). O envio
+  // automático pré-LLM só dispara quando o pedido é exclusivamente de grade.
+  if (messageAsksOtherTopicBesidesGrade(clean)) return false
+  if (messageAsksCoursePrice(clean) || messageAsksPaymentInfo(clean) || messageAsksCourseInquiry(clean)) {
+    return false
+  }
+  return true
 }
 
 /**
