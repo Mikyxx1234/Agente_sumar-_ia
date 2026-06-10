@@ -18,8 +18,8 @@ const RULE30_BODY = `30. GRADE CURRICULAR / DISCIPLINAS DO CURSO
 
     Quando o candidato perguntar grade curricular, matérias, disciplinas ou "o que vou aprender":
     a) Chame buscar_conhecimento incluindo nome do curso + modalidade + "grade curricular disciplinas".
-    b) Use o CONTEXT (fonte grad_grade_curricular ou grad_info com kind grade_curricular): cite exemplos de disciplinas e o total quando existir.
-    c) Se pedir lista completa ou PDF: informe que pode enviar a grade em PDF e ofereça enviar.
+    b) Use o CONTEXT (fonte grad_grade_curricular, grad_info ou pos_info com kind grade_curricular): cite exemplos de disciplinas e o total quando existir.
+    c) Se pedir lista completa ou PDF: chame enviar_grade_pdf para gerar e enviar o PDF pelo WhatsApp. PROIBIDO dizer que não tem PDF quando a grade estiver no CONTEXT.
     d) PROIBIDO inventar disciplinas fora do CONTEXT.
     e) PROIBIDO encaminhar consultor (distribuir_humano) só por essa pergunta.`
 

@@ -196,6 +196,38 @@ export const TOOL_DEFINITIONS = [
   {
     type: 'function',
     function: {
+      name: 'enviar_grade_pdf',
+      description:
+        'Gera e envia a grade curricular completa em PDF pelo WhatsApp. ' +
+        'CHAME quando o CONTEXT tiver grade curricular (LISTA DE DISCIPLINAS / STATUS PDF DISPONIVEL) ' +
+        'ou quando o lead pedir PDF/arquivo da grade. ' +
+        'Funciona para graduação e pós-graduação (EAD, Semipresencial, Híbrido).',
+      parameters: {
+        type: 'object',
+        properties: {
+          telefone: { type: 'string', description: 'Telefone do lead (Contexto do atendimento).' },
+          curso: { type: 'string', description: 'Nome do curso (ex.: "Segurança da Informação", "Pedagogia").' },
+          modalidade: {
+            type: 'string',
+            description: 'OPCIONAL — EAD, Semipresencial ou Híbrido, se souber.',
+          },
+          nivel: {
+            type: 'string',
+            enum: ['grad', 'pos'],
+            description: 'OPCIONAL — grad ou pos, se souber.',
+          },
+          id_lead: {
+            type: 'integer',
+            description: 'OPCIONAL — id_lead do Kommo se estiver no Contexto.',
+          },
+        },
+        required: ['telefone', 'curso'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'distribuir_humano',
       description:
         'Encaminha o lead para um consultor humano. Use SOMENTE quando: (1) o lead pedir EXPLICITAMENTE humano/atendente/consultor; ' +
@@ -246,4 +278,14 @@ export const INSCRICAO_ACTION_TOOLS = new Set([
 
 export function isInscricaoActionTool(name) {
   return INSCRICAO_ACTION_TOOLS.has(String(name || ''))
+}
+
+export const GRADE_ACTION_TOOLS = new Set(['enviar_grade_pdf'])
+
+export function isGradeActionTool(name) {
+  return GRADE_ACTION_TOOLS.has(String(name || ''))
+}
+
+export function isActionTool(name) {
+  return isInscricaoActionTool(name) || isGradeActionTool(name)
 }

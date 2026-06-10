@@ -3,7 +3,9 @@
  */
 
 export function buildGradeCurricularContent(row, disciplinas) {
+  const nivel = row.nivel === 'pos' ? 'pos-graduacao' : 'graduacao'
   const parts = [
+    `nivel: ${nivel}`,
     `curso: ${row.nome || row.id}`,
     `modalidade: ${row.modalidade || ''}`,
     row.codigo ? `codigo_api: ${row.codigo}` : null,
@@ -21,8 +23,12 @@ export function buildGradeCurricularContent(row, disciplinas) {
 }
 
 export function buildGradeCurricularMetadata(row, disciplinas, pages) {
+  const nivel = row.nivel === 'pos' ? 'pos' : 'grad'
+  const source =
+    nivel === 'pos' ? 'scrape-grade-curricular-pos-sumare' : 'scrape-grade-curricular-sumare'
   return {
     kind: 'grade_curricular',
+    nivel,
     curso_id: row.id,
     curso_nome: row.nome || row.id,
     modalidade: row.modalidade || '',
@@ -38,6 +44,6 @@ export function buildGradeCurricularMetadata(row, disciplinas, pages) {
       disciplinas: p.disciplinas || [],
     })),
     grade_sync_at: new Date().toISOString(),
-    source: 'scrape-grade-curricular-sumare',
+    source,
   }
 }

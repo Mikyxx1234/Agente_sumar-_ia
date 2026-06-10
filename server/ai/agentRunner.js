@@ -7,7 +7,7 @@
 
 import { loadPrompts, buildSystemMessage } from './promptsLoader.js'
 import { classifyMessageScope } from './scopeClassifier.js'
-import { getToolDefinitions, isInscricaoActionTool } from './toolDefinitions.js'
+import { getToolDefinitions, isActionTool } from './toolDefinitions.js'
 import { buildToolExecutors } from './toolExecutorsServer.js'
 import { runBuscarHistorico } from '../memoryTool.js'
 import { readChatMessages } from '../historyStore.js'
@@ -71,6 +71,7 @@ import {
   historyIndicatesFormSumarCompleted,
 } from '../../libShared/inscricaoFormHeuristics.js'
 import { fetchDadosClienteByTelefone } from '../dadosClienteStore.js'
+import { tryHandleGradePdfRequest } from '../gradeCurricularActionTools.js'
 import { DADOS_CLIENTE_INSCRICAO_SELECT } from '../dadosClienteInscricaoFields.js'
 import { leadHasPostFormRegistradoNoteSinceLastFormSend } from '../postFormSendGuard.js'
 import {
@@ -92,6 +93,7 @@ import {
   messageAsksModalidadeMecOrDistancia,
   messageAsksCourseInquiry,
   messageAsksGradeCurricular,
+  messageAsksGradePdf,
   messageAsksOuvidoria,
   sanitizeLeadInboundMessage,
 } from '../../libShared/inboundMessageSanitize.js'
@@ -280,9 +282,9 @@ async function executeToolCalls(executors, toolCalls, trace, ctx) {
       step.args = args
       const result = await executor(args)
       step.durationMs = Date.now() - t0
-      const isActionTool = isInscricaoActionTool(fn.name)
+      const isActionToolCall = isActionTool(fn.name)
       const isStructured = result && typeof result === 'object' && !Array.isArray(result)
-      if (isActionTool && isStructured) {
+      if (isActionToolCall && isStructured) {
         step.result = result.text || result.code || 'ok'
         step.actionOk = Boolean(result.ok)
         step.actionCode = result.code || null
@@ -453,6 +455,20 @@ export async function runAgent(env, input) {
   })
 
   formFlowCtx.historyMessages = historyMessages
+
+  if (telefone) {
+    const gradePdfFlow = await tryHandleGradePdfRequest(env, formFlowCtx)
+    if (gradePdfFlow?.handled) {
+      console.log(
+        `[${executionId}] GRADE_PDF_AUTO code=${gradePdfFlow.result?.toolCalls?.[0]?.code ?? 'n/a'} ok=${gradePdfFlow.result?.ok}`,
+      )
+      return {
+        ...gradePdfFlow.result,
+        historyLoaded: historyMessages.length,
+        aiMeta: ctx.toAiMeta(),
+      }
+    }
+  }
 
   // Fix 4 — Log de contexto inicial: estado, histórico e sinais críticos. Sem
   // isso, era cego entender por que tryHandlePoloPreFormFlow retornava null.
@@ -1126,9 +1142,19 @@ export async function runAgent(env, input) {
         content:
           'PERGUNTA SOBRE GRADE CURRICULAR / DISCIPLINAS: o lead quer saber o que vai estudar (matérias, disciplinas, grade). ' +
           `OBRIGATÓRIO neste turno: chame buscar_conhecimento com query incluindo curso e modalidade (ex.: "${discussedCourse} grade curricular disciplinas o que vai aprender"). ` +
-          'Use o CONTEXT da fonte grad_grade_curricular: cite disciplinas principais (5–8 exemplos) + total de disciplinas quando existir no CONTEXT. ' +
-          'Se o lead pedir a lista completa ou PDF: informe que pode enviar a grade completa em PDF e ofereça enviar — não encaminhe consultor só por isso. ' +
+          'Se o CONTEXT trouxer LISTA DE DISCIPLINAS ou STATUS PDF DISPONIVEL: cite 5–8 exemplos + total e chame enviar_grade_pdf(telefone, curso, modalidade) para enviar o PDF completo pelo WhatsApp. ' +
+          'PROIBIDO dizer que não tem PDF quando o CONTEXT indicar grade disponível. ' +
           'PROIBIDO inventar disciplinas que não estejam no CONTEXT.',
+      }
+    : null
+
+  const gradePdfHint = messageAsksGradePdf(userMessage)
+    ? {
+        role: 'system',
+        content:
+          'PEDIDO DE PDF DA GRADE: o lead quer receber a grade curricular em PDF. ' +
+          `OBRIGATÓRIO neste turno: chame enviar_grade_pdf com telefone, curso "${discussedCourse}" e modalidade se souber. ` +
+          'Não responda só em texto — o PDF deve ser enviado pela tool. PROIBIDO dizer que não tem PDF se a grade existir na base.',
       }
     : null
 
@@ -1193,6 +1219,7 @@ export async function runAgent(env, input) {
     ...(posGratisPromocaoHint ? [posGratisPromocaoHint] : []),
     ...(courseInquiryHint ? [courseInquiryHint] : []),
     ...(gradeCurricularHint ? [gradeCurricularHint] : []),
+    ...(gradePdfHint ? [gradePdfHint] : []),
     ...(courseMoreDetailsHint ? [courseMoreDetailsHint] : []),
     ...(enrollmentConfirmHint ? [enrollmentConfirmHint] : []),
     ...(frustrationHint ? [frustrationHint] : []),

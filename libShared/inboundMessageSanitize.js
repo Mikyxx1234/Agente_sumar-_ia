@@ -193,6 +193,16 @@ export function messageAsksGradeCurricular(text) {
   )
 }
 
+/** Lead pede PDF/arquivo/anexo da grade curricular. */
+export function messageAsksGradePdf(text) {
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (!t || t.length < 4) return false
+  if (/\b(pdf|arquivo|anexo|documento)\b/i.test(t) && /\b(grade|curricular|disciplin|materia|matéria|ementa)\b/i.test(t)) {
+    return true
+  }
+  return /\b(manda|envia|envie|mande|me\s+manda|me\s+envia|quero\s+o\s+pdf|preciso\s+do\s+pdf|grade\s+em\s+pdf|pdf\s+da\s+grade)\b/i.test(t)
+}
+
 /**
  * Lead pergunta sobre promoção de Pós-Graduação 100% gratuita ao final da graduação.
  */

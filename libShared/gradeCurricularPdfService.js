@@ -1,0 +1,150 @@
+/**
+ * Localiza grade curricular (grad + pós) nos JSONs scrapeados e gera/envia PDF.
+ */
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { generateGradePdf } from './generateGradePdf.js'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const ROOT = path.join(__dirname, '..')
+const GRADE_JSON_BY_NIVEL = {
+  grad: path.join(ROOT, 'data/grade-curricular-sumare.json'),
+  pos: path.join(ROOT, 'data/grade-curricular-pos-sumare.json'),
+}
+
+const cache = new Map()
+
+function norm(s) {
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function modLabelFromArg(arg) {
+  if (!arg) return null
+  const a = norm(arg)
+  if (/\bead\b/.test(a)) return 'EAD'
+  if (/hibr/.test(a)) return 'Híbrido'
+  if (/semi/.test(a)) return 'Semipresencial'
+  if (/pres/.test(a)) return 'Presencial'
+  return null
+}
+
+function loadRows(nivel) {
+  const key = nivel || 'all'
+  if (cache.has(key)) return cache.get(key)
+  const files = nivel ? [nivel] : ['pos', 'grad']
+  const rows = []
+  for (const n of files) {
+    const p = GRADE_JSON_BY_NIVEL[n]
+    if (!p || !fs.existsSync(p)) continue
+    for (const row of JSON.parse(fs.readFileSync(p, 'utf8'))) {
+      rows.push({ ...row, nivel: row.nivel || n })
+    }
+  }
+  cache.set(key, rows)
+  return rows
+}
+
+function tokens(s) {
+  return norm(s)
+    .split(' ')
+    .filter((t) => t.length > 2 && !['curso', 'graduacao', 'pos', 'posgraduacao', 'mba', 'em'].includes(t))
+}
+
+function scoreRow(row, cursoNorm, modLabel) {
+  const idNorm = norm(row.id)
+  const nomeNorm = norm(row.nome)
+  let score = 0
+  if (cursoNorm && (idNorm.includes(cursoNorm) || cursoNorm.includes(idNorm))) score += 8
+  if (cursoNorm && (nomeNorm.includes(cursoNorm) || cursoNorm.includes(nomeNorm))) score += 10
+  const cursoTokens = tokens(cursoNorm)
+  for (const t of cursoTokens) {
+    if (idNorm.includes(t)) score += 3
+    if (nomeNorm.includes(t)) score += 4
+  }
+  if (modLabel && norm(row.modalidade) === norm(modLabel)) score += 6
+  const discCount = (row.pages || []).reduce((n, p) => n + (p.disciplinas?.length || 0), 0)
+  if (discCount > 0) score += 1
+  return score
+}
+
+/**
+ * @param {{ curso: string, modalidade?: string|null, nivel?: 'grad'|'pos'|null }} input
+ */
+export function findGradeRow(input) {
+  const curso = String(input?.curso || '').trim()
+  if (!curso) return null
+  const cursoNorm = norm(curso)
+  const modLabel = modLabelFromArg(input?.modalidade)
+  const niveis = input?.nivel ? [input.nivel] : ['pos', 'grad']
+  let best = null
+  let bestScore = 0
+  for (const n of niveis) {
+    for (const row of loadRows(n)) {
+      const s = scoreRow(row, cursoNorm, modLabel)
+      if (s > bestScore) {
+        bestScore = s
+        best = row
+      }
+    }
+  }
+  return bestScore >= 4 ? best : null
+}
+
+function pdfDefaultsForRow(row) {
+  const isPos = row.nivel === 'pos'
+  return {
+    titulacao: isPos ? 'Pós-Graduação (lato sensu)' : 'Graduação',
+    duracao: isPos ? '6 meses' : '8 semestres',
+    investimento: '',
+    url: row.url || (isPos ? 'https://mg.sumare.edu.br' : 'https://sumare.edu.br'),
+  }
+}
+
+export function buildGradePdfInput(row, disciplinas) {
+  const defaults = pdfDefaultsForRow(row)
+  return {
+    cursoNome: row.nome || row.id,
+    modalidade: row.modalidade || '',
+    titulacao: defaults.titulacao,
+    duracao: defaults.duracao,
+    investimento: defaults.investimento,
+    codigo: row.codigo || '',
+    intro: row.intro || '',
+    disciplinas,
+    url: defaults.url,
+  }
+}
+
+export function firstName(name) {
+  const raw = String(name || '').trim()
+  if (!raw || /^lead\s*#/i.test(raw)) return 'Olá'
+  return raw.split(/\s+/)[0]
+}
+
+export function buildGradePdfIntroText({ nome, cursoNome, modalidade, disciplinasCount, fileName }) {
+  return (
+    `Oi, ${nome}! Segue em anexo a *grade curricular* de *${cursoNome}* (${modalidade}) em PDF.\n\n` +
+    `São *${disciplinasCount} disciplinas/módulos* — abra o arquivo *${fileName}* para ver a lista completa.\n\n` +
+    `Posso te ajudar com mais alguma dúvida ou seguir com a inscrição?`
+  )
+}
+
+/**
+ * @param {{ curso: string, modalidade?: string, nivel?: 'grad'|'pos' }} input
+ */
+export async function resolveGradeForPdf(input) {
+  const row = findGradeRow(input)
+  if (!row) return { ok: false, code: 'GRADE_NOT_FOUND', error: 'Grade não encontrada nos dados locais.' }
+  const disciplinas = (row.pages || []).flatMap((p) => p.disciplinas || []).filter(Boolean)
+  if (!disciplinas.length) return { ok: false, code: 'GRADE_EMPTY', error: 'Grade sem disciplinas.' }
+  const pdfInput = buildGradePdfInput(row, disciplinas)
+  const { buffer, fileName } = await generateGradePdf(pdfInput)
+  return { ok: true, row, disciplinas, pdfInput, buffer, fileName }
+}

@@ -25,6 +25,7 @@ import {
   runRegistrarPoloInscricao,
   runConfirmarRecebimentoFormulario,
 } from '../inscricaoActionTools.js'
+import { runEnviarGradePdf } from '../gradeCurricularActionTools.js'
 
 async function getEmbedding(env, text, ctx, toolName) {
   const apiKey = env.OPENAI_API_KEY || env.VITE_OPENAI_API_KEY
@@ -323,5 +324,6 @@ export function buildToolExecutors(env, ctx, flowCtx = {}) {
       runRegistrarPoloInscricao(env, args, flowCtx),
     confirmar_recebimento_formulario: async (args) =>
       runConfirmarRecebimentoFormulario(env, args, flowCtx),
+    enviar_grade_pdf: async (args) => runEnviarGradePdf(env, args, flowCtx),
   }
 }

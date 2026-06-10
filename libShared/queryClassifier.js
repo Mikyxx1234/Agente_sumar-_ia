@@ -111,6 +111,7 @@ export function planKnowledgeRpcs(c, hints = {}) {
 
   if (level === 'pos') {
     if (intent === 'preco') return [rpc('match_pos_preco', 'pos_preco')]
+    if (intent === 'grade') return [rpc('match_pos_info', 'pos_info')]
     if (intent === 'info') return [rpc('match_pos_info', 'pos_info')]
     return [rpc('match_pos_info', 'pos_info'), rpc('match_pos_preco', 'pos_preco')]
   }

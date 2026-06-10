@@ -1,0 +1,1055 @@
+[
+  {
+    "id": "ead-administracao-empresas-engenheiros",
+    "nome": "Administração de Empresas para Engenheiros",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/ead/ead-administracao-empresas-engenheiros",
+    "modalidade": "EAD",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Estratégia Empresarial - 60hs",
+          "Gestão de Pessoas - 60hs",
+          "Direito Empresarial - 60hs",
+          "Negociação e Comunicação Executiva - 60hs",
+          "Marketing Empresarial - 60hs",
+          "Administração Financeira - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "ead-ciencia-de-dados",
+    "nome": "Ciência de Dados",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/ead/ead-ciencia-de-dados",
+    "modalidade": "EAD",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Gestão de Projetos - 60hs",
+          "Sistemas e Tecnologia da Informação - 60hs",
+          "Modelagem e Desenvolvimento de Banco de Dados - 60hs",
+          "BIG Data e IoT - 60hs",
+          "Análise de Dados - 60hs",
+          "Administração de Banco de Dados - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "ead-educacao-infantil-desenvolvimento-da-linguagem",
+    "nome": "Educação Infantil e Desenvolvimento da Linguagem",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/ead/ead-educacao-infantil-desenvolvimento-da-linguagem",
+    "modalidade": "EAD",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Processos de Aprendizagem - 60hs",
+          "Criatividade e Competências Socioemocionais na Educação - 60hs",
+          "Desenvolvimento da Criança - 60hs",
+          "Metodologia do Ensino da Linguagem - 60hs",
+          "Educação na Primeira Infância - 60hs",
+          "Metodologias para Educação Infantil - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "ead-ensino-ludico",
+    "nome": "Ensino Lúdico",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/ead/ead-ensino-ludico",
+    "modalidade": "EAD",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Processos de Aprendizagem - 60hs",
+          "Criatividade e Competências Socioemocionais na Educação - 60hs",
+          "Desenvolvimento da Criança - 60hs",
+          "Ludicidade e Práticas Pedagógicas - 60hs",
+          "Aprendizagem Lúdica - 60hs",
+          "Ludopedagogia: Brincar e aprender - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "ead-gestao-escolar-foco-recursos-humanos",
+    "nome": "Gestão Escolar com foco em Recursos Humanos",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/ead/ead-gestao-escolar-foco-recursos-humanos",
+    "modalidade": "EAD",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Estratégia Empresarial - 60hs",
+          "Gestão Estratégica de Pessoas e Habilidade Gerenciais - 60hs",
+          "Treinamento e Desenvolvimento no Ambiente de Trabalho - 60hs",
+          "Gestão de Sistemas Educacionais - 60hs",
+          "Gestão Estratégica Educacional - 60hs",
+          "Paradigmas Educacionais e Tendências Contemporâneas no Ensino - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "ead-libras-deficiencia-auditiva",
+    "nome": "Deficiência Auditiva (LIBRAS)",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/ead/ead-libras-deficiencia-auditiva",
+    "modalidade": "EAD",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Criatividade e Competências Socioemocionais na Educação - 60hs",
+          "Desenvolvimento da Criança e do Adolescente - 60hs",
+          "Educação Inclusiva: Fundamentos e Adequações Metodológicas e Curriculares - 60hs",
+          "Alfabetização e Letramento de Surdos - 60hs",
+          "Lingua Brasileira de Sinais (LIBRAS) - 60hs",
+          "Diversidade na Educação, Culturas e Comportamentos - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "ead-mba-em-financas-corporativas",
+    "nome": "MBA em Finanças Corporativas",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/ead/ead-mba-em-financas-corporativas",
+    "modalidade": "EAD",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Estratégia Empresarial - 60hs",
+          "Empreendedorismo e Plano de Negócios - 60hs",
+          "Gestão do Capital de Giro - 60hs",
+          "Planejamento e Contabilidade Tributária - 60hs",
+          "Avaliação de Empresas - 60hs",
+          "Controladoria Estratégica - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "ead-mba-em-gestao-da-qualidade",
+    "nome": "MBA em Gestão da Qualidade",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/ead/ead-mba-em-gestao-da-qualidade",
+    "modalidade": "EAD",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Estratégia Empresarial - 60hs",
+          "Empreendedorismo e Plano de Negócios - 60hs",
+          "Gestão Corporativa: Business Administration - 60hs",
+          "Gestão da Qualidade - 60hs",
+          "Sistemas de Controle da Qualidade - 60hs",
+          "Ferramentas da Qualidade - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "ead-mba-em-gestao-de-projetos",
+    "nome": "MBA em Gestão de Projeto",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/ead/ead-mba-em-gestao-de-projetos",
+    "modalidade": "EAD",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Estratégia Empresarial - 60hs",
+          "Empreendedorismo e Plano de Negócios - 60hs",
+          "Práticas Avançadas em Gestão - 60hs",
+          "Gerenciamento da Integração, Escopo e Cronograma - 60hs",
+          "Gerenciamento dos Recursos, Custos, Comunicações e Partes Interessadas - 60hs",
+          "Gerenciamento da Qualidade e Riscos - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "ead-mba-em-gestao-empresarial",
+    "nome": "MBA em Gestão Empresarial",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/ead/ead-mba-em-gestao-empresarial",
+    "modalidade": "EAD",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Estratégia Empresarial - 60hs",
+          "Empreendedorismo e Plano de Negócios - 60hs",
+          "Gestão Corporativa: Business Administration - 60hs",
+          "Desenvolvimento de Organizações Inteligentes - 60hs",
+          "Gestão por Processos (Business Process Management) - 60hs",
+          "Práticas Avançadas em Gestão - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "ead-mba-em-lideranca-e-gestao-de-pessoas",
+    "nome": "MBA em Liderança e Gestão de Pessoas",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/ead/ead-mba-em-lideranca-e-gestao-de-pessoas",
+    "modalidade": "EAD",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Estratégia Empresarial - 60hs",
+          "Empreendedorismo e Plano de Negócios - 60hs",
+          "Gestão Estratégica de Pessoas e Habilidade Gerenciais - 60hs",
+          "Desenvolvimento de Equipes - 60hs",
+          "Liderança e Coaching - 60hs",
+          "Treinamento e Desenvolvimento no Ambiente de Trabalho - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "ead-mba-em-negocios-e-vendas",
+    "nome": "MBA em Negócios e Vendas",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/ead/ead-mba-em-negocios-e-vendas",
+    "modalidade": "EAD",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Estratégia Empresarial - 60hs",
+          "Empreendedorismo e Plano de Negócios - 60hs",
+          "Gerencia e Estratégias de Negócios em Vendas - 60hs",
+          "Comportamento do Consumidor - 60hs",
+          "Promoção e Técnicas em Vendas - 60hs",
+          "Negociações e Comunicações - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "ead-mba-em-operacoes-e-logistica",
+    "nome": "MBA em Operações e Logística",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/ead/ead-mba-em-operacoes-e-logistica",
+    "modalidade": "EAD",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Estratégia Empresarial - 60hs",
+          "Empreendedorismo e Plano de Negócios - 60hs",
+          "Gestão Corporativa: Business Administration - 60hs",
+          "Operações Logísticas Integradas - 60hs",
+          "Cadeia de Valor e Custos Logísticos - 60hs",
+          "Logistica Reversa - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "ead-projeto-desenvolvimento-de-sistema",
+    "nome": "Análise e Projeto de Sistemas",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/ead/ead-projeto-desenvolvimento-de-sistema",
+    "modalidade": "EAD",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Práticas Avançadas em Gestão - 60hs",
+          "Gestão de Projetos - 60hs",
+          "Sistemas e Tecnologia da Informação - 60hs",
+          "Engenharia de Software - 60hs",
+          "Qualidade de Software - 60hs",
+          "Modelagem e Desenvolvimento de Banco de Dados - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "ead-psicologia-do-trabalho",
+    "nome": "Psicologia Organizacional e do Trabalho",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/ead/ead-psicologia-do-trabalho",
+    "modalidade": "EAD",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Treinamento e Desenvolvimento no Ambiente de Trabalho - 60hs",
+          "Diversidade Teórica em Psicologia - 60hs",
+          "Contexto do Trabalho e Psicologia Social aplicada as Organizações - 60hs",
+          "Saúde e Trabalho - 60hs",
+          "Conflito, Cooperação e Comprometimento no Trabalho - 60hs",
+          "Comportamento Humano e Organizacional - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "ead-psicopedagogia-e-psicomotricidade",
+    "nome": "Psicopedagogia com Ênfase em Psicomotricidade",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/ead/ead-psicopedagogia-e-psicomotricidade",
+    "modalidade": "EAD",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Processos de Aprendizagem - 60hs",
+          "Criatividade e Competências Socioemocionais na Educação - 60hs",
+          "Desenvolvimento da Criança e do Adolescente - 60hs",
+          "Dificuldades de Aprendizagem - 60hs",
+          "Intervenções Psicopedagógicas e Psicomotricidade - 60hs",
+          "Desenvolvimento Psicomotor e Movimento - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "ead-seguranca-da-informacao",
+    "nome": "Segurança da Informação",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/ead/ead-seguranca-da-informacao",
+    "modalidade": "EAD",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Gestão de Projetos - 60hs",
+          "Sistemas e Tecnologia da Informação - 60hs",
+          "Segurança de Sistemas - 60hs",
+          "Infraestrutura de Redes - 60hs",
+          "Segurança de Redes sem Fio - 60hs",
+          "Segurança de Aplicativos Móveis - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "ead-servicos-sistema-de-saude",
+    "nome": "Serviços e Sistemas de Saúde",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/ead/ead-servicos-sistema-de-saude",
+    "modalidade": "EAD",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Ética e Legislação na Saúde - 60hs",
+          "Administração Geral x Hospitalar - 60hs",
+          "Serviços Hospitalares - 60hs",
+          "Planejamento Estratégico e Empreendedorismo - 60hs",
+          "Humanização Hospitalar - 60hs",
+          "Auditoria e Qualidade Hospitalar - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "mba-em-controladoria-e-contabilidade-gerencial",
+    "nome": "MBA em Controladoria e Contabilidade Gerencial",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/hibrido/mba-em-controladoria-e-contabilidade-gerencial",
+    "modalidade": "Híbrido",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Desenvolvimento Profissional - 60hs",
+          "Orçamento Empresarial e Gestão de Finanças Corporativas - 60hs",
+          "Planejamento Tributário e Gestão de Passivo Tributário - 60hs",
+          "Contabilidade Gerencial e Sistemas de Controle - 60hs",
+          "Direito Empresarial Brasileiro - 60hs",
+          "Controladoria Estratégica - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "mba-em-gerencia-de-projetos-e-processos-organizacionais",
+    "nome": "MBA em Gerência de Projetos e Processos Organizacionais",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/hibrido/mba-em-gerencia-de-projetos-e-processos-organizacionais",
+    "modalidade": "Híbrido",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Ambientes de Projeto Ágil, Interativo, Adaptativo e Híbrido - 60hs",
+          "Desenvolvimento Profissional - 60hs",
+          "Agile Mindset e Design Thinking - 60hs",
+          "Inteligência Competitiva - 60hs",
+          "Processos de Gerenciamento e Gerenciamento da Integração - 60hs",
+          "Gerenciamento dos Recursos, Custos, Qualidade e Riscos em Projetos - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "mba-em-gestao-comercial,-negociacao-e-inteligencia-de-mercado",
+    "nome": "MBA Gestão Comercial, Negociação e Inteligência de Mercado",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/hibrido/mba-em-gestao-comercial,-negociacao-e-inteligencia-de-mercado",
+    "modalidade": "Híbrido",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Desenvolvimento Profissional - 60hs",
+          "Agile Mindset e Design Thinking - 60hs",
+          "Inteligência Competitiva - 60hs",
+          "Desenho e Gestão dos Canais de Vendas - 60hs",
+          "Estratégias e Táticas de Negociação - 60hs",
+          "Relacionamento e Gestão da Lealdade dos Clientes - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "mba-em-logistica-,-lean-supply-chai-e-gestao-estrategica",
+    "nome": "MBA em Logística, Lean Supply Chain e Gestão Estratégica de Compras",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/hibrido/mba-em-logistica-,-lean-supply-chai-e-gestao-estrategica",
+    "modalidade": "Híbrido",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Lean Supply Chain - 60hs",
+          "Desenvolvimento Profissional - 60hs",
+          "Agile Mindset e Design Thinking - 60hs",
+          "Inteligência Competitiva - 60hs",
+          "Ferramentas Logísticas e Cadeia de Valor - 60hs",
+          "Administração, Estratégias e Categorias de Compras: Strategic Sourcing - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "mba-em-marketing-e-negocios-em-midias-digitais",
+    "nome": "MBA em Marketing e Negócios em Mídias Digitais",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/hibrido/mba-em-marketing-e-negocios-em-midias-digitais",
+    "modalidade": "Híbrido",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Desenvolvimento Profissional - 60hs",
+          "Agile Mindset e Design Thinking - 60hs",
+          "Estratégias e Planejamento de Campanhas em Mídias Digitais - 60hs",
+          "Monitoramento e Gestão de Redes Sociais - 60hs",
+          "Métricas de controle e avaliação de resultados em Marketing - 60hs",
+          "Inteligência Competitiva - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "mba-executivo-em-corporate-finance-,-controller-e-auditoria",
+    "nome": "MBA Executivo em Corporate Finance, Controller e Auditoria Financeira",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/hibrido/mba-executivo-em-corporate-finance-,-controller-e-auditoria",
+    "modalidade": "Híbrido",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Desenvolvimento Profissional - 60hs",
+          "Orçamento Empresarial e Gestão de Finanças Corporativas - 60hs",
+          "Planejamento Tributário e Gestão de Passivo Tributário - 60hs",
+          "Controller, Controladoria e Business Partner Financeiro - 60hs",
+          "Auditoria Contábil - Financeira - 60hs",
+          "Direito Empresarial Brasileiro - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "mba-executivo-em-gestao-de-negocios-e-estrategia-corporativa",
+    "nome": "MBA Executivo em Gestão de Negócios e Estratégia Corporativa",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/hibrido/mba-executivo-em-gestao-de-negocios-e-estrategia-corporativa",
+    "modalidade": "Híbrido",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Desenvolvimento Profissional - 60hs",
+          "Agile Mindset e Design Thinking - 60hs",
+          "Inteligência Competitiva - 60hs",
+          "Business Model Generation - 60hs",
+          "Integração de Negócios e Corporate Performance Management - 60hs",
+          "Business Plan - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "pos-graduacao-em-alfabetizacao-e-letramento",
+    "nome": "Alfabetização e Letramento",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/hibrido/pos-graduacao-em-alfabetizacao-e-letramento",
+    "modalidade": "Híbrido",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Desenvolvimento Profissional - 60hs",
+          "Teorias e Estudos dos Problemas de Aprendizagem - 60hs",
+          "Fundamentos Teórico-Metodológicos de Alfabetização e Letramento - 60hs",
+          "Teoria Crítica do Curriculo e Propostas no Ensino Formal - 60hs",
+          "Didática e materiais didático-pedagógicos - 60hs",
+          "Instrumentos para avaliação da aprendizagem - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "pos-graduacao-em-business-partner-para-a-gestao-estrategica",
+    "nome": "Business Partner para a Gestão Estratégica de RH",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/hibrido/pos-graduacao-em-business-partner-para-a-gestao-estrategica",
+    "modalidade": "Híbrido",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Desenvolvimento Profissional - 60hs",
+          "Criatividade, Inovação e Desenvolvimento do Capital Humano nas Organizações - 60hs",
+          "Gestão de Equipes de Alta Performance e Competências Interpessoais - 60hs",
+          "Business Partner: novas Competências, atuação e desafios - 60hs",
+          "Agile Mindset e Design Thinking - 60hs",
+          "Conflito, Cooperação e Comprometimento no Trabalho - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "pos-graduacao-em-educacao-especial-e-inclusiva",
+    "nome": "Educação Especial e Inclusiva",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/hibrido/pos-graduacao-em-educacao-especial-e-inclusiva",
+    "modalidade": "Híbrido",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Desenvolvimento Profissional - 60hs",
+          "Transtornos Globais do Desenvolvimento - 60hs",
+          "Diversidade e Inclusão - 60hs",
+          "Educação Especial e Inclusiva: Teoria e Prática - 60hs",
+          "Deficiência Auditiva e a Lingua Brasileira de Sinais (LIBRAS) - 60hs",
+          "Deficiências Intelectual, Visual e Motora - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "pos-graduacao-em-educacao-para-o-transtorno-do-espectro-autista-TEA",
+    "nome": "Educação para o Transtorno do Espectro Autista (TEA)",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/hibrido/pos-graduacao-em-educacao-para-o-transtorno-do-espectro-autista-TEA",
+    "modalidade": "Híbrido",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Desenvolvimento Profissional - 60hs",
+          "Transtornos Globais do Desenvolvimento - 60hs",
+          "Educação Especial e Inclusiva: Teoria e Prática - 60hs",
+          "Desafios do Autismo: Inclusão Social e Escolar - 60hs",
+          "Deficiência Intelectual x Transtorno do Espectro Autista (TEA) - 60hs",
+          "Diversidade e Inclusão - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "pos-graduacao-em-educacaodigital-tecnologias-e-metodologias-ativas-para-o-ensino-a-distancia",
+    "nome": "Educação Digital, Tecnologias e Metodologias Ativas para o Ensino a Distância",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/hibrido/pos-graduacao-em-educacaodigital-tecnologias-e-metodologias-ativas-para-o-ensino-a-distancia",
+    "modalidade": "Híbrido",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Desenvolvimento Profissional - 60hs",
+          "Didática e materiais didático-pedagógicos - 60hs",
+          "Instrumentos para avaliação da aprendizagem - 60hs",
+          "Metodologias para Aprendizagem Ativa - 60hs",
+          "Ensino Digital e Educação a Distância - 60hs",
+          "Tecnologias Digitais na Prática Pedagógica - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "pos-graduacao-em-engenharia-da-producao-e-manutencao",
+    "nome": "Engenharia da Produção e Manutenção",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/hibrido/pos-graduacao-em-engenharia-da-producao-e-manutencao",
+    "modalidade": "Híbrido",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Manutenção, Segurança e Meio Ambiente - 60hs",
+          "Sistemas de Produção - 60hs",
+          "PCM - Planejamento e Controle da Manutenção - 60hs",
+          "Lean Supply Chain - 60hs",
+          "Ambientes de Projeto Ágil, Interativo, Adaptativo e Híbrido - 60hs",
+          "Desenvolvimento Profissional - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "pos-graduacao-em-engenharia-da-qualidade-lean-six-sigma",
+    "nome": "Engenharia da Qualidade Lean Six Sigma",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/hibrido/pos-graduacao-em-engenharia-da-qualidade-lean-six-sigma",
+    "modalidade": "Híbrido",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Lean Supply Chain - 60hs",
+          "Ambientes de Projeto Ágil, Interativo, Adaptativo e Híbrido - 60hs",
+          "Desenvolvimento Profissional - 60hs",
+          "Sistemas Estratégicos de Qualidade - 60hs",
+          "Técnicas e Ferramentas da Qualidade Integrada - 60hs",
+          "Métodos Avançados para a Qualidade Total - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "pos-graduacao-em-engenharia-da-seguranca-do-trabalho",
+    "nome": "pos graduacao em engenharia da seguranca do trabalho",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/hibrido/pos-graduacao-em-engenharia-da-seguranca-do-trabalho",
+    "modalidade": "Híbrido",
+    "nivel": "pos",
+    "ok": false,
+    "status": 404,
+    "codigo": "",
+    "intro": "",
+    "pages": [],
+    "fonte": "erro_http"
+  },
+  {
+    "id": "pos-graduacao-em-fiscalizacao-urbana",
+    "nome": "Fiscalização Urbana",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/ead/pos-graduacao-em-fiscalizacao-urbana",
+    "modalidade": "EAD",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Gestão de Pessoas - 60hs",
+          "Direito Administrativo - 60hs",
+          "Gestão de Políticas Públicas - 60hs",
+          "Gestão Estratégica - 60hs",
+          "Planejamento Urbano - 60hs",
+          "Direito Penal e Ética Profissional - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "pos-graduacao-em-gestao-estrategica-de-pessoas-lideranca-de-alta-performance-e-coaching",
+    "nome": "Gestão Estratégica de Pessoas: Liderança de Alta Performance e Coaching",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/hibrido/pos-graduacao-em-gestao-estrategica-de-pessoas-lideranca-de-alta-performance-e-coaching",
+    "modalidade": "Híbrido",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Conflito, Cooperação e Comprometimento no Trabalho - 60hs",
+          "Desenvolvimento Profissional - 60hs",
+          "Aprendizagem, Percepção e Motivação - 60hs",
+          "Criatividade, Inovação e Desenvolvimento do Capital Humano nas Organizações - 60hs",
+          "Gestão de Equipes de Alta Performance e Competências Interpessoais - 60hs",
+          "Coaching de Carreira - Métodos de aplicação prática e simulação corporativa - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "pos-graduacao-em-gestao-fiscal-e-planejamento-tributario",
+    "nome": "Gestão Fiscal e Planejamento Tributário",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/hibrido/pos-graduacao-em-gestao-fiscal-e-planejamento-tributario",
+    "modalidade": "Híbrido",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Desenvolvimento Profissional - 60hs",
+          "Orçamento Empresarial e Gestão de Finanças Corporativas - 60hs",
+          "Contabilidade aplicada aos Tributos Federais, Estaduais e Municipais - 60hs",
+          "Planejamento Tributário e Gestão de Passivo Tributário - 60hs",
+          "Perícia e Auditoria Tributárias - 60hs",
+          "Direito Empresarial Brasileiro - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "pos-graduacao-em-neuropedagogia",
+    "nome": "Neuropsicopedagogia",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/hibrido/pos-graduacao-em-neuropedagogia",
+    "modalidade": "Híbrido",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Desenvolvimento Profissional - 60hs",
+          "Neurociências e Processos Básicos, Afetivos e Emocionais e do Desenvolvimento e Movimento - 60hs",
+          "Teorias e Estudos dos Problemas de Aprendizagem - 60hs",
+          "Instrumentos para avaliação da aprendizagem - 60hs",
+          "Fundamentos da Neuropedagogia e dos processos de ensino-aprendizagem - 60hs",
+          "Transtornos Globais do Desenvolvimento - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "pos-graduacao-em-psicologia-,-neurociencias-e-comportamento",
+    "nome": "Psicologia, Neurociências e Comportamento",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/hibrido/pos-graduacao-em-psicologia-,-neurociencias-e-comportamento",
+    "modalidade": "Híbrido",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Desenvolvimento Profissional - 60hs",
+          "Aprendizagem, Percepção e Motivação - 60hs",
+          "Neurociências e Processos Básicos, Afetivos e Emocionais e do Desenvolvimento e Movimento - 60hs",
+          "Estudo do Comportamento Humano - 60hs",
+          "Criatividade, Inovação e Desenvolvimento do Capital Humano nas Organizações - 60hs",
+          "Diversidade Teórica em Psicologia - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "pos-graduacao-em-psicologia-positiva-e-desenvolvimento-capital-humano",
+    "nome": "Psicologia Positiva e Desenvolvimento do Capital Humano nas Organizações",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/hibrido/pos-graduacao-em-psicologia-positiva-e-desenvolvimento-capital-humano",
+    "modalidade": "Híbrido",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Desenvolvimento Profissional - 60hs",
+          "Aprendizagem, Percepção e Motivação - 60hs",
+          "Criatividade, Inovação e Desenvolvimento do Capital Humano nas Organizações - 60hs",
+          "Agile Mindset e Design Thinking - 60hs",
+          "Diversidade Teórica em Psicologia - 60hs",
+          "Conflito, Cooperação e Comprometimento no Trabalho - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "pos-graduacao-em-psicopedagogia-institucional-e-clinica",
+    "nome": "Psicopedagogia Institucional e Clínica",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/hibrido/pos-graduacao-em-psicopedagogia-institucional-e-clinica",
+    "modalidade": "Híbrido",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Desenvolvimento Profissional - 60hs",
+          "Teorias e Estudos dos Problemas de Aprendizagem - 60hs",
+          "Transtornos Globais do Desenvolvimento - 60hs",
+          "Desafios da Inclusão Social e Escolar - 60hs",
+          "Orientação de Estágio Clínico - 60hs",
+          "Supervisão de Estágio Clínico - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  },
+  {
+    "id": "pos-Graduacaoo-em-coordenacao-pedagogica-e-gestao-estrategica-de-instituicoes-de-ensino",
+    "nome": "Coordenação Pedagógica e Gestão Estratégica de Instituições de Ensino",
+    "url": "https://mg.sumare.edu.br/cursos/pos-graduacao/hibrido/pos-Graduacaoo-em-coordenacao-pedagogica-e-gestao-estrategica-de-instituicoes-de-ensino",
+    "modalidade": "Híbrido",
+    "nivel": "pos",
+    "ok": true,
+    "status": 200,
+    "codigo": "",
+    "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
+    "pages": [
+      {
+        "pagina": 1,
+        "disciplinas": [
+          "Desenvolvimento Profissional - 60hs",
+          "Inteligência Competitiva - 60hs",
+          "Teoria Crítica do Curriculo e Propostas no Ensino Formal - 60hs",
+          "Plano de Negócios - 60hs",
+          "Gestão e Coordenação Pedagógica - 60hs",
+          "Gestão de Organizações Educacionais - 60hs"
+        ]
+      }
+    ],
+    "fonte": "html",
+    "totalDisciplinas": 6
+  }
+]

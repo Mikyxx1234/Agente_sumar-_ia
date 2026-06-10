@@ -24,8 +24,10 @@
     "audit:precos": "node --env-file=.env scripts/audit-precos-sumare.mjs",
     "build:curso-perfil-grad": "node --env-file=.env scripts/build-curso-perfil-grad.mjs",
     "scrape:grade-curricular": "node scripts/scrape-grade-curricular-sumare.mjs",
+    "scrape:grade-curricular-pos": "node scripts/scrape-grade-curricular-pos-sumare.mjs",
     "db:ensure-grade-curricular": "node --env-file=.env scripts/ensureGradGradeCurricularTable.mjs",
     "register:grade-curricular-rag": "node --env-file=.env scripts/register-grade-curricular-rag.mjs",
+    "register:grade-curricular-pos-rag": "node --env-file=.env scripts/register-grade-curricular-pos-rag.mjs",
     "register:grade-curricular-rule30": "node --env-file=.env scripts/register-grade-curricular-rule30.mjs"
   },
   "dependencies": {

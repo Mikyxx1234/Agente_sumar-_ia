@@ -170,20 +170,27 @@ export function enrichRowContentForRag(source, d) {
       partes.push(`LISTA DE DISCIPLINAS:\n${lista}`)
     }
     if (meta.url_pagina) partes.push(`[FONTE OFICIAL: ${meta.url_pagina}]`)
+    partes.push(
+      '[STATUS DA GRADE: PDF DISPONIVEL — chame enviar_grade_pdf com curso e modalidade para enviar o PDF. PROIBIDO dizer que não tem PDF.]',
+    )
     return partes.join('\n\n')
   }
 
   if (source === 'grad_info' || source === 'pos_info') {
     const meta = d?.metadata && typeof d.metadata === 'object' ? d.metadata : {}
-    if (source === 'grad_info' && meta.kind === 'grade_curricular') {
+    if (meta.kind === 'grade_curricular') {
+      const nivelLabel = meta.nivel === 'pos' ? 'PÓS-GRADUAÇÃO' : 'GRADUAÇÃO'
       const partes = [base]
       partes.push(
-        `[GRADE CURRICULAR — ${meta.curso_nome || 'curso'} (${meta.modalidade || ''}) | ${meta.total_disciplinas || 0} disciplinas]`,
+        `[GRADE CURRICULAR — ${nivelLabel} — ${meta.curso_nome || 'curso'} (${meta.modalidade || ''}) | ${meta.total_disciplinas || 0} disciplinas]`,
       )
       if (Array.isArray(meta.disciplinas) && meta.disciplinas.length) {
         partes.push(`LISTA DE DISCIPLINAS:\n${meta.disciplinas.map((disc, i) => `${i + 1}. ${disc}`).join('\n')}`)
       }
       if (meta.url_pagina) partes.push(`[FONTE OFICIAL: ${meta.url_pagina}]`)
+      partes.push(
+        '[STATUS DA GRADE: PDF DISPONIVEL — chame a tool enviar_grade_pdf com curso e modalidade para enviar o PDF completo ao lead. PROIBIDO dizer que não tem PDF.]',
+      )
       return partes.join('\n\n')
     }
 
