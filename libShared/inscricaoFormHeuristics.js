@@ -121,10 +121,23 @@ export function shouldBlockFormularioSumResend(row, opts = {}) {
   if (opts.allowExplicitResend) return false
   if (!row || typeof row !== 'object') return false
   if (inscricaoFormAlreadyFilled(row)) return true
-  if (matriculaPosFormAlreadyProcessed(row)) return true
   if (captacaoOrPosFormAdvanced(row)) return true
   const status = String(row.inscricao_form_status || '').trim()
+  // NÃO usar matriculaPosFormAlreadyProcessed aqui: o set "em andamento" dele
+  // inclui aguardando_escolha_polo_pre_form, que bloqueava o ENVIO LEGÍTIMO do
+  // form logo após o lead escolher o polo (quebrava o fluxo de inscrição).
+  // Estados bloqueados listados explicitamente:
   if (status === INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE) return true
+  // Form JÁ ENVIADO e aguardando preenchimento: NUNCA redisparar o salesbot
+  // (o robô do Kommo já cobra o lead sozinho). Este bloqueio é persistente
+  // (estado no Supabase) — não depende de Redis nem de memória do processo,
+  // então sobrevive a restarts/deploys. Reenvio só com pedido explícito do
+  // lead (opts.allowExplicitResend, ex.: "não recebi o formulário").
+  if (status === INSCRICAO_FORM_STATUS_AGUARDANDO) return true
+  // Fluxos paralelos em andamento que o Formulario_Sum não deve atropelar.
+  if (status === INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_POLO_KOMMO) return true
+  if (status === INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_DESISTENCIA) return true
+  if (MATRICULA_POS_FORM_TERMINAL_STATUSES.has(status)) return true
   return false
 }
 

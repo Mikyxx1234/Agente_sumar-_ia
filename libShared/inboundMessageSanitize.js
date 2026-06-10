@@ -49,6 +49,20 @@ export function isAgentInternalAuditNote(text) {
   return false
 }
 
+/**
+ * Mensagens enviadas pelo PRÓPRIO robô Formulario_Sum do Kommo ao lead
+ * (cobranças de preenchimento). Quando o poll de notas as captura, NUNCA
+ * devem ser tratadas como fala do lead — senão o pipeline interpreta como
+ * pedido de inscrição e redispara o salesbot em loop.
+ */
+export function isKommoFormBotMessage(text) {
+  const low = String(text || '').trim().toLowerCase()
+  if (!low) return false
+  if (/^por\s+gentileza\s+preencha\s+as\s+informa[cç][oõ]es\s+do\s+formul[aá]rio\b/.test(low)) return true
+  if (/^preencha\s+as\s+informa[cç][oõ]es\s+do\s+formul[aá]rio\s+para\s+prosseguir\b/.test(low)) return true
+  return false
+}
+
 const ASSISTANT_ECHO_START =
   /^(boa\s+(tarde|dia|noite)|ol[aá]!|perfeito!|desculpe|obrigado|salesbot\s+formulario)/i
 
@@ -61,6 +75,7 @@ export function isLikelyAgentEcho(text) {
   const low = raw.toLowerCase()
   if (low.includes('salesbot formulario_sum ativado')) return true
   if (low.includes('registramos o formulário')) return true
+  if (isKommoFormBotMessage(raw)) return true
   if (/\b(quer que eu envie|sou o assistente|grade curricular em pdf|posso te ajudar com mais alguma)\b/i.test(low)) {
     return true
   }
@@ -99,6 +114,7 @@ function clauseIsAgentEcho(clause) {
   if (!raw) return false
   if (AGENT_OUTBOUND_SUFFIX.test(raw)) return true
   if (/\s-\sEX-\d{6}-\d{4}-\d{3}-[a-z0-9]{4}\b/i.test(raw)) return true
+  if (isKommoFormBotMessage(raw)) return true
   const low = raw.toLowerCase()
   if (low.includes('salesbot formulario_sum ativado')) return true
   if (low.includes('registramos o formul')) return true
@@ -373,6 +389,9 @@ export function sanitizeLeadInboundMessage(text) {
     // só as cláusulas escritas pelo agente, preservando as perguntas do lead.
     const byClause = stripAgentEchoClauses(work)
     if (byClause && byClause.length >= 3) return byClause
+    // Tudo era eco do agente/robô (ex.: cobrança do Formulario_Sum) — não há
+    // fala do lead aqui; devolve vazio para o pipeline ignorar a mensagem.
+    if (byClause === '') return ''
     return raw.replace(/\s-\sEX-\d{6}-\d{4}-\d{3}\b/gi, ' ').replace(/\s+/g, ' ').trim()
   }
 
@@ -404,6 +423,8 @@ export function isKommoSystemOrIntegrationNote(text) {
   // Nota interna de auditoria do agente (marcador + frases conhecidas).
   if (isAgentInternalAuditNote(text)) return true
   if (isKommoCaptacaoContratoSystemNote(text)) return true
+  // Cobranças do robô Formulario_Sum ao lead — outbound do bot, nunca fala do lead.
+  if (isKommoFormBotMessage(text)) return true
   if (/\bsalesbot\b/i.test(low)) return true
   if (/\bformulario_sum\b/i.test(low)) return true
   if (/\binscri[cç][aã]o via agente ia\b/i.test(low)) return true

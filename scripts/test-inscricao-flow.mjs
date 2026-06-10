@@ -207,7 +207,7 @@ try {
   assertEqual(r.ok, false, '1.ok=false (precisa de polo)')
   assertEqual(r.code, 'POLO_NEEDED', '1.code=POLO_NEEDED')
   assert(/polo/i.test(r.replyOverride || ''), '1.replyOverride pede polo')
-  assert(/1\.\s*\*?S/i.test(r.replyOverride || ''), '1.replyOverride lista polos numerados')
+  assert(/1\.\s*\*?\w/i.test(r.replyOverride || ''), '1.replyOverride lista polos numerados')
   assertEqual(r.ctxSnapshot?.inscricaoForm, 'aguardando_escolha_polo_pre_form', '1.estado=aguardando_escolha_polo_pre_form')
 } finally {
   restoreFetch()
@@ -253,17 +253,18 @@ try {
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */
-/* Cobertura 4 — Polo inválido (Santo Amaro)                                  */
+/* Cobertura 4 — Polo inválido (Osasco — fora do catálogo)                    */
+/* Nota: Santo Amaro passou a ser polo VÁLIDO no catálogo (ED_SP_P6).         */
 /* ────────────────────────────────────────────────────────────────────────── */
-section('4. Polo inválido (Santo Amaro)')
+section('4. Polo inválido (Osasco)')
 
 installFetchStub(defaultSupabaseStub({ dadosClienteRow: { id: 1, id_lead: 23845769 } }))
 try {
-  const r = await runRegistrarPoloInscricao(env, { telefone: ctx.telefone, polo_id: 'santo_amaro' }, ctx)
+  const r = await runRegistrarPoloInscricao(env, { telefone: ctx.telefone, polo_id: 'osasco' }, ctx)
   assertEqual(r.ok, false, '4.ok=false')
   assertEqual(r.code, 'INVALID_POLO', '4.code=INVALID_POLO')
   assert(/polo/i.test(r.replyOverride || ''), '4.replyOverride pede polo válido')
-  assert(/Tatuap[eé]|Pinheiros|S[aã]o Miguel/i.test(r.replyOverride || ''), '4.replyOverride lista polos válidos')
+  assert(/Tatuap[eé]|Santana|S[aã]o Miguel|Barra Funda/i.test(r.replyOverride || ''), '4.replyOverride lista polos válidos')
 } finally {
   restoreFetch()
 }
