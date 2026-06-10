@@ -36,6 +36,10 @@ for (const line of fs.readFileSync('.env', 'utf8').split(/\r?\n/)) {
 
 const args = process.argv.slice(2)
 const dryRun = !args.includes('--apply')
+// --recover-fallback: trata leads cuja última resposta do bot foi a mensagem
+// de "instabilidade momentânea" (apagão da OpenAI) como precisando de resposta,
+// reenfileirando a pergunta real do lead para o agente responder de verdade.
+const recoverFallback = args.includes('--recover-fallback')
 const limit = Number(args.find((a, i) => args[i - 1] === '--limit') || 0) || 0
 const leadIdsArg = args.find((a, i) => args[i - 1] === '--lead-ids')
 const filterIds = leadIdsArg
@@ -52,6 +56,10 @@ const SKIP_FORM = new Set([
 
 const DEBOUNCE_MS = 6000
 
+// Marca da resposta de fallback enviada durante o apagão da OpenAI (HTTP 429).
+// Ver buildOpenAiTransientFallbackReply() em server/ai/agentRunner.js.
+const FALLBACK_REPLY_RE = /instabilidade moment[âa]nea ao processar sua mensagem/i
+
 function analyzeHistory(rows) {
   const chronological = [...(rows || [])].reverse()
   let lastUser = null
@@ -67,7 +75,13 @@ function analyzeHistory(rows) {
     (!lastBot ||
       chronological.findIndex((r) => String(r?.user_message || '').trim() === lastUser) >
         chronological.findIndex((r) => String(r?.bot_message || '').trim() === lastBot))
-  return { lastUser, lastBot, needsReply: Boolean(lastUser && (!lastBot || pending)) }
+  // Recuperação: se a última fala do bot foi o fallback de instabilidade e há
+  // pergunta do lead, o lead ficou sem resposta de verdade — força o reenvio.
+  const fallbackLast = Boolean(lastBot && FALLBACK_REPLY_RE.test(lastBot))
+  const needsReply =
+    Boolean(lastUser && (!lastBot || pending)) ||
+    (recoverFallback && fallbackLast && Boolean(lastUser))
+  return { lastUser, lastBot, needsReply, fallbackLast }
 }
 
 const listing = await listLeadsInAgentQueue(env)
@@ -80,7 +94,9 @@ let leads = listing.leads || []
 if (filterIds?.size) leads = leads.filter((l) => filterIds.has(Number(l.id)))
 if (limit > 0) leads = leads.slice(0, limit)
 
-console.log(`mode=${dryRun ? 'DRY-RUN' : 'APPLY'} leads=${leads.length} total_queue=${listing.leads?.length}`)
+console.log(
+  `mode=${dryRun ? 'DRY-RUN' : 'APPLY'} recoverFallback=${recoverFallback} leads=${leads.length} total_queue=${listing.leads?.length}`,
+)
 
 const contactIds = []
 for (const l of leads) {
