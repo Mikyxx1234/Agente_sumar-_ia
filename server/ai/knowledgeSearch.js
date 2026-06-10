@@ -9,6 +9,11 @@ import { rewriteSearchQuery } from './queryRewrite.js'
 import { classifyKnowledgeQuery, planKnowledgeRpcs } from '../../libShared/queryClassifier.js'
 import { enrichRowContentForRag } from '../../libShared/knowledgeRowFormat.js'
 import { COURSE_MORE_INFO_REPLY_RULES, userAsksCourseMoreDetails } from '../../libShared/courseMoreInfo.js'
+import { fetchOfferedModalidadesByCourse } from '../sumareCaptacaoCursoStore.js'
+import {
+  filterKnowledgeRowsByOfficialOffer,
+  buildOfficialOfferContextBlock,
+} from '../../libShared/cursoOfertaFilter.js'
 
 const INSTITUTION = 'Faculdade Sumaré'
 
@@ -114,6 +119,7 @@ const SUMARÉ_REPLY_RULES = [
   'Não use informações de outras instituições (ex.: Cruzeiro, Anhanguera, SOEAD), mesmo que existam em materiais antigos do projeto.',
   'CURSO PEDIDO AUSENTE DO CONTEXT: se o lead perguntou por um curso específico e o nome dele NÃO aparece no CONTEXT, NÃO diga que não encontrou ou que não existe. Faça nova busca por área e sugira APENAS cursos cujos nomes estejam no CONTEXT (2–3 opções), sem preço/detalhes de curso que não esteja no CONTEXT.',
   'NUNCA cite nome de curso que não esteja escrito no CONTEXT (não invente programas "parecidos").',
+  'MODALIDADE: se o bloco OFERTA OFICIAL listar modalidade(s) para um curso, cite SOMENTE essa(s) — ignore trechos do CONTEXT com modalidade diferente (dados antigos do site/RAG).',
   'Se o CONTEXT não tiver informação suficiente (e não for só curso inexistente), ofereça consultor (distribuir_humano) quando fizer sentido.',
   'Se a pergunta puder ser graduação ou pós-graduação e o CONTEXT não deixar claro, peça uma confirmação curta: "Você quer informações sobre graduação ou pós-graduação?"',
   'Não mencione Supabase, RAG, embedding ou tabelas para o lead.',
@@ -202,11 +208,23 @@ export async function searchKnowledgeBase(env, ctx, question, opts = {}) {
   }
 
   merged.sort((a, b) => b.similarity - a.similarity)
-  const bestSim = merged.length ? merged[0].similarity : null
-  const top = merged.slice(0, 18)
+
+  const ofertaMap = await fetchOfferedModalidadesByCourse(env)
+  const { rows: filtered, removed } = filterKnowledgeRowsByOfficialOffer(merged, ofertaMap)
+  if (removed.length) {
+    console.log(
+      `[knowledgeSearch] filtro oferta: removidas ${removed.length} linhas (modalidade obsoleta) — ex.: ${removed
+        .slice(0, 3)
+        .map((r) => `${r.key}/${r.mod}`)
+        .join(', ')}`,
+    )
+  }
+
+  const bestSim = filtered.length ? filtered[0].similarity : null
+  const top = filtered.slice(0, 18)
 
   console.log(
-    `[knowledgeSearch] consolidado: ${merged.length} linhas; melhor_similarity=${bestSim != null ? bestSim.toFixed(4) : 'n/a'}`,
+    `[knowledgeSearch] consolidado: ${filtered.length} linhas (de ${merged.length}); melhor_similarity=${bestSim != null ? bestSim.toFixed(4) : 'n/a'}`,
   )
 
   if (top.length === 0) {
@@ -222,11 +240,12 @@ export async function searchKnowledgeBase(env, ctx, question, opts = {}) {
     ].join('\n')
   }
 
+  const ofertaBlock = buildOfficialOfferContextBlock(top, ofertaMap, q0)
   const block = buildContextBlock(top)
   const rules = wantsCourseMoreDetails
     ? [SUMARÉ_REPLY_RULES, COURSE_MORE_INFO_REPLY_RULES].join('\n')
     : SUMARÉ_REPLY_RULES
-  return [block, rules].join('\n')
+  return [[ofertaBlock, block].filter(Boolean).join('\n\n'), rules].join('\n')
 }
 
 /**

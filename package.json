@@ -28,6 +28,7 @@
     "db:ensure-grade-curricular": "node --env-file=.env scripts/ensureGradGradeCurricularTable.mjs",
     "register:grade-curricular-rag": "node --env-file=.env scripts/register-grade-curricular-rag.mjs",
     "register:grade-curricular-pos-rag": "node --env-file=.env scripts/register-grade-curricular-pos-rag.mjs",
+    "prune:stale-grade-rag": "node --env-file=.env scripts/prune-stale-grade-rag.mjs",
     "register:grade-curricular-rule30": "node --env-file=.env scripts/register-grade-curricular-rule30.mjs"
   },
   "dependencies": {

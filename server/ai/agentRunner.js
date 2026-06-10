@@ -1130,6 +1130,7 @@ export async function runAgent(env, input) {
           content:
             'PERGUNTA SOBRE CURSO / MODALIDADE / MEC / DISTÂNCIA: o lead quer informações do curso (Pedagogia ou outro citado), valores, como se matricular, ou tem dúvida sobre 100% online / MEC / distância. ' +
             'OBRIGATÓRIO neste turno: chame buscar_conhecimento e buscar_precos para o curso em pauta; informe modalidade EXATA do CONTEXT (EAD ou Semipresencial), duração, mensalidade promocional e preço cheio. ' +
+            'Se existir bloco OFERTA OFICIAL no CONTEXT, cite SOMENTE a(s) modalidade(s) listada(s) — nunca invente EAD + Semipresencial se só uma constar. ' +
             'Se o lead preferir distância e o curso for Semipresencial: explique que combina estudo a distância com encontros presenciais agendados na Central em Pinheiros (Rua Alegrete, 89) — não é 100% EAD quando o CONTEXT disser Semipresencial. ' +
             'Se perguntar como fazer a matrícula: explique que, quando quiser seguir, enviamos o formulário de inscrição aqui no WhatsApp. ' +
             'PROIBIDO neste turno: distribuir_humano ou encaminhar consultor — você TEM as informações na base e deve respondê-las.',
