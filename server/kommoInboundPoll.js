@@ -65,6 +65,7 @@ import {
   messageLooksLikeFormSumarResponse,
 } from '../libShared/inscricaoFormHeuristics.js'
 import { maybeNotifyN8nFormBridge } from './kommoN8nFormBridge.js'
+import { isMirroredInboundNoteId, isMirroredNoteIdSync } from './kommoInboundMirror.js'
 
 /** @type {Map<number, { warmed: boolean, lastNoteId: number }>} */
 const noteState = new Map()
@@ -330,8 +331,11 @@ async function notifyN8nFormBridgeIfEnabled(env, { leadId, sessionId, rawMessage
  * Classifica uma nota do Kommo para o mesmo critério do loop de poll (inbound vs skip).
  * @returns {{ kind: 'push', text: string, nid: number } | { kind: 'skip', reason: string, advance: boolean, nid: number }}
  */
-function classifyInboundNote(n, env, contactDigits, types) {
+function classifyInboundNote(n, env, contactDigits, types, leadId = null) {
   const nid = Number(n.id) || 0
+  if (leadId != null && isMirroredNoteIdSync(leadId, nid)) {
+    return { kind: 'skip', reason: 'mirror_echo', advance: true, nid }
+  }
   if (isOutboundNoteType(n.note_type)) {
     return { kind: 'skip', reason: 'outbound_type', advance: true, nid }
   }
@@ -604,9 +608,15 @@ async function pollNotes(env, leadId, sessionId, contactDigits) {
   let filteredOutbound = 0
   let filteredOtherPhone = 0
   let filteredCrmSummary = 0
+  let filteredMirror = 0
   for (const n of asc) {
     const nid = Number(n.id)
-    const c = classifyInboundNote(n, env, contactDigits, types)
+    if (await isMirroredInboundNoteId(env, lid, nid)) {
+      maxApplied = Math.max(maxApplied, nid)
+      filteredMirror += 1
+      continue
+    }
+    const c = classifyInboundNote(n, env, contactDigits, types, lid)
     if (c.kind === 'push') {
       await pushMessage(env, sessionId, c.text, { skipDedupe: true })
       if (c.text === FORM_SUMAR_FLOW_COMPLETED_MARKER) {

@@ -346,6 +346,32 @@ export async function createLeadNote(env, leadId, text) {
 }
 
 /**
+ * Nota de SMS/WhatsApp inbound — exibe a fala do candidato no timeline Kommo.
+ * @returns { ok, status?, noteId?, error? }
+ */
+export async function createLeadSmsInNote(env, leadId, text, phone) {
+  if (leadId == null || leadId === '') {
+    return { ok: false, code: 'MISSING_LEAD_ID', error: 'leadId ausente' }
+  }
+  const body = {
+    note_type: 'sms_in',
+    params: {
+      text: String(text ?? ''),
+      phone: String(phone || '').trim() || undefined,
+    },
+  }
+  if (!body.params.phone) delete body.params.phone
+  const r = await kommoFetch(env, `/api/v4/leads/${leadId}/notes`, {
+    method: 'POST',
+    body: [body],
+  })
+  if (!r.ok) {
+    return { ok: false, code: r.code || 'KOMMO_ERROR', status: r.status, error: summarizeError(r) }
+  }
+  return { ok: true, status: r.status, data: r.data, noteId: extractCreatedNoteId(r.data) }
+}
+
+/**
  * Cria uma nota INTERNA de auditoria no lead (movimentação de funil, motivo de
  * perda, comprovante recebido, etc.). Injeta o marcador `AGENT_AUDIT_NOTE_MARKER`
  * para que o poll de inbound (kommoInboundPoll) nunca a leia como fala do
