@@ -528,6 +528,7 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
     //   - recebimento e validação do comprovante de pagamento
     // Qualquer outra mensagem é ignorada — candidato lê o contrato, aceita e paga
     // pelo portal Sumaré; só volta IA quando consultor liberar.
+    await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE).catch(() => {})
     const pauseRes = await pauseAtendimentoIa(env, telefone)
     steps.unshift({ type: 'ia_paused', ok: pauseRes.ok, reason: 'aguardando_aceite_contrato' })
   } else if (captacaoFailedTerminal && !matriculaOk) {

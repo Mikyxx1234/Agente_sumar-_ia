@@ -7,6 +7,10 @@
 export const DADOS_CLIENTE_INSCRICAO_SELECT =
   'id,telefone,inscricao_form_status,inscricao_form_recebido_at,atendimento_ia'
 
+/** SELECT para bloquear reenvio indevido do Formulario_Sum. */
+export const DADOS_CLIENTE_FORM_GUARD_SELECT =
+  `${DADOS_CLIENTE_INSCRICAO_SELECT},captacao_candidato_id,captacao_contrato_link,captacao_contrato_link_at`
+
 /**
  * SELECT estendido para o fluxo express via card Kommo
  * (Plano_Inscricao_CardKommo): inclui as colunas espelhadas do card.

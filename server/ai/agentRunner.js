@@ -63,7 +63,9 @@ import {
   messageLooksLikeFormFollowUp,
   INSCRICAO_FORM_STATUS_AGUARDANDO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
   matriculaPosFormAlreadyProcessed,
+  inscricaoFormAlreadyFilled,
   messageConfirmsProceedToInscricaoForm,
   isShortEnrollmentConfirmation,
   assistantInEnrollmentStep,
@@ -1013,19 +1015,42 @@ export async function runAgent(env, input) {
     (conversationHasActiveTopic(historyMessages) ||
       Boolean(extractDiscussedCourseFromHistory(historyMessages)))
 
+  const inscricaoStage = inscricaoStageInfo?.stage || formFlowCtx.stageBefore || null
+  const formPastOrAwaiting =
+    inscricaoStage === INSCRICAO_FORM_STATUS_AGUARDANDO ||
+    inscricaoStage === INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE ||
+    (inscricaoStage && inscricaoFormAlreadyFilled({ inscricao_form_status: inscricaoStage }))
+
   const enrollmentConfirmHint =
     enrollmentContinuation && !messageAsksCoursePrice(userMessage)
-      ? {
-          role: 'system',
-          content:
-            'CONFIRMAÇÃO DE MATRÍCULA: o lead respondeu de forma afirmativa após você perguntar sobre inscrição/matrícula no curso em pauta. ' +
-            `Curso em discussão: ${extractDiscussedCourseFromHistory(historyMessages) || 'ver sum_Curso/histórico'}. ` +
-            'OBRIGATÓRIO neste turno: chame a tool enviar_form_sumar_inscricao com o curso confirmado. ' +
-            'Se o polo ainda não foi escolhido, o servidor automaticamente pedirá polo ao lead — você não precisa narrar isso, apenas chame a tool. ' +
-            'Quando o lead responder polo (1-5 ou nome), chame registrar_polo_inscricao com o polo_id correspondente. ' +
-            'Polos válidos: São Miguel (sao_miguel), Barra Funda (barra_funda), Tatuapé (tatuape), Santana (santana), Pinheiros (pinheiros). ' +
-            'Se pedir outro polo fora da lista, NÃO chame tool — apenas informe que por este WhatsApp só há esses 5 polos.',
-        }
+      ? inscricaoStage === INSCRICAO_FORM_STATUS_AGUARDANDO
+        ? {
+            role: 'system',
+            content:
+              'FORMULÁRIO JÁ ENVIADO: o lead confirmou matrícula, mas o Form Sumar já foi ativado nesta conversa. ' +
+              'PROIBIDO chamar enviar_form_sumar_inscricao ou registrar_polo_inscricao de novo (gera loop). ' +
+              'Peça gentilmente que preencha o formulário que já está no WhatsApp e ofereça ajuda com campos.',
+          }
+        : inscricaoStage === INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE
+          ? {
+              role: 'system',
+              content:
+                'INSCRIÇÃO EM ANDAMENTO: o lead já preencheu o formulário e recebeu o link de pagamento/contrato. ' +
+                'PROIBIDO reenviar formulário. Se pedir link de pagamento, informe que pode reenviar o link — não ative Formulario_Sum.',
+            }
+          : formPastOrAwaiting
+            ? null
+            : {
+                role: 'system',
+                content:
+                  'CONFIRMAÇÃO DE MATRÍCULA: o lead respondeu de forma afirmativa após você perguntar sobre inscrição/matrícula no curso em pauta. ' +
+                  `Curso em discussão: ${extractDiscussedCourseFromHistory(historyMessages) || 'ver sum_Curso/histórico'}. ` +
+                  'OBRIGATÓRIO neste turno: chame a tool enviar_form_sumar_inscricao com o curso confirmado. ' +
+                  'Se o polo ainda não foi escolhido, o servidor automaticamente pedirá polo ao lead — você não precisa narrar isso, apenas chame a tool. ' +
+                  'Quando o lead responder polo (1-5 ou nome), chame registrar_polo_inscricao com o polo_id correspondente. ' +
+                  'Polos válidos: São Miguel (sao_miguel), Barra Funda (barra_funda), Tatuapé (tatuape), Santana (santana), Pinheiros (pinheiros). ' +
+                  'Se pedir outro polo fora da lista, NÃO chame tool — apenas informe que por este WhatsApp só há esses 5 polos.',
+              }
       : null
 
   // Hint sempre injetado: ensina o LLM a usar as 3 tools de ação ao invés
@@ -1039,6 +1064,11 @@ export async function runAgent(env, input) {
           '- enviar_form_sumar_inscricao(telefone, curso[, polo_id]): chame quando o lead confirma matrícula em um curso específico. Se o polo ainda não foi escolhido, o servidor pede polo automaticamente.\n' +
           '- registrar_polo_inscricao(telefone, polo_id): chame quando o lead responde polo (1-5 ou nome). polo_id ∈ {sao_miguel, barra_funda, tatuape, santana, pinheiros}.\n' +
           '- confirmar_recebimento_formulario(telefone): chame quando o lead diz "pronto", "preenchi", "feito", "ok" após o estado aguardando_form_sumar.\n' +
+          (inscricaoStage === INSCRICAO_FORM_STATUS_AGUARDANDO
+            ? 'ESTADO ATUAL: aguardando_form_sumar — PROIBIDO chamar enviar_form_sumar_inscricao de novo; só oriente o lead a preencher o formulário já enviado.\n'
+            : inscricaoStage === INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE
+              ? 'ESTADO ATUAL: aguardando_aceite_contrato — PROIBIDO reenviar formulário; só link de pagamento se o lead pedir.\n'
+              : '') +
           'Se nenhuma tool se aplica, apenas conduza a conversa (explique cursos, peça polo, peça confirmação) — SEM narrar ações que não aconteceram.',
       }
     : null

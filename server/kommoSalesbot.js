@@ -10,6 +10,7 @@
 
 import { createLeadNote } from './kommoClient.js'
 import { kommoRawFetch } from './kommoRateLimiter.js'
+import { getMessageBufferRedis } from './evolution/messageBuffer.js'
 
 const DEFAULT_BOT_CONSULTOR = 49777
 const DEFAULT_BOT_DISTRIBUICAO_FORM = 49777
@@ -156,6 +157,21 @@ export async function runKommoSalesbot(env, idLead, motivo = 'consultor', opts =
   }
 }
 
+async function tryRedisSalesbotDedupe(env, dedupeKey, dedupeMs) {
+  try {
+    const { client, keyPrefix } = await getMessageBufferRedis(env)
+    if (!client) return { allow: true, reason: 'no_redis' }
+    const key = `${keyPrefix || 'wa:msg:'}salesbot:run:v1:${dedupeKey}`
+    const ttlSec = Math.max(60, Math.ceil(dedupeMs / 1000))
+    const res = await client.set(key, String(Date.now()), 'EX', ttlSec, 'NX')
+    if (res === 'OK') return { allow: true, reason: 'redis_nx' }
+    return { allow: false, reason: 'redis_busy' }
+  } catch (err) {
+    console.warn('[kommoSalesbot] redis dedupe falhou:', err.message)
+    return { allow: true, reason: 'redis_error_allow' }
+  }
+}
+
 async function runKommoSalesbotOnce(env, ctx) {
   const { leadId, kind, botId, dedupeKey, kommoBase, kommoToken, note, force } = ctx
   const lastRun = _salesbotRunCache.get(dedupeKey)
@@ -171,6 +187,24 @@ async function runKommoSalesbotOnce(env, ctx) {
       botId,
       motivo: kind,
       text: 'salesbot já disparado recentemente para este lead',
+    }
+  }
+
+  if (!force) {
+    const redisDedupe = await tryRedisSalesbotDedupe(env, dedupeKey, dedupeMs)
+    if (!redisDedupe.allow) {
+      _salesbotRunCache.set(dedupeKey, Date.now())
+      console.log(
+        `[kommoSalesbot] dedupe redis lead=${leadId} bot=${botId} motivo=${kind} (${redisDedupe.reason})`,
+      )
+      return {
+        ok: true,
+        skipped: true,
+        reason: 'dedupe_redis',
+        botId,
+        motivo: kind,
+        text: 'salesbot já disparado recentemente para este lead (redis)',
+      }
     }
   }
 

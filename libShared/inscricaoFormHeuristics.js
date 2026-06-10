@@ -104,6 +104,39 @@ export function inscricaoFormAlreadyFilled(row) {
   return false
 }
 
+/** Captação ou pós-form já avançou — não reativar salesbot Formulario_Sum. */
+export function captacaoOrPosFormAdvanced(row) {
+  if (!row || typeof row !== 'object') return false
+  if (row.captacao_candidato_id != null && String(row.captacao_candidato_id).trim() !== '') return true
+  if (row.captacao_contrato_link != null && String(row.captacao_contrato_link).trim() !== '') return true
+  if (row.captacao_contrato_link_at) return true
+  return false
+}
+
+/**
+ * Bloqueia reenvio do Formulario_Sum (salesbot/template).
+ * @param {boolean} [opts.allowExplicitResend] — lead pediu reenvio explícito
+ */
+export function shouldBlockFormularioSumResend(row, opts = {}) {
+  if (opts.allowExplicitResend) return false
+  if (!row || typeof row !== 'object') return false
+  if (inscricaoFormAlreadyFilled(row)) return true
+  if (matriculaPosFormAlreadyProcessed(row)) return true
+  if (captacaoOrPosFormAdvanced(row)) return true
+  const status = String(row.inscricao_form_status || '').trim()
+  if (status === INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE) return true
+  return false
+}
+
+export function buildFormAwaitingFillReply(opts = {}) {
+  const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
+  return (
+    `Oi${nameBit}! O formulário de inscrição já foi enviado aqui no WhatsApp. ` +
+    `Quando terminar de preencher e enviar, seguimos automaticamente com o próximo passo. ` +
+    `Precisa de ajuda com algum campo?`
+  )
+}
+
 /** Lead cobra o formulário que ainda não chegou. */
 export function messageAsksForFormResend(text) {
   const t = normalizeMessageForScope(text).toLowerCase()

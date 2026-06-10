@@ -24,7 +24,10 @@ import {
   INSCRICAO_FORM_STATUS_AGUARDANDO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM,
   INSCRICAO_FORM_STATUS_CONCLUIDO,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
   buildInscricaoFormSentReply,
+  buildFormAwaitingFillReply,
+  shouldBlockFormularioSumResend,
 } from '../libShared/inscricaoFormHeuristics.js'
 import {
   SUMARE_POLOS_EAD,
@@ -44,6 +47,7 @@ import { findLeadByPhone } from './kommoClient.js'
 import { deliverInscricaoForm } from './inscricaoFormFlow.js'
 import { executeCaptacaoAfterFormResolved } from './inscricaoPostFormPipeline.js'
 import { fetchLeadFormSnapshot } from './inscricaoKommoFields.js'
+import { DADOS_CLIENTE_FORM_GUARD_SELECT } from './dadosClienteInscricaoFields.js'
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
 
@@ -130,6 +134,27 @@ export async function runEnviarFormSumarInscricao(env, args = {}, ctx = {}) {
   }
 
   const leadId = await resolveLeadId(env, telefone, ctx.leadId)
+
+  const guardRow = await fetchDadosClienteByTelefone(env, telefone, DADOS_CLIENTE_FORM_GUARD_SELECT)
+  if (shouldBlockFormularioSumResend(guardRow)) {
+    const status = guardRow?.[FORM_STATUS_FIELD] ?? null
+    const reply =
+      status === INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE
+        ? 'Já recebemos seu formulário e enviamos o link para concluir a matrícula. Se precisar do link de pagamento de novo, é só pedir por aqui.'
+        : buildFormAwaitingFillReply({ pushName })
+    return {
+      ok: true,
+      code: 'FORM_ALREADY_SENT',
+      text: 'Formulário já enviado ou inscrição já avançou — não reativar Formulario_Sum.',
+      replyOverride: reply,
+      ctxSnapshot: {
+        inscricaoActionTool: 'enviar_form_sumar_inscricao',
+        inscricaoForm: status || 'blocked_resend',
+        blockedResend: true,
+      },
+      steps: [{ type: 'tool_action', tool: 'enviar_form_sumar_inscricao', ok: true, code: 'FORM_ALREADY_SENT' }],
+    }
+  }
 
   let polo = null
   let unidade = null
@@ -283,6 +308,24 @@ export async function runRegistrarPoloInscricao(env, args = {}, ctx = {}) {
 
   const leadId = await resolveLeadId(env, telefone, ctx.leadId)
   const unidade = resolvePoloUnidadeCode(polo.id, env)
+
+  const guardRow = await fetchDadosClienteByTelefone(env, telefone, DADOS_CLIENTE_FORM_GUARD_SELECT)
+  if (shouldBlockFormularioSumResend(guardRow)) {
+    return {
+      ok: true,
+      code: 'FORM_ALREADY_SENT',
+      text: 'Polo reconhecido, mas formulário já foi enviado — não reativar Formulario_Sum.',
+      replyOverride: buildFormAwaitingFillReply({ pushName }),
+      ctxSnapshot: {
+        inscricaoActionTool: 'registrar_polo_inscricao',
+        inscricaoForm: guardRow?.[FORM_STATUS_FIELD] || 'blocked_resend',
+        poloId: polo.id,
+        blockedResend: true,
+      },
+      steps: [{ type: 'tool_action', tool: 'registrar_polo_inscricao', ok: true, code: 'FORM_ALREADY_SENT' }],
+    }
+  }
+
   await gravarPoloEStatusAguardando(env, { telefone, leadId, polo, unidade }).catch(() => {})
 
   const delivery = await deliverInscricaoForm(env, {

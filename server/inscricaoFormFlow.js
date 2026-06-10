@@ -21,6 +21,7 @@ import {
   lastAssistantText,
   assistantInEnrollmentStep,
   isShortEnrollmentConfirmation,
+  shouldBlockFormularioSumResend,
 } from '../libShared/inscricaoFormHeuristics.js'
 import { messageLooksLikeOperationalChat } from '../libShared/scopeHeuristics.js'
 import { messageAsksCoursePrice, sanitizeLeadInboundMessage } from '../libShared/inboundMessageSanitize.js'
@@ -45,7 +46,7 @@ import {
   filterHistoryMessagesForAgent,
   isAssistantFormSendPromiseOnly,
 } from '../libShared/historySanitize.js'
-import { DADOS_CLIENTE_INSCRICAO_SELECT } from './dadosClienteInscricaoFields.js'
+import { DADOS_CLIENTE_FORM_GUARD_SELECT, DADOS_CLIENTE_INSCRICAO_SELECT } from './dadosClienteInscricaoFields.js'
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
 
@@ -201,6 +202,24 @@ async function resolvePoloEscolhidoParaForm(env, telefone, leadId) {
 
 /** Dispara salesbot Formulario_Sum ou template Meta (fallback legado). */
 export async function deliverInscricaoForm(env, { telefone, leadId, executionId, forceResend = false }) {
+  if (!forceResend && telefone) {
+    const guardRow = await fetchDadosClienteByTelefone(env, telefone, DADOS_CLIENTE_FORM_GUARD_SELECT)
+    if (shouldBlockFormularioSumResend(guardRow)) {
+      console.log(
+        `[inscricaoForm] deliver BLOCKED telefone=${telefone} status=${guardRow?.inscricao_form_status || 'n/a'} candidato=${guardRow?.captacao_candidato_id || 'n/a'}`,
+      )
+      return {
+        delivery: 'kommo_salesbot',
+        result: {
+          ok: false,
+          skipped: true,
+          code: 'FORM_ALREADY_SENT',
+          reason: 'form_already_sent_or_past_form',
+        },
+      }
+    }
+  }
+
   if (useWhatsappTemplateDelivery(env)) {
     return {
       delivery: 'whatsapp_template',

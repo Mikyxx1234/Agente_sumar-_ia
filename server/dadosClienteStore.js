@@ -69,11 +69,19 @@ export function decideHoldOnIaPause(row) {
   if (row?.inscricao_form_status === 'desistencia_concluida') {
     return { hold: false, paused: true, reason: 'desistencia_concluida' }
   }
-  // Rede de segurança: pause NUNCA é legítimo no estágio 'aguardando_form_sumar'
-  // (a IA deveria estar conversando enquanto espera o formulário). Pause aqui é
-  // resíduo de um disparo indevido (ex.: formulário vazio `n/a`) — destrava.
-  if (String(row?.inscricao_form_status || '').toLowerCase() === 'aguardando_form_sumar') {
+  const status = String(row?.inscricao_form_status || '').toLowerCase()
+  const captacaoStarted =
+    (row?.captacao_candidato_id != null && String(row.captacao_candidato_id).trim() !== '') ||
+    (row?.captacao_contrato_link != null && String(row.captacao_contrato_link).trim() !== '') ||
+    Boolean(row?.captacao_contrato_link_at) ||
+    Boolean(row?.inscricao_form_recebido_at)
+  // Só destrava pause espúrio se ainda aguarda formulário E captação não avançou.
+  // Se captação/link já existe com status stale, mantém hold (evita loop de reenvio).
+  if (status === 'aguardando_form_sumar' && !captacaoStarted) {
     return { hold: false, paused: true, reason: 'spurious_form_pause', clearPause: true }
+  }
+  if (status === 'aguardando_aceite_contrato' || captacaoStarted) {
+    return { hold: true, paused: true, reason: 'aguardando_aceite_ou_captacao' }
   }
   return { hold: true, paused: true, reason: null }
 }
@@ -97,7 +105,7 @@ export async function shouldHoldOnIaPause(env, telefone) {
   const row = await fetchDadosClienteByTelefone(
     env,
     telefone,
-    'atendimento_ia,inscricao_form_status',
+    'atendimento_ia,inscricao_form_status,inscricao_form_recebido_at,captacao_candidato_id,captacao_contrato_link,captacao_contrato_link_at',
   )
   const decision = decideHoldOnIaPause(row)
   if (decision.clearPause) {
