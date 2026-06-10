@@ -11,7 +11,13 @@ import {
   firstName,
   resolveGradeForPdf,
 } from '../libShared/gradeCurricularPdfService.js'
-import { messageAsksGradePdf, messageAsksGradeCurricular } from '../libShared/inboundMessageSanitize.js'
+import {
+  messageAsksGradePdf,
+  extractLeadTextAfterAgentEcho,
+  sanitizeLeadInboundMessage,
+  messageAsksCampusOrPhoneContact,
+  messageAsksLocationInfo,
+} from '../libShared/inboundMessageSanitize.js'
 
 function detectNivel({ curso, userMessage, kommoCurso, kommoModalidade }) {
   const blob = `${curso} ${userMessage || ''} ${kommoCurso || ''}`.toLowerCase()
@@ -149,11 +155,15 @@ export async function runEnviarGradePdf(env, args, flowCtx = {}) {
 export async function tryHandleGradePdfRequest(env, flowCtx) {
   const { userMessage, telefone } = flowCtx
   if (!telefone || !userMessage) return null
-  const wantsPdf = messageAsksGradePdf(userMessage)
-  const wantsGrade = messageAsksGradeCurricular(userMessage)
-  if (!wantsPdf && !wantsGrade) return null
 
-  const result = await runEnviarGradePdf(env, { telefone: flowCtx.telefone }, flowCtx)
+  const leadText = sanitizeLeadInboundMessage(extractLeadTextAfterAgentEcho(userMessage) || userMessage)
+  if (!leadText) return null
+  if (messageAsksCampusOrPhoneContact(leadText) || messageAsksLocationInfo(leadText)) return null
+
+  const wantsPdf = messageAsksGradePdf(leadText)
+  if (!wantsPdf) return null
+
+  const result = await runEnviarGradePdf(env, { telefone: flowCtx.telefone }, { ...flowCtx, userMessage: leadText })
   if (!result.ok && (result.code === 'MISSING_CURSO' || result.code === 'GRADE_NOT_FOUND')) return null
   return {
     handled: true,

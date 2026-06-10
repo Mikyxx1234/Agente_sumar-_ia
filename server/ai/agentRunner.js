@@ -94,6 +94,8 @@ import {
   messageAsksCourseInquiry,
   messageAsksGradeCurricular,
   messageAsksGradePdf,
+  messageAsksCampusOrPhoneContact,
+  messageAsksLocationInfo,
   messageAsksOuvidoria,
   sanitizeLeadInboundMessage,
 } from '../../libShared/inboundMessageSanitize.js'
@@ -1086,16 +1088,18 @@ export async function runAgent(env, input) {
       }
     : null
 
-  const locationInfoHint = messageAsksSemipresencialCentral(userMessage)
-    ? {
-        role: 'system',
-        content:
-          'PERGUNTA SOBRE LOCALIZAÇÃO/ENDEREÇO PRESENCIAL (semipresencial): o lead quer saber onde ir para aulas presenciais ou atendimento na Central. ' +
-          'OBRIGATÓRIO neste turno: informe que atualmente TODO o atendimento e as aulas presenciais ocorrem na Central em Pinheiros — Rua Alegrete, 89, Sumaré, São Paulo/SP. ' +
-          'Chame buscar_conhecimento com query "central presencial Pinheiros endereço atendimento aulas Rua Alegrete". ' +
-          'PROIBIDO neste turno: dizer apenas que não há polo na região do lead; PROIBIDO encaminhar consultor (distribuir_humano) só por pergunta de endereço/localização.',
-      }
-    : null
+  const locationInfoHint =
+    messageAsksSemipresencialCentral(userMessage) || messageAsksCampusOrPhoneContact(userMessage)
+      ? {
+          role: 'system',
+          content:
+            'PERGUNTA SOBRE LOCALIZAÇÃO/CONTATO DO CAMPUS OU CENTRAL: o lead quer telefone, contato ou endereço para falar com o campus/Central Sumaré ou saber onde são as aulas presenciais. ' +
+            'OBRIGATÓRIO neste turno: responda PRIMEIRO essa pergunta — informe Central em Pinheiros (Rua Alegrete, 89, Sumaré, São Paulo/SP) e telefone/WhatsApp de contato institucional quando constar no CONTEXT. ' +
+            'Chame buscar_conhecimento com query "central Pinheiros telefone contato campus endereço Rua Alegrete". ' +
+            'Se o lead também pediu link/PDF da grade na mesma mensagem, responda o contato E só depois ofereça/envie a grade (enviar_grade_pdf). ' +
+            'PROIBIDO neste turno: enviar só PDF da grade ignorando a pergunta de contato/campus; PROIBIDO encaminhar consultor só por endereço/telefone.',
+        }
+      : null
 
   const ouvidoriaHint = messageAsksOuvidoria(userMessage)
     ? {
@@ -1136,27 +1140,33 @@ export async function runAgent(env, input) {
     extractDiscussedCourseFromHistory(historyMessages) ||
     extractCursoAreaFromText(userMessage) ||
     'curso em pauta'
-  const gradeCurricularHint = messageAsksGradeCurricular(userMessage)
-    ? {
-        role: 'system',
-        content:
-          'PERGUNTA SOBRE GRADE CURRICULAR / DISCIPLINAS: o lead quer saber o que vai estudar (matérias, disciplinas, grade). ' +
-          `OBRIGATÓRIO neste turno: chame buscar_conhecimento com query incluindo curso e modalidade (ex.: "${discussedCourse} grade curricular disciplinas o que vai aprender"). ` +
-          'Se o CONTEXT trouxer LISTA DE DISCIPLINAS ou STATUS PDF DISPONIVEL: cite 5–8 exemplos + total e chame enviar_grade_pdf(telefone, curso, modalidade) para enviar o PDF completo pelo WhatsApp. ' +
-          'PROIBIDO dizer que não tem PDF quando o CONTEXT indicar grade disponível. ' +
-          'PROIBIDO inventar disciplinas que não estejam no CONTEXT.',
-      }
-    : null
+  const gradeCurricularHint =
+    messageAsksGradeCurricular(userMessage) &&
+    !messageAsksCampusOrPhoneContact(userMessage) &&
+    !messageAsksLocationInfo(userMessage)
+      ? {
+          role: 'system',
+          content:
+            'PERGUNTA SOBRE GRADE CURRICULAR / DISCIPLINAS: o lead quer saber o que vai estudar (matérias, disciplinas, grade). ' +
+            `OBRIGATÓRIO neste turno: chame buscar_conhecimento com query incluindo curso e modalidade (ex.: "${discussedCourse} grade curricular disciplinas o que vai aprender"). ` +
+            'Se o CONTEXT trouxer LISTA DE DISCIPLINAS ou STATUS PDF DISPONIVEL: cite 5–8 exemplos + total. ' +
+            'Só chame enviar_grade_pdf se o lead pedir explicitamente PDF/link/arquivo da grade nesta mensagem (sem outras perguntas). ' +
+            'PROIBIDO inventar disciplinas que não estejam no CONTEXT.',
+        }
+      : null
 
-  const gradePdfHint = messageAsksGradePdf(userMessage)
-    ? {
-        role: 'system',
-        content:
-          'PEDIDO DE PDF DA GRADE: o lead quer receber a grade curricular em PDF. ' +
-          `OBRIGATÓRIO neste turno: chame enviar_grade_pdf com telefone, curso "${discussedCourse}" e modalidade se souber. ` +
-          'Não responda só em texto — o PDF deve ser enviado pela tool. PROIBIDO dizer que não tem PDF se a grade existir na base.',
-      }
-    : null
+  const gradePdfHint =
+    messageAsksGradePdf(userMessage) &&
+    !messageAsksCampusOrPhoneContact(userMessage) &&
+    !messageAsksLocationInfo(userMessage)
+      ? {
+          role: 'system',
+          content:
+            'PEDIDO DE PDF/LINK DA GRADE: o lead quer receber a grade curricular em PDF ou link. ' +
+            `OBRIGATÓRIO neste turno: chame enviar_grade_pdf com telefone, curso "${discussedCourse}" e modalidade se souber. ` +
+            'PROIBIDO dizer que não tem PDF se a grade existir na base.',
+        }
+      : null
 
   const discussedForMore =
     extractDiscussedCourseFromHistory(historyMessages) ||

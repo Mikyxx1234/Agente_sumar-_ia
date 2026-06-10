@@ -5,7 +5,7 @@
 import { normalizeMessageForScope } from './scopeHeuristics.js'
 import { extractCursoAreaFromText } from './cursoConfirmation.js'
 
-export const AGENT_OUTBOUND_SUFFIX = /\s-\sEX-\d{6}-\d{4}-\d{3}\s*$/i
+export const AGENT_OUTBOUND_SUFFIX = /\s-\sEX-\d{6}-\d{4}-\d{3}-[a-z0-9]{4}\s*$/i
 
 /**
  * Marcador estável injetado em TODA nota interna de auditoria criada pelo
@@ -57,12 +57,35 @@ export function isLikelyAgentEcho(text) {
   const raw = String(text || '').trim()
   if (!raw) return false
   if (AGENT_OUTBOUND_SUFFIX.test(raw)) return true
-  if (/\s-\sEX-\d{6}-\d{4}-\d{3}\b/i.test(raw)) return true
+  if (/\s-\sEX-\d{6}-\d{4}-\d{3}-[a-z0-9]{4}\b/i.test(raw)) return true
   const low = raw.toLowerCase()
   if (low.includes('salesbot formulario_sum ativado')) return true
   if (low.includes('registramos o formulário')) return true
+  if (/\b(quer que eu envie|sou o assistente|grade curricular em pdf|posso te ajudar com mais alguma)\b/i.test(low)) {
+    return true
+  }
   if (ASSISTANT_ECHO_START.test(raw) && raw.length > 40) return true
   return false
+}
+
+/**
+ * Kommo costuma concatenar a última resposta do agente (com sufixo EX-…) com a fala do lead.
+ * Retorna só o texto do lead após o último marcador EX-.
+ */
+export function extractLeadTextAfterAgentEcho(text) {
+  const raw = String(text || '').trim()
+  if (!raw) return ''
+  const re = /\s-\sEX-\d{6}-\d{4}-\d{3}-[a-z0-9]{4}\b/gi
+  let lastEnd = -1
+  let m
+  while ((m = re.exec(raw)) !== null) {
+    lastEnd = m.index + m[0].length
+  }
+  if (lastEnd >= 0) {
+    const after = raw.slice(lastEnd).replace(/^[,\s:;]+/, '').trim()
+    if (after.length >= 2) return after
+  }
+  return raw
 }
 
 /** Mensagem do lead pede preço/valores (não é confirmação de matrícula). */
@@ -122,12 +145,24 @@ export function messageAsksPoloAttendimentoList(text) {
 }
 
 /**
+ * Lead pergunta contato/endereço do campus, central ou unidade presencial.
+ */
+export function messageAsksCampusOrPhoneContact(text) {
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (!t || t.length < 4) return false
+  return /\b(campus|zcampis|unidade|central|telefone|whatsapp|falar\s+(no|com|na)|contato\s+(do|da|com|no)|ligar\s+(no|para|na))\b/i.test(
+    t,
+  )
+}
+
+/**
  * Lead pergunta sobre aulas presenciais / Central semipresencial (não confundir com lista de polos EAD).
  */
 export function messageAsksSemipresencialCentral(text) {
   const t = normalizeMessageForScope(text).toLowerCase()
   if (!t || t.length < 4) return false
   if (messageAsksPoloAttendimentoList(text)) return false
+  if (messageAsksCampusOrPhoneContact(text)) return true
   if (
     /\b(aulas?\s+presenciais?|atendimento\s+presencial|central\s+(em\s+)?pinheiros|semipresencial|onde\s+fica.{0,40}(aula|presencial)|rua\s+alegrete|ir\s+presencialmente|me\s+deslocar)\b/i.test(
       t,
@@ -193,14 +228,25 @@ export function messageAsksGradeCurricular(text) {
   )
 }
 
-/** Lead pede PDF/arquivo/anexo da grade curricular. */
+/** Lead pede PDF/arquivo/anexo da grade curricular (somente intenção do lead, sem eco do agente). */
 export function messageAsksGradePdf(text) {
   const t = normalizeMessageForScope(text).toLowerCase()
   if (!t || t.length < 4) return false
+  if (messageAsksCampusOrPhoneContact(t)) return false
   if (/\b(pdf|arquivo|anexo|documento)\b/i.test(t) && /\b(grade|curricular|disciplin|materia|matéria|ementa)\b/i.test(t)) {
     return true
   }
-  return /\b(manda|envia|envie|mande|me\s+manda|me\s+envia|quero\s+o\s+pdf|preciso\s+do\s+pdf|grade\s+em\s+pdf|pdf\s+da\s+grade)\b/i.test(t)
+  if (/\b(manda|envia|envie|mande|me\s+manda|me\s+envia|quero\s+o\s+pdf|preciso\s+do\s+pdf|grade\s+em\s+pdf|pdf\s+da\s+grade)\b/i.test(t)) {
+    return true
+  }
+  if (
+    /\b(lnk|link)\b/i.test(t) &&
+    /\b(passar|manda|envia|envie|mande|quero|preciso|me\s+manda|me\s+passa)\b/i.test(t) &&
+    !/\b(campus|telefone|whatsapp|falar\s+no|contato)\b/i.test(t)
+  ) {
+    return true
+  }
+  return false
 }
 
 /**
@@ -234,7 +280,10 @@ export function sanitizeLeadInboundMessage(text) {
   if (!raw) return ''
   if (inboundLooksLikeContratoLinkEcho(raw)) return ''
 
-  const parts = raw
+  const afterEcho = extractLeadTextAfterAgentEcho(raw)
+  const work = afterEcho !== raw ? afterEcho : raw
+
+  const parts = work
     .split(/,(?=\s*(?:[A-Za-zÀ-ÿ0-9]|Salesbot|Boa|Olá|Perfeito|Desculpe))/)
     .map((p) => p.trim())
     .filter(Boolean)
