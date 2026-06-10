@@ -22,8 +22,6 @@ import {
   isGreetingOnly,
   buildGreetingReply,
   shouldHandoffToHuman,
-  detectHandoffMotivo,
-  buildHumanHandoffReply,
   shouldBypassScopeBlock,
 } from '../../libShared/scopeHeuristics.js'
 import { buildContextualGreetingReply, shouldUseContextualGreetingReply } from '../../libShared/conversationContextHeuristics.js'
@@ -34,7 +32,6 @@ import {
 } from '../../libShared/cursoConfirmation.js'
 import { setSumCursoOnLead } from '../sumareLeadFields.js'
 import { tryHandleUnsupportedCourseLevelInquiry } from '../courseLevelInquiry.js'
-import { runDistribuirHumano, formatDistribuirHumanoReply } from '../distribuirHumanoTool.js'
 import {
   tryHandleInscricaoFormComplete,
   tryHandleInscricaoFormStart,
@@ -55,6 +52,11 @@ import {
   tryHandleInscricaoDesistenciaFlow,
   tryHandleDesistenciaJaRegistrada,
 } from '../inscricaoDesistenciaFlow.js'
+import {
+  startChannelExitConfirm,
+  tryHandleChannelExitConfirmStep,
+  tryHandleSaidaCanalJaEncerrada,
+} from '../humanHandoffFlow.js'
 import {
   messageExpressesCourseInterestOnly,
   messageLooksLikeFormSumarResponse,
@@ -387,6 +389,18 @@ export async function runAgent(env, input) {
       }
     }
 
+    // Saída do canal já concluída (links enviados): responde com os canais
+    // oficiais em vez de silêncio — roda ANTES do gate atendimento_ia=pause.
+    const saidaJaFlow = await tryHandleSaidaCanalJaEncerrada(env, formFlowCtx)
+    if (saidaJaFlow?.handled) {
+      console.log(`[${executionId}] SAIDA_CANAL_JA_ENCERRADA telefone=${telefone}`)
+      return {
+        ...saidaJaFlow.result,
+        historyLoaded: 0,
+        aiMeta: ctx.toAiMeta(),
+      }
+    }
+
   }
 
   // Gate `ia_paused` é responsabilidade do caller (webhookEvolution faz o
@@ -508,6 +522,18 @@ export async function runAgent(env, input) {
         historyLoaded: historyMessages.length,
         aiMeta: ctx.toAiMeta(),
       }
+    }
+  }
+
+  // Saída do canal — passo 2: lead respondendo à pergunta "prefere mesmo não
+  // seguir por aqui?". Confirma → links oficiais + fila 143; recusa → null
+  // (estado limpo, atendimento segue normal). Roda ANTES da desistência para
+  // a resposta não ser confundida com declínio de inscrição.
+  if (telefone) {
+    const exitConfirm = await tryHandleChannelExitConfirmStep(env, formFlowCtx)
+    if (exitConfirm?.handled) {
+      console.log(`[${executionId}] SAIDA_CANAL_CONFIRMADA telefone=${telefone}`)
+      return { ...exitConfirm.result, historyLoaded: historyMessages.length, aiMeta: ctx.toAiMeta() }
     }
   }
 
@@ -763,44 +789,19 @@ export async function runAgent(env, input) {
     }
   }
 
+  // Saída do canal — passo 1: lead pediu atendimento humano. Em vez de ativar
+  // salesbot, pergunta UMA vez se ele realmente não quer seguir pelo canal.
   if (telefone && shouldHandoffToHuman(userMessage, historyMessages)) {
-    const handoffMotivo = detectHandoffMotivo()
-    const dist = await runDistribuirHumano(env, {
+    console.log(`[${executionId}] SAIDA_CANAL_CONFIRM_OFERECIDA telefone=${telefone}`)
+    const result = await startChannelExitConfirm(env, {
       telefone,
-      id_lead: leadId,
-      motivo: handoffMotivo,
-    })
-    if (dist._meta?.toolUsage) {
-      for (const u of dist._meta.toolUsage) ctx.recordToolUsage(u)
-    }
-    const salesbotStep = dist.steps?.find((s) => s.step === 'kommo_salesbot')
-    const pauseStep = dist.steps?.find((s) => s.step === 'supabase_dados_cliente_pause')
-    const handoffOk = Boolean(dist.ok && pauseStep?.ok)
-    console.log(
-      `[${executionId}] AUTO_DISTRIBUIR_HUMANO motivo=${handoffMotivo} ok=${dist.ok} salesbot_ok=${salesbotStep?.ok} bot_id=${salesbotStep?.bot_id ?? 'n/a'} mode=${dist.handoff_mode ?? 'n/a'}`,
-    )
-    return {
-      ok: true,
-      reply: buildHumanHandoffReply({ ok: handoffOk, pushName: input?.pushName, motivo: handoffMotivo }),
-      distribuirHumanoHandled: true,
-      toolCalls: [
-        {
-          tool: 'distribuir_humano',
-          args: { telefone, id_lead: leadId, motivo: handoffMotivo },
-          result: formatDistribuirHumanoReply(dist),
-          ok: handoffOk,
-          steps: dist.steps,
-        },
-      ],
-      orchestratorSteps: [{ type: 'auto_distribuir_humano', ok: dist.ok, durationMs: Date.now() - t0 }],
-      ctxSnapshot: { autoDistribuirHumano: true, distribuirOk: dist.ok },
-      usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-      durationMs: Date.now() - t0,
-      historyLoaded: historyMessages.length,
+      leadId,
       executionId,
       model,
-      aiMeta: ctx.toAiMeta(),
-    }
+      pushName: input?.pushName,
+      t0,
+    })
+    return { ...result, historyLoaded: historyMessages.length, aiMeta: ctx.toAiMeta() }
   }
 
   let skipScopeCheck =

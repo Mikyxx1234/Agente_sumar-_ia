@@ -26,6 +26,7 @@ import {
   runConfirmarRecebimentoFormulario,
 } from '../inscricaoActionTools.js'
 import { runEnviarGradePdf } from '../gradeCurricularActionTools.js'
+import { startChannelExitConfirm } from '../humanHandoffFlow.js'
 
 async function getEmbedding(env, text, ctx, toolName) {
   const apiKey = env.OPENAI_API_KEY || env.VITE_OPENAI_API_KEY
@@ -301,12 +302,29 @@ export function buildToolExecutors(env, ctx, flowCtx = {}) {
           r.ok ? r.message : `Atenção: ${r.message || r.result?.error}`,
         ].join('\n')
       }
-      const r = await runDistribuirHumano(env, {
-        ...args,
-        motivo: kind === 'matricula_pos_form' ? 'matricula_pos_form' : 'consultor',
+      if (kind === 'matricula_pos_form') {
+        const r = await runDistribuirHumano(env, { ...args, motivo: 'matricula_pos_form' })
+        absorbToolMeta(safeCtx, r)
+        return formatDistribuirResult(r)
+      }
+      // Pedido de humano / dúvida sem solução: NÃO ativa mais salesbot.
+      // Fluxo de saída do canal: pergunta de confirmação → se o lead
+      // confirmar, o sistema envia os links oficiais e move pra fila 143.
+      const telefone = args?.telefone || flowCtx.telefone
+      const result = await startChannelExitConfirm(env, {
+        telefone,
+        leadId: args?.id_lead ?? args?.idLead ?? flowCtx.leadId,
+        executionId: flowCtx.executionId,
+        model: flowCtx.model,
+        pushName: flowCtx.pushName,
+        t0: flowCtx.t0,
       })
-      absorbToolMeta(safeCtx, r)
-      return formatDistribuirResult(r)
+      return [
+        'Fluxo de saída do canal iniciado (NENHUM consultor/salesbot foi acionado).',
+        'INSTRUÇÃO: responda ao lead EXATAMENTE com a pergunta abaixo, sem prometer consultor nem contato da equipe:',
+        '',
+        result.reply,
+      ].join('\n')
     },
     buscar_historico_conversa: async (args) => {
       const out = await runBuscarHistorico(env, args)

@@ -237,8 +237,11 @@ export const TOOL_DEFINITIONS = [
     function: {
       name: 'distribuir_humano',
       description:
-        'Encaminha o lead para um consultor humano. Use SOMENTE quando: (1) o lead pedir EXPLICITAMENTE humano/atendente/consultor; ' +
+        'Inicia o FLUXO DE SAÍDA DO CANAL (não aciona consultor): a tool retorna a pergunta de confirmação que você deve enviar ao lead ' +
+        '("prefere mesmo não seguir o atendimento por aqui?"). Se o lead confirmar, o sistema envia os links oficiais da Sumaré (atendimento e ouvidoria) e encerra. ' +
+        'Use SOMENTE quando: (1) o lead pedir EXPLICITAMENTE humano/atendente/consultor; ' +
         '(2) negociação especial, reclamação grave, ou caso que a base de conhecimento não cobre após buscar_conhecimento/buscar_perguntas. ' +
+        'NUNCA prometa que um consultor entrará em contato — isso não acontece mais. ' +
         'NÃO use para: informar curso, preços, dúvidas sobre matrícula, áudio do lead, ou "quero continuar com a matrícula" — nesses casos use buscar_conhecimento e conduza o atendimento; o formulário Form Sumar é disparado pelo sistema após confirmação do lead. ' +
         'O sistema localiza o lead pelo telefone automaticamente — você NÃO precisa passar id_lead se não souber.',
       parameters: {
