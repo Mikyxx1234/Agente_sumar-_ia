@@ -202,12 +202,18 @@ export const TOOL_DEFINITIONS = [
         'CHAME OBRIGATORIAMENTE quando o lead pedir grade curricular, disciplinas, matérias, o que vai aprender, PDF ou arquivo da grade, ' +
         'ou quando o CONTEXT tiver LISTA DE DISCIPLINAS / STATUS PDF DISPONIVEL. ' +
         'Prioridade: enviar PDF; link do site só se o PDF não puder ser gerado. ' +
-        'Funciona para graduação e pós-graduação (EAD, Semipresencial, Híbrido).',
+        'Funciona para graduação e pós-graduação (EAD, Semipresencial, Híbrido). ' +
+        'IMPORTANTE: cursos com mais de um grau (ex.: Educação Física tem Bacharelado E Licenciatura) têm GRADES DIFERENTES — ' +
+        'inclua o grau no campo "curso" (ex.: "Educação Física Licenciatura"). Se o lead não disse o grau, PERGUNTE antes de enviar.',
       parameters: {
         type: 'object',
         properties: {
           telefone: { type: 'string', description: 'Telefone do lead (Contexto do atendimento).' },
-          curso: { type: 'string', description: 'Nome do curso (ex.: "Segurança da Informação", "Pedagogia").' },
+          curso: {
+            type: 'string',
+            description:
+              'Nome do curso, INCLUINDO o grau quando o curso tiver mais de um (ex.: "Educação Física Licenciatura", "Educação Física Bacharelado", "Pedagogia").',
+          },
           modalidade: {
             type: 'string',
             description: 'OPCIONAL — EAD, Semipresencial ou Híbrido, se souber.',

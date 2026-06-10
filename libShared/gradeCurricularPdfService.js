@@ -97,6 +97,44 @@ export function findGradeRow(input) {
   return bestScore >= 4 ? best : null
 }
 
+/** Extrai o grau (bacharelado/licenciatura/tecnologo) do nome de um curso. */
+export function grauFromCourseName(name) {
+  const n = norm(name)
+  if (/\blicenciatura\b/.test(n)) return 'licenciatura'
+  if (/bacharel/.test(n)) return 'bacharelado'
+  if (/tecnolog/.test(n)) return 'tecnologo'
+  return null
+}
+
+/**
+ * Lista os graus distintos disponíveis para um curso (ex.: Educação Física tem
+ * Bacharelado + Licenciatura, com grades diferentes). Usado para desambiguar
+ * antes de gerar o PDF e evitar enviar o grau errado.
+ * @param {{ curso: string, nivel?: 'grad'|'pos'|null }} input
+ * @returns {string[]}
+ */
+export function listGradeGrausForCurso({ curso, nivel } = {}) {
+  const cursoNorm = norm(curso)
+  if (!cursoNorm) return []
+  const cursoTokens = tokens(cursoNorm).filter(
+    (t) => !['bacharelado', 'bacharel', 'licenciatura', 'tecnologo', 'tecnologia'].includes(t),
+  )
+  if (!cursoTokens.length) return []
+  const niveis = nivel ? [nivel] : ['pos', 'grad']
+  const graus = new Set()
+  for (const n of niveis) {
+    for (const row of loadRows(n)) {
+      const nomeNorm = norm(row.nome)
+      const idNorm = norm(row.id)
+      const matches = cursoTokens.every((t) => nomeNorm.includes(t) || idNorm.includes(t))
+      if (!matches) continue
+      const g = grauFromCourseName(row.nome) || grauFromCourseName(row.id)
+      if (g) graus.add(g)
+    }
+  }
+  return [...graus]
+}
+
 function pdfDefaultsForRow(row) {
   const isPos = row.nivel === 'pos'
   return {
