@@ -223,9 +223,16 @@ export function messageAsksCourseInquiry(text) {
 export function messageAsksGradeCurricular(text) {
   const t = normalizeMessageForScope(text).toLowerCase()
   if (!t || t.length < 6) return false
-  return /\b(grade\s+curricular|grade\s+do\s+curso|matriz\s+curricular|ementa|o\s+que\s+vou\s+aprender|o\s+que\s+voce\s+vai\s+aprender|quais\s+(materias|matérias|disciplinas)|disciplinas\s+do\s+curso|lista\s+de\s+(materias|matérias|disciplinas)|conteudo\s+do\s+curso|conteúdo\s+do\s+curso)\b/i.test(
-    t,
-  )
+  if (
+    /\b(grade\s+curricular|grade\s+do\s+curso|matriz\s+curricular|ementa|o\s+que\s+vou\s+aprender|o\s+que\s+voce\s+vai\s+aprender|quais\s+(materias|matérias|disciplinas)|disciplinas\s+do\s+curso|lista\s+de\s+(materias|matérias|disciplinas)|conteudo\s+do\s+curso|conteúdo\s+do\s+curso)\b/i.test(
+      t,
+    )
+  ) {
+    return true
+  }
+  if (/\b(manda|envia|envie|mande|passa|me\s+(manda|envia|passa)).{0,30}\bgrade\b/i.test(t)) return true
+  if (/\binforma\w*\s+.{0,25}\bgrade\b/i.test(t)) return true
+  return false
 }
 
 /** Lead pede PDF/arquivo/anexo da grade curricular (somente intenção do lead, sem eco do agente). */

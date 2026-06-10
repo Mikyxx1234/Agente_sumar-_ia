@@ -199,8 +199,9 @@ export const TOOL_DEFINITIONS = [
       name: 'enviar_grade_pdf',
       description:
         'Gera e envia a grade curricular completa em PDF pelo WhatsApp. ' +
-        'CHAME quando o CONTEXT tiver grade curricular (LISTA DE DISCIPLINAS / STATUS PDF DISPONIVEL) ' +
-        'ou quando o lead pedir PDF/arquivo da grade. ' +
+        'CHAME OBRIGATORIAMENTE quando o lead pedir grade curricular, disciplinas, matérias, o que vai aprender, PDF ou arquivo da grade, ' +
+        'ou quando o CONTEXT tiver LISTA DE DISCIPLINAS / STATUS PDF DISPONIVEL. ' +
+        'Prioridade: enviar PDF; link do site só se o PDF não puder ser gerado. ' +
         'Funciona para graduação e pós-graduação (EAD, Semipresencial, Híbrido).',
       parameters: {
         type: 'object',

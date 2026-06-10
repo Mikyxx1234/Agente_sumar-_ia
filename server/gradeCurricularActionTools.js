@@ -13,6 +13,10 @@ import {
 } from '../libShared/gradeCurricularPdfService.js'
 import {
   messageAsksGradePdf,
+  messageAsksGradeCurricular,
+  messageAsksCoursePrice,
+  messageAsksPaymentInfo,
+  messageAsksCourseInquiry,
   extractLeadTextAfterAgentEcho,
   sanitizeLeadInboundMessage,
   messageAsksCampusOrPhoneContact,
@@ -149,8 +153,21 @@ export async function runEnviarGradePdf(env, args, flowCtx = {}) {
   }
 }
 
+function shouldAutoSendGradePdf(leadText) {
+  const asksGrade = messageAsksGradeCurricular(leadText) || messageAsksGradePdf(leadText)
+  if (!asksGrade) return false
+  if (messageAsksCampusOrPhoneContact(leadText) || messageAsksLocationInfo(leadText)) return false
+  if (messageAsksGradePdf(leadText)) return true
+  return (
+    messageAsksGradeCurricular(leadText) &&
+    !messageAsksCoursePrice(leadText) &&
+    !messageAsksPaymentInfo(leadText) &&
+    !messageAsksCourseInquiry(leadText)
+  )
+}
+
 /**
- * Handler pré-LLM: lead pediu PDF da grade explicitamente.
+ * Handler pré-LLM: lead pediu grade curricular ou PDF — envia PDF direto quando possível.
  */
 export async function tryHandleGradePdfRequest(env, flowCtx) {
   const { userMessage, telefone } = flowCtx
@@ -158,10 +175,7 @@ export async function tryHandleGradePdfRequest(env, flowCtx) {
 
   const leadText = sanitizeLeadInboundMessage(extractLeadTextAfterAgentEcho(userMessage) || userMessage)
   if (!leadText) return null
-  if (messageAsksCampusOrPhoneContact(leadText) || messageAsksLocationInfo(leadText)) return null
-
-  const wantsPdf = messageAsksGradePdf(leadText)
-  if (!wantsPdf) return null
+  if (!shouldAutoSendGradePdf(leadText)) return null
 
   const result = await runEnviarGradePdf(env, { telefone: flowCtx.telefone }, { ...flowCtx, userMessage: leadText })
   if (!result.ok && (result.code === 'MISSING_CURSO' || result.code === 'GRADE_NOT_FOUND')) return null

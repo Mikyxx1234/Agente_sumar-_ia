@@ -1096,7 +1096,7 @@ export async function runAgent(env, input) {
             'PERGUNTA SOBRE LOCALIZAÇÃO/CONTATO DO CAMPUS OU CENTRAL: o lead quer telefone, contato ou endereço para falar com o campus/Central Sumaré ou saber onde são as aulas presenciais. ' +
             'OBRIGATÓRIO neste turno: responda PRIMEIRO essa pergunta — informe Central em Pinheiros (Rua Alegrete, 89, Sumaré, São Paulo/SP) e telefone/WhatsApp de contato institucional quando constar no CONTEXT. ' +
             'Chame buscar_conhecimento com query "central Pinheiros telefone contato campus endereço Rua Alegrete". ' +
-            'Se o lead também pediu link/PDF da grade na mesma mensagem, responda o contato E só depois ofereça/envie a grade (enviar_grade_pdf). ' +
+            'Se o lead também pediu grade na mesma mensagem, responda o contato E depois chame enviar_grade_pdf (PDF primeiro; link só se PDF indisponível). ' +
             'PROIBIDO neste turno: enviar só PDF da grade ignorando a pergunta de contato/campus; PROIBIDO encaminhar consultor só por endereço/telefone.',
         }
       : null
@@ -1141,31 +1141,20 @@ export async function runAgent(env, input) {
     extractDiscussedCourseFromHistory(historyMessages) ||
     extractCursoAreaFromText(userMessage) ||
     'curso em pauta'
-  const gradeCurricularHint =
-    messageAsksGradeCurricular(userMessage) &&
+  const asksGradeInfo =
+    (messageAsksGradeCurricular(userMessage) || messageAsksGradePdf(userMessage)) &&
     !messageAsksCampusOrPhoneContact(userMessage) &&
     !messageAsksLocationInfo(userMessage)
-      ? {
-          role: 'system',
-          content:
-            'PERGUNTA SOBRE GRADE CURRICULAR / DISCIPLINAS: o lead quer saber o que vai estudar (matérias, disciplinas, grade). ' +
-            `OBRIGATÓRIO neste turno: chame buscar_conhecimento com query incluindo curso e modalidade (ex.: "${discussedCourse} grade curricular disciplinas o que vai aprender"). ` +
-            'Se o CONTEXT trouxer LISTA DE DISCIPLINAS ou STATUS PDF DISPONIVEL: cite 5–8 exemplos + total. ' +
-            'Só chame enviar_grade_pdf se o lead pedir explicitamente PDF/link/arquivo da grade nesta mensagem (sem outras perguntas). ' +
-            'PROIBIDO inventar disciplinas que não estejam no CONTEXT.',
-        }
-      : null
 
-  const gradePdfHint =
-    messageAsksGradePdf(userMessage) &&
-    !messageAsksCampusOrPhoneContact(userMessage) &&
-    !messageAsksLocationInfo(userMessage)
+  const gradeCurricularHint = asksGradeInfo
       ? {
           role: 'system',
           content:
-            'PEDIDO DE PDF/LINK DA GRADE: o lead quer receber a grade curricular em PDF ou link. ' +
-            `OBRIGATÓRIO neste turno: chame enviar_grade_pdf com telefone, curso "${discussedCourse}" e modalidade se souber. ` +
-            'PROIBIDO dizer que não tem PDF se a grade existir na base.',
+            'PEDIDO DE GRADE CURRICULAR / DISCIPLINAS: o lead quer saber matérias, disciplinas ou a grade do curso. ' +
+            `OBRIGATÓRIO neste turno: chame enviar_grade_pdf com telefone, curso "${discussedCourse}" e modalidade se souber — envie o PDF automaticamente, sem perguntar "quer que eu envie?". ` +
+            'Se enviar_grade_pdf funcionar: confirme brevemente no texto (2–3 exemplos de disciplinas + total) que o PDF foi enviado. ' +
+            'Link do site (URL no CONTEXT) SOMENTE se enviar_grade_pdf falhar ou STATUS DA GRADE for NAO DISPONIVEL — nunca como primeira opção. ' +
+            'PROIBIDO: mandar só link perguntando se quer PDF; PROIBIDO inventar disciplinas fora do CONTEXT.',
         }
       : null
 
@@ -1230,7 +1219,6 @@ export async function runAgent(env, input) {
     ...(posGratisPromocaoHint ? [posGratisPromocaoHint] : []),
     ...(courseInquiryHint ? [courseInquiryHint] : []),
     ...(gradeCurricularHint ? [gradeCurricularHint] : []),
-    ...(gradePdfHint ? [gradePdfHint] : []),
     ...(courseMoreDetailsHint ? [courseMoreDetailsHint] : []),
     ...(enrollmentConfirmHint ? [enrollmentConfirmHint] : []),
     ...(frustrationHint ? [frustrationHint] : []),
