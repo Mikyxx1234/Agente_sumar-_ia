@@ -12,6 +12,40 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-06-11 - Regra de escalação por falha de envio (retry 2min → nota + humano) — IMPLEMENTADO
+
+- **Decisão** (regra definida pela operação)
+  - 1ª falha ao responder o lead (envio não confirmado OU agente falhou) →
+    nova tentativa após **2 minutos** (`AGENT_SEND_RETRY_BASE_SEC=120` default).
+  - **2ª falha consecutiva** do mesmo conteúdo — qualquer erro (Meta/token,
+    número licenciado, OpenAI/pagamento etc.) → `escalateSendFailureToHuman`:
+    1. nota no lead com o erro resumido (≤220 chars), prefixada com
+       "Encaminhamento automático:" (o poll reconhece como nota de sistema e
+       não re-injeta como fala do lead);
+    2. lead movido para **pipeline 13756724 / etapa 106377088 (Aguardando
+       resposta)** — fora do funil da IA, para um humano assumir;
+    3. backoff da sessão zerado (evita re-escalação se o lead voltar à fila).
+  - Limiar configurável: `AGENT_SEND_FAIL_ESCALATE_AFTER` (default 2). Sem
+    leadId resolvível, mantém só o backoff exponencial (nunca loop quente).
+  - Mensagens do lead permanecem no buffer — na reentrada ao funil o
+    atendimento retoma de onde parou.
+- **Contexto**
+  - Sequela do incidente do token Meta (10-11/06): com falha persistente do
+    canal, o backoff sozinho reduz custo mas deixa o lead sem atendimento
+    indefinidamente. A operação definiu que após 2 tentativas o lead deve ir
+    para humano com a causa registrada no timeline.
+- **Alternativas descartadas**
+  - Escalar na 1ª falha: erro transitório (race/timeout) viraria handover
+    desnecessário; 1 retry em 2min filtra os transitórios.
+  - Pausar a IA via `atendimento_ia='pause'` em vez de mover: invisível para a
+    equipe no Kommo; mover de etapa coloca o caso na fila visível do humano.
+- **Impacto**
+  - Falha persistente de credencial/canal: cada lead gera no máx. 2 execuções
+    LLM e aparece em "Aguardando resposta" com nota explicando o erro — em vez
+    de loop infinito e silêncio.
+
+---
+
 ### 2026-06-11 - Backoff de retry de envio + echo da nota de handover — IMPLEMENTADO
 
 - **Decisão**

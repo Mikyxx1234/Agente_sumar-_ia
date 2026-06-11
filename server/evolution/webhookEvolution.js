@@ -41,6 +41,48 @@ async function repushDrainedMessages(env, sessionId, items) {
   }
   console.log(`[Evolution][flush] reenfileiradas ${items.length} msg(s) session=${sessionId}`)
 }
+
+/** Destino da escalação por falha de envio: etapa "Aguardando resposta" (humano), fora do funil da IA. */
+const SEND_FAIL_ESCALATION_PIPELINE_ID = 13756724
+const SEND_FAIL_ESCALATION_STATUS_ID = 106377088
+
+/**
+ * Regra (11/06/2026): após a 2ª falha consecutiva ao responder o lead — erro da
+ * Meta (token/número licenciado), da OpenAI (pagamento etc.) ou qualquer outro —
+ * a IA registra nota com o erro resumido e move o lead para a etapa
+ * "Aguardando resposta" (pipeline 13756724 / status 106377088), tirando-o da
+ * fila automática para um humano assumir. As mensagens do lead permanecem no
+ * buffer (reentrada no funil retoma de onde parou).
+ *
+ * A nota começa com "Encaminhamento automático" de propósito: o poll de notas
+ * reconhece esse prefixo como nota de sistema e não a re-injeta como fala do lead.
+ */
+async function escalateSendFailureToHuman(env, { executionId, sessionId, leadId, errorText, failCount }) {
+  const lid = Number(leadId)
+  if (!Number.isFinite(lid) || lid <= 0) {
+    console.warn(
+      `[${executionId}] escalação de falha de envio SEM leadId (session=${sessionId}) — mantém só o backoff`,
+    )
+    return { ok: false, reason: 'no_lead_id' }
+  }
+  const brief = String(errorText || 'erro desconhecido').replace(/\s+/g, ' ').slice(0, 220)
+  const noteText =
+    `Encaminhamento automático: IA não conseguiu responder o lead após ${failCount} tentativas. ` +
+    `Erro: ${brief} (agente IA)`
+  const note = await createLeadNote(env, lid, noteText).catch((e) => ({ ok: false, error: e.message }))
+  const move = await updateLeadPipelineStatus(env, lid, {
+    pipelineId: SEND_FAIL_ESCALATION_PIPELINE_ID,
+    statusId: SEND_FAIL_ESCALATION_STATUS_ID,
+  }).catch((e) => ({ ok: false, error: e.message }))
+  // Lead saiu do funil da IA — zera o backoff para não re-escalar se voltar.
+  clearSendRetryBackoff(sessionId)
+  console.warn(
+    `[${executionId}] ESCALADO p/ humano lead=${lid} (falhas=${failCount}) ` +
+      `note_ok=${note.ok} move_ok=${move.ok} destino=${SEND_FAIL_ESCALATION_PIPELINE_ID}/${SEND_FAIL_ESCALATION_STATUS_ID}` +
+      `${note.ok ? '' : ` note_err=${note.error}`}${move.ok ? '' : ` move_err=${move.error}`}`,
+  )
+  return { ok: note.ok && move.ok, note, move }
+}
 import { tryClaimAgentFlush, tryReserveFlushSync, releaseFlushSync, releaseAgentFlush } from '../flushClaim.js'
 import { shouldSkipReplyCooldown, markReplyCooldown, getReplyCooldownRemainingMs } from '../replyCooldown.js'
 import { transcribeAudioBase64, analyzeImageBase64 } from './openaiMedia.js'
@@ -50,7 +92,7 @@ import { runAgent } from '../ai/agentRunner.js'
 import { saveConversation } from '../historyStore.js'
 import { getLeadIdByTelefone, shouldHoldOnIaPause } from '../dadosClienteStore.js'
 import { seenMessage, withSessionLock } from './concurrency.js'
-import { findLeadByPhone } from '../kommoClient.js'
+import { findLeadByPhone, createLeadNote, updateLeadPipelineStatus } from '../kommoClient.js'
 import { assertLeadInAgentFunnel, describeLeadFunnel } from '../kommoAgentFunnelGate.js'
 import { sendMessageWithNote } from '../whatsappSender.js'
 import { generateExecutionId, saveExecution } from '../ai/executionTelemetry.js'
@@ -68,6 +110,7 @@ import {
   recordSendFailureBackoff,
   shouldHoldForSendRetryBackoff,
   clearSendRetryBackoff,
+  shouldEscalateSendFailure,
 } from '../flushRetryBackoff.js'
 
 function getBody(req) {
@@ -897,12 +940,30 @@ async function flushSessionInner(env, sessionId, opts = {}) {
           `[${executionId}] agente falhou — reenfileirando ${itens.length} turno(s) (backoff falhas=${bo.failCount}, retry em ${Math.ceil(bo.nextRetryInMs / 1000)}s): ${executionError || out?.error || 'n/a'}`,
         )
         await repushDrainedMessages(env, sessionId, itens)
+        if (shouldEscalateSendFailure(env, bo.failCount)) {
+          await escalateSendFailureToHuman(env, {
+            executionId,
+            sessionId,
+            leadId: idLead ?? leadIdForAgent,
+            errorText: executionError || out?.error,
+            failCount: bo.failCount,
+          })
+        }
       } else if (out?.reply && !sentOk && !sendResult?.suppressed) {
         const bo = recordSendFailureBackoff(env, sessionId, itens)
         console.warn(
           `[${executionId}] envio não confirmado após drain — reenfileirando ${itens.length} turno(s) (backoff falhas=${bo.failCount}, retry em ${Math.ceil(bo.nextRetryInMs / 1000)}s)`,
         )
         await repushDrainedMessages(env, sessionId, itens)
+        if (shouldEscalateSendFailure(env, bo.failCount)) {
+          await escalateSendFailureToHuman(env, {
+            executionId,
+            sessionId,
+            leadId: idLead ?? leadIdForAgent,
+            errorText: executionError,
+            failCount: bo.failCount,
+          })
+        }
       }
     }
 
