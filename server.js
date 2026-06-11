@@ -2200,22 +2200,67 @@ app.get('/api/agent/diagnose', async (req, res) => {
   }
 
   // 3) Buffer atual da sessão (precisa do phone pra resolver session).
+  //    Verifica TODAS as variantes do 9º dígito (mesmo critério do scheduler):
+  //    o WhatsApp pode entregar o JID sem o 9 enquanto o Kommo guarda com o 9.
   if (phone) {
     try {
-      const { phoneToWhatsAppSessionId } = await import('./server/phoneWhatsApp.js')
-      const sessionId = phoneToWhatsAppSessionId(phone)
-      if (sessionId) {
-        const msgs = await getMessages(env, sessionId)
+      const { phoneToWhatsAppSessionId, whatsAppSessionVariants } = await import(
+        './server/phoneWhatsApp.js'
+      )
+      const variants = whatsAppSessionVariants(phone)
+      const primary = phoneToWhatsAppSessionId(phone)
+      if (primary) {
+        const byVariant = []
+        let chosen = variants[0] || primary
+        let chosenMsgs = []
+        for (const v of variants) {
+          const msgs = await getMessages(env, v)
+          byVariant.push({ sessionId: v, pendingCount: msgs.length })
+          if (msgs.length > chosenMsgs.length) {
+            chosen = v
+            chosenMsgs = msgs
+          }
+        }
         out.buffer = {
-          sessionId,
-          pendingCount: msgs.length,
-          messages: msgs.slice(0, 20).map((s) => (typeof s === 'string' ? s.slice(0, 200) : s)),
+          sessionId: chosen,
+          pendingCount: chosenMsgs.length,
+          messages: chosenMsgs.slice(0, 20).map((s) => (typeof s === 'string' ? s.slice(0, 200) : s)),
+          variants: byVariant.length > 1 ? byVariant : undefined,
         }
       } else {
         out.buffer = { error: 'phone não resolveu sessionId válido' }
       }
     } catch (e) {
       out.buffer = { error: e.message }
+    }
+
+    // 3b) Estado do cliente que SEGURA o flush mesmo com lead no funil + buffer:
+    //     atendimento_ia='pause' (humano/matrícula/desistência) e reply_cooldown.
+    try {
+      const { fetchDadosClienteByTelefone, shouldHoldOnIaPause } = await import(
+        './server/dadosClienteStore.js'
+      )
+      const { shouldSkipReplyCooldown, getReplyCooldownRemainingMs } = await import(
+        './server/replyCooldown.js'
+      )
+      const row = await fetchDadosClienteByTelefone(
+        env,
+        phone,
+        'atendimento_ia,inscricao_form_status,updated_at',
+      ).catch(() => null)
+      const pauseDecision = await shouldHoldOnIaPause(env, phone).catch((e) => ({ error: e.message }))
+      const cooldownActive = shouldSkipReplyCooldown(env, phone)
+      out.clientState = {
+        atendimento_ia: row?.atendimento_ia ?? null,
+        inscricao_form_status: row?.inscricao_form_status ?? null,
+        updated_at: row?.updated_at ?? null,
+        iaPauseHold: Boolean(pauseDecision?.hold),
+        iaPauseReason: pauseDecision?.reason ?? null,
+        replyCooldownActive: Boolean(cooldownActive),
+        replyCooldownRemainingMs: cooldownActive ? getReplyCooldownRemainingMs(env, phone) : 0,
+      }
+    } catch (e) {
+      out.clientState = { error: e.message }
     }
   }
 
