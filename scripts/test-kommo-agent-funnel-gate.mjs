@@ -6,6 +6,7 @@
 import {
   AGENT_FUNNEL_PIPELINE_ID,
   AGENT_FUNNEL_STATUS_ID,
+  AGENT_FUNNEL_STATUS_INSCRICAO,
   leadMatchesAgentFunnel,
   resolveAgentFunnelFromEnv,
 } from '../server/kommoAgentFunnelGate.js'
@@ -32,11 +33,20 @@ const resolved = resolveAgentFunnelFromEnv({
   KOMMO_AGENT_STATUS_IDS: '106377088,100859840',
 })
 expect('env errado ignorado (pipeline)', resolved.pipelineId === 13756724)
-expect('env errado ignorado (status)', resolved.statusIds.length === 1 && resolved.statusIds[0] === 106140284)
+expect(
+  'env errado ignorado (status) — Atendimento + inscrição',
+  resolved.statusIds.length === 2 &&
+    resolved.statusIds.includes(AGENT_FUNNEL_STATUS_ID) &&
+    resolved.statusIds.includes(AGENT_FUNNEL_STATUS_INSCRICAO),
+)
 
 expect(
   'lead na fila',
   leadMatchesAgentFunnel({ pipeline_id: 13756724, status_id: 106140284 }),
+)
+expect(
+  'lead em inscrição na fila',
+  leadMatchesAgentFunnel({ pipeline_id: 13756724, status_id: AGENT_FUNNEL_STATUS_INSCRICAO }),
 )
 expect(
   'lead comercial em atendimento bloqueado',

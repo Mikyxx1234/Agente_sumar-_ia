@@ -60,7 +60,7 @@ import {
   describeLeadFunnel,
   resolveAgentFunnelFromEnv,
 } from './kommoAgentFunnelGate.js'
-import { phoneToWhatsAppSessionId } from './phoneWhatsApp.js'
+import { phoneToWhatsAppSessionId, whatsAppSessionVariants } from './phoneWhatsApp.js'
 import { getMessages, getLastTouchedAt, listSessionsWithPendingMessages } from './evolution/messageBuffer.js'
 import { clearBufferIfStaleRepush } from './sessionFlushDedupe.js'
 import { flushSession } from './evolution/webhookEvolution.js'
@@ -231,6 +231,38 @@ function buildSessionId(phone) {
   return phoneToWhatsAppSessionId(phone)
 }
 
+/**
+ * Resolve qual sessionId (entre as variantes do 9º dígito BR) tem mensagens no
+ * buffer. O Kommo pode guardar o número com/sem o 9 e o WhatsApp entregar o JID
+ * na outra forma — sem isso o scheduler lia o buffer da variante errada (vazio)
+ * e nunca respondia. Escolhe a variante com fila; em empate fica na primária.
+ * Leitura é só no buffer (Redis/Supabase), não bate no Kommo.
+ *
+ * @param {Record<string,string>} env
+ * @param {string} phone
+ * @returns {Promise<string|null>}
+ */
+async function resolveEffectiveSessionId(env, phone) {
+  const variants = whatsAppSessionVariants(phone)
+  if (variants.length <= 1) return variants[0] || buildSessionId(phone)
+  let best = variants[0]
+  let bestCount = -1
+  for (const v of variants) {
+    let count = 0
+    try {
+      const msgs = await getMessages(env, v)
+      count = Array.isArray(msgs) ? msgs.length : 0
+    } catch {
+      count = 0
+    }
+    if (count > bestCount) {
+      bestCount = count
+      best = v
+    }
+  }
+  return best
+}
+
 function getTestLeadWhitelist(env) {
   const raw = String(env.KOMMO_AGENT_TEST_LEAD_IDS || '').trim()
   if (!raw) return null
@@ -358,7 +390,7 @@ export async function runSchedulerTick(env) {
         stats.skippedNoPhone = (stats.skippedNoPhone || 0) + 1
         return
       }
-      const sessionId = buildSessionId(phone)
+      const sessionId = await resolveEffectiveSessionId(env, phone)
       if (!sessionId) return
 
       if (funnelEnteredIds.has(Number(lead.id))) {

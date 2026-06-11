@@ -19,6 +19,7 @@
     "test:captacao-gerar-outcome": "node scripts/test-captacao-gerar-outcome.mjs",
     "test:outbound-dedupe-race": "node scripts/test-outbound-dedupe-race.mjs",
     "test:funnel-gate": "node scripts/test-kommo-agent-funnel-gate.mjs",
+    "test:phone-variants": "node scripts/test-phone-whatsapp-variants.mjs",
     "test:form-notes-age-cap": "node scripts/test-form-notes-age-cap.mjs",
     "update:precos-rag": "node --env-file=.env scripts/update-precos-sumare-rag.mjs",
     "audit:precos": "node --env-file=.env scripts/audit-precos-sumare.mjs",

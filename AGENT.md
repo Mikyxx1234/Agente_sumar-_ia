@@ -12,6 +12,39 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-06-11 - Fix do "9º dígito": scheduler lê a variante de sessão que tem mensagens — IMPLEMENTADO
+
+- **Decisão**
+  - Novo helper `whatsAppSessionVariants(phone)` em `server/phoneWhatsApp.js`: para
+    número BR (`55`+DDD) devolve a sessão primária **e** a variante com/sem o `9`
+    logo após o DDD (ex.: `551120464401@…` ↔ `5511920464401@…`), deduplicadas.
+  - No `server/agentScheduler.js`, novo `resolveEffectiveSessionId(env, phone)` escolhe,
+    entre as variantes, a sessão que **tem mensagens no buffer**; o tick passa a usar
+    essa sessão efetiva em `getMessages`, `getLastTouchedAt`, `clearBufferIfStaleRepush`
+    e no `flushSession`. Assim a IA lê de onde a mensagem realmente está e **responde no
+    JID que o aluno usou** (em empate, fica na primária). A leitura extra é só no buffer
+    (Redis/Supabase) — não consome cota do Kommo.
+  - Teste `scripts/test-phone-whatsapp-variants.mjs` (`npm run test:phone-variants`)
+    cobre ida/volta do 9º dígito. Corrigido `test-kommo-agent-funnel-gate.mjs` que ainda
+    esperava 1 status (o gate atende Atendimento + inscrição = 2).
+- **Contexto**
+  - Auditoria de "agente não atende alguns leads" (11/06): scheduler/Kommo saudáveis e
+    sem bloqueio (`totalPaused: 0`). A causa foi o lead 23856049, no funil correto
+    (Atendimento), com telefone Kommo `+5511920464401` (com 9) mas mensagem do WhatsApp
+    em `551120464401` (sem 9) — buffers em chaves diferentes, scheduler lia vazio e nunca
+    respondia ("PRECISO TRANCAR MINHA MATRICULA" parado ~49min). A normalização
+    `digitsToWhatsAppLocalPart` não reconciliava o 9º dígito.
+- **Alternativas descartadas**
+  - Canonizar a chave do buffer numa única forma no write (Evolution + Kommo mirror):
+    mais simples, mas **não resolve o envio** — `flushSession` mandaria para o JID canônico
+    (ex.: com 9) que pode não ser o aparelho real (sem 9), arriscando não entregar.
+- **Impacto**
+  - Leads cujo Kommo guarda o número numa forma e o WhatsApp entrega na outra passam a ser
+    atendidos no próximo tick, com resposta no JID correto. +1 leitura de buffer por lead BR
+    (sem custo Kommo). Sem mudança de comportamento quando não há variante com mensagens.
+
+---
+
 ### 2026-06-08 - Rate limiter global da API Kommo (teto de 7 req/s) — IMPLEMENTADO
 
 - **Decisão**
