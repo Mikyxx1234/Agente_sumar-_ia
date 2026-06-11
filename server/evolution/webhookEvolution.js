@@ -64,6 +64,11 @@ import { recordSyncOutcome, recordBufferWrite, recordAsyncError } from './webhoo
 import { sanitizeLeadInboundMessage } from '../../libShared/inboundMessageSanitize.js'
 import { recordBufferFlushHash } from '../sessionFlushDedupe.js'
 import { mirrorEvolutionInboundToKommo } from '../kommoInboundMirror.js'
+import {
+  recordSendFailureBackoff,
+  shouldHoldForSendRetryBackoff,
+  clearSendRetryBackoff,
+} from '../flushRetryBackoff.js'
 
 function getBody(req) {
   const body = req.body || {}
@@ -625,6 +630,26 @@ async function flushSessionInner(env, sessionId, opts = {}) {
       }
     }
 
+    // Backoff de retry de ENVIO: se este MESMO conteúdo de buffer já gerou
+    // resposta mas o WhatsApp falhou (ex.: token Meta expirado), espera a
+    // janela de backoff antes de queimar outra execução LLM. Inbound novo
+    // muda o hash e passa direto.
+    if (!testMode) {
+      const pendingPeek = await getMessages(env, sessionId)
+      const backoff = shouldHoldForSendRetryBackoff(env, sessionId, pendingPeek)
+      if (backoff.hold) {
+        console.log(
+          `[Evolution][flush] ${sessionId} held — send_retry_backoff (falhas=${backoff.failCount}, retry em ${Math.ceil((backoff.remainingMs || 0) / 1000)}s) | pending: ${pendingPeek.length}`,
+        )
+        return {
+          skipped: 'send_retry_backoff',
+          pending: pendingPeek.length,
+          remainingMs: backoff.remainingMs,
+          failCount: backoff.failCount,
+        }
+      }
+    }
+
     const itens = await drainMessages(env, sessionId)
     if (!itens.length) {
       console.log(`[Evolution][flush] ${sessionId} sem mensagens pendentes (drain vazio)`)
@@ -848,6 +873,7 @@ async function flushSessionInner(env, sessionId, opts = {}) {
     const sentOk = Boolean(sendResult?.ok && (sentReal || dedupedLegit))
     if (telefone && sentOk) {
       markReplyCooldown(env, telefone)
+      clearSendRetryBackoff(sessionId)
       if (sentReal) {
         // Hash do inbound só faz sentido após envio confirmado — gravar
         // antes (em dedupe ou race) descarta o próximo turno do cliente.
@@ -866,13 +892,15 @@ async function flushSessionInner(env, sessionId, opts = {}) {
       !out.distribuirHumanoHandled
     ) {
       if (!out?.ok) {
+        const bo = recordSendFailureBackoff(env, sessionId, itens)
         console.warn(
-          `[${executionId}] agente falhou — reenfileirando ${itens.length} turno(s): ${executionError || out?.error || 'n/a'}`,
+          `[${executionId}] agente falhou — reenfileirando ${itens.length} turno(s) (backoff falhas=${bo.failCount}, retry em ${Math.ceil(bo.nextRetryInMs / 1000)}s): ${executionError || out?.error || 'n/a'}`,
         )
         await repushDrainedMessages(env, sessionId, itens)
       } else if (out?.reply && !sentOk && !sendResult?.suppressed) {
+        const bo = recordSendFailureBackoff(env, sessionId, itens)
         console.warn(
-          `[${executionId}] envio não confirmado após drain — reenfileirando ${itens.length} turno(s)`,
+          `[${executionId}] envio não confirmado após drain — reenfileirando ${itens.length} turno(s) (backoff falhas=${bo.failCount}, retry em ${Math.ceil(bo.nextRetryInMs / 1000)}s)`,
         )
         await repushDrainedMessages(env, sessionId, itens)
       }

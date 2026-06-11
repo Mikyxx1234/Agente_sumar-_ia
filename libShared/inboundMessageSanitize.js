@@ -430,6 +430,10 @@ export function isKommoSystemOrIntegrationNote(text) {
   if (/\binscri[cç][aã]o via agente ia\b/i.test(low)) return true
   if (/\bnome da integra[cç][aã]o\b/i.test(low)) return true
   if (/\bintegra[cç][aã]o\b/i.test(low) && /\bwhatsapp\b/i.test(low)) return true
+  // Nota de auditoria do handover (distribuirHumanoTool) — sem isso o poll
+  // re-injetava a nota como fala do lead e o handover repetia a cada tick.
+  if (/\bencaminhamento autom[aá]tico\b/i.test(low)) return true
+  if (/\bpediu atendimento humano\b/i.test(low) && /\bagente ia\b/i.test(low)) return true
   return false
 }
 

@@ -12,6 +12,40 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-06-11 - Backoff de retry de envio + echo da nota de handover — IMPLEMENTADO
+
+- **Decisão**
+  - Novo `server/flushRetryBackoff.js`: quando a IA gera resposta mas o ENVIO do
+    WhatsApp falha (ou o agente erra), o repush continua preservando as mensagens,
+    porém o próximo flush do MESMO conteúdo espera backoff exponencial
+    (`AGENT_SEND_RETRY_BASE_SEC=60` dobrando até `AGENT_SEND_RETRY_MAX_SEC=1800`).
+    Inbound novo muda o hash do buffer e passa direto; envio confirmado zera.
+    Gate em `flushSessionInner` (antes do drain, skip em testMode); registro nos
+    dois pontos de repush; estado em memória por processo.
+  - `isKommoSystemOrIntegrationNote` agora reconhece a nota de auditoria do
+    handover ("Encaminhamento automático: lead pediu atendimento humano…") —
+    o poll de notas a re-injetava como fala do lead e o handover repetia.
+  - Teste `scripts/test-flush-retry-backoff.mjs` (`npm run test:flush-retry-backoff`).
+- **Contexto**
+  - Incidente 10-11/06: `WHATSAPP_ACCESS_TOKEN` (Meta Cloud API) expirou às 14:30
+    de 10/06 → todo envio falhava com 190 OAuthException → o flush re-enfileirava
+    e o próximo tick (~10s) regenerava a resposta no LLM. Resultado: 212 telefones
+    em loop, 1000+ execuções LLM queimadas sem nenhuma mensagem entregue, clientes
+    sem resposta ("vcs nunca respondem"). A correção primária é renovar o token
+    (System User permanente); o backoff impede que uma queda futura do canal de
+    envio vire queima contínua de OpenAI.
+- **Alternativas descartadas**
+  - Cap duro de N tentativas com descarte do buffer: arrisca perder mensagem real
+    do cliente; backoff com teto preserva o turno e reduz o custo a ~2 exec/h por lead.
+  - Persistir o estado de backoff no Redis: desnecessário — restart só custa 1
+    tentativa extra; objetivo é parar a queima contínua, não exatidão.
+- **Impacto**
+  - Canal de envio caído deixa de consumir LLM a cada tick por lead; logs ganham
+    `held — send_retry_backoff (falhas=N, retry em Xs)`. Handover não repete mais
+    por eco da própria nota.
+
+---
+
 ### 2026-06-11 - Fix do "9º dígito": scheduler lê a variante de sessão que tem mensagens — IMPLEMENTADO
 
 - **Decisão**
