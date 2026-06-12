@@ -90,7 +90,10 @@ async function captacaoFetch(env, pathWithQuery, { method = 'GET', timeoutMs = 4
 /** Dígitos do CPF (11) ou vazio. */
 export function normalizeCpf(input) {
   const d = String(input || '').replace(/\D/g, '')
-  return d.length === 11 ? d : d.length >= 11 ? d.slice(0, 11) : ''
+  if (!d) return ''
+  // Kommo costuma gravar CPF sem zero à esquerda (ex.: 06398542657 → 6398542657).
+  if (d.length < 11) return d.padStart(11, '0')
+  return d.slice(0, 11)
 }
 
 /** Formato exibido na API: (11) 94501-0493 */

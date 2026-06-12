@@ -47,7 +47,7 @@ import {
 } from '../libShared/inboundMessageSanitize.js'
 import { detectStateFromReply, AUTO_SYNC_TERMINAL_OR_ADVANCED } from '../server/inscricaoStateAutoSync.js'
 import { buildPoloEscolhaPreFormMessage } from '../libShared/sumarePoloCatalog.js'
-import { resolvePortalUrlForCandidato } from '../server/sumareCaptacaoClient.js'
+import { resolvePortalUrlForCandidato, normalizeCpf } from '../server/sumareCaptacaoClient.js'
 import {
   evaluateKommoExpressReadiness,
 } from '../server/kommoCardMirror.js'
@@ -856,6 +856,14 @@ section('14. Nota interna de auditoria filtrada pelo poll de inbound')
   const jaMarcada = `Nota X ${AGENT_AUDIT_NOTE_MARKER}`
   const markerCount = (jaMarcada.match(/\[registro interno ia\]/gi) || []).length
   assertEqual(markerCount, 1, '14.7 marcador presente uma única vez')
+}
+
+section('15 — normalizeCpf (zero à esquerda Kommo)')
+{
+  assertEqual(normalizeCpf('06398542657'), '06398542657', '15.1 CPF 11 dígitos intacto')
+  assertEqual(normalizeCpf('6398542657'), '06398542657', '15.2 CPF 10 dígitos → pad zero')
+  assertEqual(normalizeCpf(''), '', '15.3 vazio')
+  assertEqual(normalizeCpf('063.985.426-57'), '06398542657', '15.4 máscara removida')
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */

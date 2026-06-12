@@ -5,6 +5,7 @@
 import { listLeadCustomFields, listLeadNotes } from './kommoClient.js'
 import { kommoRawFetch } from './kommoRateLimiter.js'
 import { parseFormDataNoteFields } from '../libShared/inscricaoFormHeuristics.js'
+import { normalizeCpf } from './sumareCaptacaoClient.js'
 
 const KOMMO_FIELD_NOME = 304628
 
@@ -170,9 +171,16 @@ function noteText(n) {
  * os campos personalizados — ex.: o e-mail vai só na nota). Só preenche o que
  * está ausente; nunca sobrescreve um valor já presente no campo do Kommo.
  */
+function snapshotFieldNeedsNoteEnrichment(key, val) {
+  if (isCampoAusente(val)) return true
+  // CPF presente mas inválido (10 dígitos no Kommo) → busca na nota do formulário.
+  if (key === 'cpf' && !normalizeCpf(val)) return true
+  return false
+}
+
 async function enrichSnapshotFromFormNote(env, leadId, snapshot) {
   const keys = ['nome', 'email', 'cpf', 'data_nasc', 'sexo']
-  const missing = keys.filter((k) => isCampoAusente(snapshot?.[k]))
+  const missing = keys.filter((k) => snapshotFieldNeedsNoteEnrichment(k, snapshot?.[k]))
   if (missing.length === 0) return snapshot
   let notes = []
   try {
@@ -186,7 +194,7 @@ async function enrichSnapshotFromFormNote(env, leadId, snapshot) {
     if (!fields || Object.keys(fields).length === 0) continue
     const merged = { ...snapshot }
     for (const k of keys) {
-      if (isCampoAusente(merged[k]) && fields[k]) merged[k] = fields[k]
+      if (snapshotFieldNeedsNoteEnrichment(k, merged[k]) && fields[k]) merged[k] = fields[k]
     }
     return merged
   }
@@ -237,6 +245,9 @@ export function validateFormSnapshot(env, snapshot) {
     }
     // E-mail sem formato válido (ex.: "@" corrompido na nota) conta como ausente.
     if (key === 'email' && !isValidEmailShape(val)) {
+      missing.push(FIELD_LABELS[key] || key)
+    }
+    if (key === 'cpf' && !normalizeCpf(val)) {
       missing.push(FIELD_LABELS[key] || key)
     }
   }
