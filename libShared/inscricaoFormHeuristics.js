@@ -21,6 +21,8 @@ export const INSCRICAO_FORM_STATUS_AGUARDANDO_POLO = 'aguardando_escolha_polo'
 export const INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE = 'aguardando_aceite_contrato'
 /** Resumo enviado (curso/valor/taxa) — aguardando o lead AUTORIZAR a matrícula antes do formulário. */
 export const INSCRICAO_FORM_STATUS_AGUARDANDO_AUTORIZACAO = 'aguardando_autorizacao_matricula'
+/** Lead autorizou o resumo — liberado para disparar o Formulario_Sum (pré-form). */
+export const INSCRICAO_FORM_STATUS_MATRICULA_AUTORIZADA = 'matricula_autorizada'
 
 /** Marcador interno quando o WhatsApp Flow / Kommo sinaliza formulário preenchido. */
 export const FORM_SUMAR_FLOW_COMPLETED_MARKER = '[FORMULARIO_SUMAR_PREENCHIDO]'
@@ -79,7 +81,7 @@ export function matriculaPosFormAlreadyProcessed(row) {
  * deve ser reativado (o lead já preencheu — reenviar gera o loop "preencha o
  * formulário"). Estados PRÉ-formulário (null, aguardando_form_sumar,
  * aguardando_escolha_polo_pre_form, aguardando_autorizacao_matricula,
- * aguardando_confirm_*) ficam DE FORA de propósito.
+ * matricula_autorizada, aguardando_confirm_*) ficam DE FORA de propósito.
  */
 const INSCRICAO_FORM_FILLED_STATUSES = new Set([
   INSCRICAO_FORM_STATUS_CONCLUIDO,

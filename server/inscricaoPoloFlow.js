@@ -32,6 +32,7 @@ import {
 import { DADOS_CLIENTE_INSCRICAO_SELECT } from './dadosClienteInscricaoFields.js'
 import { executeCaptacaoAfterFormResolved } from './inscricaoPostFormPipeline.js'
 import { deliverInscricaoForm } from './inscricaoFormFlow.js'
+import { gateMatriculaConfirmacaoBeforeForm } from './inscricaoMatriculaConfirmFlow.js'
 import { listLeadNotes } from './kommoClient.js'
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
@@ -154,7 +155,6 @@ export async function tryHandlePoloPreFormFlow(env, input) {
     fields: {
       polo_inscricao_escolhido: polo.nome,
       captacao_unidade: unidade,
-      [FORM_STATUS_FIELD]: INSCRICAO_FORM_STATUS_AGUARDANDO,
     },
   }).catch(() => {})
   await updateDadosCliente(env, {
@@ -162,8 +162,43 @@ export async function tryHandlePoloPreFormFlow(env, input) {
     fields: {
       polo_inscricao_escolhido: polo.nome,
       captacao_unidade: unidade,
-      [FORM_STATUS_FIELD]: INSCRICAO_FORM_STATUS_AGUARDANDO,
     },
+  }).catch(() => {})
+
+  const matriculaGate = await gateMatriculaConfirmacaoBeforeForm(env, {
+    telefone,
+    userMessage,
+    historyMessages,
+    leadId: idLead,
+    executionId,
+    model,
+    pushName,
+    t0,
+  })
+  if (!matriculaGate.proceed) {
+    if (matriculaGate.handled) {
+      console.log(
+        `[inscricaoPolo] pre_form polo=${polo.id} lead=${idLead ?? 'n/a'} MATRICULA_RESUMO antes do form`,
+      )
+      return {
+        handled: true,
+        result: {
+          ...matriculaGate.result,
+          ctxSnapshot: {
+            ...matriculaGate.result.ctxSnapshot,
+            poloId: polo.id,
+            poloNome: polo.nome,
+            unidade,
+          },
+        },
+      }
+    }
+    return null
+  }
+
+  await updateDadosCliente(env, {
+    telefone,
+    fields: { [FORM_STATUS_FIELD]: INSCRICAO_FORM_STATUS_AGUARDANDO },
   }).catch(() => {})
 
   const delivery = await deliverInscricaoForm(env, {

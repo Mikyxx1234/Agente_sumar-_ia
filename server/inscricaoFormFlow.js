@@ -47,6 +47,7 @@ import {
   isAssistantFormSendPromiseOnly,
 } from '../libShared/historySanitize.js'
 import { DADOS_CLIENTE_FORM_GUARD_SELECT, DADOS_CLIENTE_INSCRICAO_SELECT } from './dadosClienteInscricaoFields.js'
+import { gateMatriculaConfirmacaoBeforeForm } from './inscricaoMatriculaConfirmFlow.js'
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
 
@@ -376,6 +377,25 @@ export async function tryHandleInscricaoFormStart(env, input) {
       }
       if (st === INSCRICAO_FORM_STATUS_CONCLUIDO) return null
     }
+  }
+
+  const matriculaGate = await gateMatriculaConfirmacaoBeforeForm(env, {
+    telefone,
+    userMessage,
+    historyMessages,
+    leadId: idLead,
+    executionId,
+    model,
+    pushName,
+    t0,
+    asksResend,
+  })
+  if (!matriculaGate.proceed) {
+    if (matriculaGate.handled) {
+      console.log(`[inscricaoForm] lead=${idLead ?? 'n/a'} MATRICULA_RESUMO antes do form`)
+      return { handled: true, result: matriculaGate.result }
+    }
+    return null
   }
 
   const delivery = await deliverInscricaoForm(env, {

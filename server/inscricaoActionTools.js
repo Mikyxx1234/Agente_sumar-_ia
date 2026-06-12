@@ -48,6 +48,7 @@ import { deliverInscricaoForm } from './inscricaoFormFlow.js'
 import { executeCaptacaoAfterFormResolved } from './inscricaoPostFormPipeline.js'
 import { fetchLeadFormSnapshot } from './inscricaoKommoFields.js'
 import { DADOS_CLIENTE_FORM_GUARD_SELECT } from './dadosClienteInscricaoFields.js'
+import { gateMatriculaConfirmacaoBeforeForm } from './inscricaoMatriculaConfirmFlow.js'
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
 
@@ -208,6 +209,61 @@ export async function runEnviarFormSumarInscricao(env, args = {}, ctx = {}) {
     }
   }
 
+  await ensureDadosClienteRow(env, {
+    telefone,
+    idLead: leadId,
+    fields: {
+      polo_inscricao_escolhido: polo.nome,
+      captacao_unidade: unidade,
+    },
+  }).catch(() => {})
+
+  const matriculaGate = await gateMatriculaConfirmacaoBeforeForm(env, {
+    telefone,
+    userMessage: '',
+    historyMessages: ctx.historyMessages || [],
+    leadId,
+    cursoHint: curso,
+    executionId: ctx.executionId,
+    model: ctx.model,
+    pushName,
+    t0: Date.now(),
+  })
+  if (!matriculaGate.proceed) {
+    if (matriculaGate.handled) {
+      const reply = matriculaGate.result?.reply || ''
+      return {
+        ok: true,
+        code: 'MATRICULA_RESUMO_PENDING',
+        text: 'Resumo de matrícula enviado — aguardar autorização do lead antes do formulário.',
+        replyOverride: reply,
+        ctxSnapshot: {
+          inscricaoActionTool: 'enviar_form_sumar_inscricao',
+          inscricaoForm: matriculaGate.result?.ctxSnapshot?.inscricaoForm,
+          poloId: polo.id,
+          unidade,
+        },
+        steps: [
+          { type: 'tool_action', tool: 'enviar_form_sumar_inscricao', ok: true, code: 'MATRICULA_RESUMO_PENDING' },
+          ...(matriculaGate.result?.orchestratorSteps || []),
+        ],
+      }
+    }
+    return {
+      ok: false,
+      code: 'MATRICULA_AUTHORIZATION_PENDING',
+      text: 'Lead ainda não autorizou o resumo de matrícula — não enviar formulário.',
+      replyOverride:
+        'Antes de seguir com o formulário, preciso da sua autorização sobre as condições da matrícula que enviei. Você autoriza a conclusão da matrícula?',
+      ctxSnapshot: {
+        inscricaoActionTool: 'enviar_form_sumar_inscricao',
+        inscricaoForm: 'aguardando_autorizacao_matricula',
+        poloId: polo.id,
+      },
+      steps: [{ type: 'tool_action', tool: 'enviar_form_sumar_inscricao', ok: false, code: 'MATRICULA_AUTHORIZATION_PENDING' }],
+    }
+  }
+
   await gravarPoloEStatusAguardando(env, { telefone, leadId, polo, unidade }).catch(() => {})
 
   const delivery = await deliverInscricaoForm(env, {
@@ -323,6 +379,60 @@ export async function runRegistrarPoloInscricao(env, args = {}, ctx = {}) {
         blockedResend: true,
       },
       steps: [{ type: 'tool_action', tool: 'registrar_polo_inscricao', ok: true, code: 'FORM_ALREADY_SENT' }],
+    }
+  }
+
+  await ensureDadosClienteRow(env, {
+    telefone,
+    idLead: leadId,
+    fields: {
+      polo_inscricao_escolhido: polo.nome,
+      captacao_unidade: unidade,
+    },
+  }).catch(() => {})
+
+  const matriculaGate = await gateMatriculaConfirmacaoBeforeForm(env, {
+    telefone,
+    userMessage: String(args.polo_id || ''),
+    historyMessages: ctx.historyMessages || [],
+    leadId,
+    executionId: ctx.executionId,
+    model: ctx.model,
+    pushName,
+    t0: Date.now(),
+  })
+  if (!matriculaGate.proceed) {
+    if (matriculaGate.handled) {
+      const reply = matriculaGate.result?.reply || ''
+      return {
+        ok: true,
+        code: 'MATRICULA_RESUMO_PENDING',
+        text: 'Polo registrado; resumo de matrícula enviado — aguardar autorização antes do formulário.',
+        replyOverride: reply,
+        ctxSnapshot: {
+          inscricaoActionTool: 'registrar_polo_inscricao',
+          inscricaoForm: matriculaGate.result?.ctxSnapshot?.inscricaoForm,
+          poloId: polo.id,
+          unidade,
+        },
+        steps: [
+          { type: 'tool_action', tool: 'registrar_polo_inscricao', ok: true, code: 'MATRICULA_RESUMO_PENDING' },
+          ...(matriculaGate.result?.orchestratorSteps || []),
+        ],
+      }
+    }
+    return {
+      ok: false,
+      code: 'MATRICULA_AUTHORIZATION_PENDING',
+      text: 'Lead ainda não autorizou o resumo de matrícula — não enviar formulário.',
+      replyOverride:
+        'Antes de seguir com o formulário, preciso da sua autorização sobre as condições da matrícula que enviei. Você autoriza a conclusão da matrícula?',
+      ctxSnapshot: {
+        inscricaoActionTool: 'registrar_polo_inscricao',
+        inscricaoForm: 'aguardando_autorizacao_matricula',
+        poloId: polo.id,
+      },
+      steps: [{ type: 'tool_action', tool: 'registrar_polo_inscricao', ok: false, code: 'MATRICULA_AUTHORIZATION_PENDING' }],
     }
   }
 

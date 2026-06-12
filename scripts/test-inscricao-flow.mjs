@@ -866,6 +866,55 @@ section('15 — normalizeCpf (zero à esquerda Kommo)')
   assertEqual(normalizeCpf('063.985.426-57'), '06398542657', '15.4 máscara removida')
 }
 
+section('16 — confirmação de matrícula antes do formulário')
+{
+  const { buildMatriculaResumoReply, lookupCursoPrecoResumo } = await import(
+    '../server/inscricaoMatriculaConfirmFlow.js'
+  )
+  const { assistantAskedMatriculaAuthorization } = await import('../libShared/inscricaoFormHeuristics.js')
+
+  const resumo = buildMatriculaResumoReply({
+    cursoNome: 'Segurança da Informação',
+    duracao: '6 meses',
+    mensalidade: 'R$ 187,00',
+    pushName: 'João',
+  })
+  assert(/Perfeito, João!/i.test(resumo), '16.1 saudação com nome')
+  assert(/Segurança da Informação/i.test(resumo), '16.1b curso no resumo')
+  assert(/Mensalidades: R\$ 187,00/i.test(resumo), '16.1c mensalidade')
+  assert(/taxa de matrícula é a primeira mensalidade/i.test(resumo), '16.1d taxa')
+  assert(assistantAskedMatriculaAuthorization(resumo), '16.1e pergunta autorização detectável')
+
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (url) => {
+    const u = String(url)
+    if (u.includes('pos_preco') || u.includes('grad_preco')) {
+      return {
+        ok: true,
+        json: async () => [
+          {
+            id: 1,
+            content:
+              'chave: Segurança da Informação | nome_curso: Pós-Graduação em Segurança da Informação | preco com desconto: 187 | duracao: 6 meses',
+            metadata: {},
+          },
+        ],
+      }
+    }
+    return { ok: false, json: async () => [] }
+  }
+  try {
+    const match = await lookupCursoPrecoResumo(
+      { SUPABASE_URL: 'https://stub.supabase.co', SUPABASE_KEY: 'k' },
+      'Segurança da Informação',
+    )
+    assert(match?.mensalidade === 'R$ 187,00', '16.2 lookup preço pós-graduação')
+    assert(match?.duracao === '6 meses', '16.2b duração no lookup')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+}
+
 /* ────────────────────────────────────────────────────────────────────────── */
 /* Resumo                                                                     */
 /* ────────────────────────────────────────────────────────────────────────── */

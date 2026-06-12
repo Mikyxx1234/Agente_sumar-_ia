@@ -23,6 +23,7 @@
 
 import {
   INSCRICAO_FORM_STATUS_AGUARDANDO_AUTORIZACAO,
+  INSCRICAO_FORM_STATUS_MATRICULA_AUTORIZADA,
   messageConfirmsProceedToInscricaoForm,
   messageAsksForFormResend,
   assistantAskedMatriculaAuthorization,
@@ -200,39 +201,14 @@ function buildAgentReturn({ executionId, model, t0, reply, steps, ctxSnapshot })
   }
 }
 
-/**
- * @returns {Promise<{ handled: boolean, result?: object }|null>}
- */
-export async function tryHandleMatriculaResumoConfirmacao(env, ctx) {
-  const { telefone, userMessage, executionId, model, leadId, pushName, t0 } = ctx
-  const historyMessages = ctx.historyMessages || []
-  if (!telefone || !String(userMessage || '').trim()) return null
-  if (messageAsksForFormResend(userMessage)) return null
-  if (messageAsksCoursePrice(userMessage)) return null
-
-  const status = await getFormStatus(env, telefone)
-  const wantsForm = messageConfirmsProceedToInscricaoForm(userMessage, historyMessages)
-
-  if (status === INSCRICAO_FORM_STATUS_AGUARDANDO_AUTORIZACAO) {
-    if (wantsForm) {
-      // Autorizou → libera: reseta o gate e deixa o fluxo existente enviar o form.
-      await setFormStatus(env, telefone, null, leadId)
-      console.log(`[matriculaResumo] telefone=${telefone} AUTORIZADO — liberando envio do formulário`)
-      return null
-    }
-    // Dúvida/recusa → atendimento normal (LLM). Mantém o gate p/ autorizar depois.
-    return null
+async function resolveCursoNomeForResumo(env, { userMessage, historyMessages, leadId, cursoHint }) {
+  let cursoNome = String(cursoHint || '').trim()
+  if (!cursoNome) {
+    cursoNome =
+      detectCursoConfirmadoPeloLead(userMessage, historyMessages) ||
+      extractDiscussedCourseFromHistory(historyMessages) ||
+      ''
   }
-
-  // Só intercepta quando ainda não há nenhum estágio de inscrição em curso.
-  if (status != null) return null
-  if (!wantsForm) return null
-  if (assistantAskedMatriculaAuthorization(lastAssistantText(historyMessages))) return null
-
-  let cursoNome =
-    detectCursoConfirmadoPeloLead(userMessage, historyMessages) ||
-    extractDiscussedCourseFromHistory(historyMessages) ||
-    ''
   if (!cursoNome && leadId) {
     try {
       const snap = await fetchLeadFormSnapshot(env, leadId)
@@ -241,20 +217,17 @@ export async function tryHandleMatriculaResumoConfirmacao(env, ctx) {
       /* ignore */
     }
   }
-  if (!cursoNome) return null
+  return cursoNome
+}
 
-  const resumo = await lookupCursoPrecoResumo(env, cursoNome)
-  if (!resumo) {
-    console.log(`[matriculaResumo] telefone=${telefone} curso="${cursoNome}" sem preço resolvido — segue fluxo normal`)
-    return null
-  }
-
-  await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO_AUTORIZACAO, leadId)
+function buildResumoHandledResult(env, ctx, resumo) {
+  const { telefone, executionId, model, leadId, pushName, t0 } = ctx
   const reply = buildMatriculaResumoReply({ ...resumo, pushName })
   console.log(
     `[matriculaResumo] telefone=${telefone} RESUMO enviado curso="${resumo.cursoNome}" mensalidade="${resumo.mensalidade}" duracao="${resumo.duracao || 'n/a'}" nivel=${resumo.nivel}`,
   )
   return {
+    proceed: false,
     handled: true,
     result: buildAgentReturn({
       executionId,
@@ -273,4 +246,110 @@ export async function tryHandleMatriculaResumoConfirmacao(env, ctx) {
       ctxSnapshot: { inscricaoForm: INSCRICAO_FORM_STATUS_AGUARDANDO_AUTORIZACAO },
     }),
   }
+}
+
+/**
+ * Gate obrigatório antes de `deliverInscricaoForm` (polo, form start, tool LLM).
+ * Com curso/preço resolvíveis, exige resumo + autorização antes do formulário.
+ *
+ * @returns {Promise<{ proceed: true } | { proceed: false, handled?: boolean, result?: object, reason?: string }>}
+ */
+export async function gateMatriculaConfirmacaoBeforeForm(env, ctx) {
+  const {
+    telefone,
+    userMessage,
+    historyMessages = [],
+    leadId,
+    cursoHint,
+    asksResend = false,
+    executionId,
+    model,
+    pushName,
+    t0,
+  } = ctx
+  if (!telefone) return { proceed: true }
+  if (asksResend || messageAsksForFormResend(userMessage)) return { proceed: true }
+  if (messageAsksCoursePrice(userMessage)) return { proceed: true }
+
+  const status = await getFormStatus(env, telefone)
+  const wantsForm = messageConfirmsProceedToInscricaoForm(userMessage, historyMessages)
+
+  if (status === INSCRICAO_FORM_STATUS_MATRICULA_AUTORIZADA) {
+    return { proceed: true }
+  }
+
+  if (status === INSCRICAO_FORM_STATUS_AGUARDANDO_AUTORIZACAO) {
+    if (wantsForm) {
+      await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_MATRICULA_AUTORIZADA, leadId)
+      console.log(`[matriculaResumo] telefone=${telefone} AUTORIZADO — liberando envio do formulário`)
+      return { proceed: true }
+    }
+    return { proceed: false, reason: 'awaiting_matricula_authorization' }
+  }
+
+  const cursoNome = await resolveCursoNomeForResumo(env, {
+    userMessage,
+    historyMessages,
+    leadId,
+    cursoHint,
+  })
+  if (!cursoNome) return { proceed: true }
+
+  const resumo = await lookupCursoPrecoResumo(env, cursoNome)
+  if (!resumo) {
+    console.log(`[matriculaResumo] telefone=${telefone} curso="${cursoNome}" sem preço resolvido — segue fluxo normal`)
+    return { proceed: true }
+  }
+
+  if (assistantAskedMatriculaAuthorization(lastAssistantText(historyMessages)) && !wantsForm) {
+    return { proceed: false, reason: 'awaiting_matricula_authorization' }
+  }
+
+  await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO_AUTORIZACAO, leadId)
+  return buildResumoHandledResult(env, ctx, resumo)
+}
+
+/**
+ * @returns {Promise<{ handled: boolean, result?: object }|null>}
+ */
+export async function tryHandleMatriculaResumoConfirmacao(env, ctx) {
+  const { telefone, userMessage, executionId, model, leadId, pushName, t0 } = ctx
+  const historyMessages = ctx.historyMessages || []
+  if (!telefone || !String(userMessage || '').trim()) return null
+  if (messageAsksForFormResend(userMessage)) return null
+  if (messageAsksCoursePrice(userMessage)) return null
+
+  const status = await getFormStatus(env, telefone)
+  const wantsForm = messageConfirmsProceedToInscricaoForm(userMessage, historyMessages)
+
+  if (status === INSCRICAO_FORM_STATUS_AGUARDANDO_AUTORIZACAO) {
+    if (wantsForm) {
+      await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_MATRICULA_AUTORIZADA, leadId)
+      console.log(`[matriculaResumo] telefone=${telefone} AUTORIZADO — liberando envio do formulário`)
+    }
+    return null
+  }
+
+  if (status === INSCRICAO_FORM_STATUS_MATRICULA_AUTORIZADA) return null
+
+  // Só intercepta cedo no runner quando ainda não há estágio de inscrição em curso.
+  if (status != null) return null
+  if (!wantsForm) return null
+  if (assistantAskedMatriculaAuthorization(lastAssistantText(historyMessages))) return null
+
+  const gate = await gateMatriculaConfirmacaoBeforeForm(env, {
+    telefone,
+    userMessage,
+    historyMessages,
+    leadId,
+    executionId,
+    model,
+    pushName,
+    t0,
+  })
+  if (gate.proceed) return null
+  if (gate.handled) {
+    return { handled: true, result: gate.result }
+  }
+  return null
 }
