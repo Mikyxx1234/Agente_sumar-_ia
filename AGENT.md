@@ -12,6 +12,25 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-06-15 - Links do site oficial: só consulta interna, nunca ao lead — IMPLEMENTADO
+
+- **Decisão** (solicitada pela operação)
+  - URLs do site Sumaré (páginas de curso, catálogo, grade no site) servem apenas para
+    conferência no RAG/CONTEXT. **Proibido** enviar ao lead — matrícula direta no site
+    escapa da captação da empresa.
+  - Matrícula e informações comerciais devem fluir por este canal (formulário, API Captação).
+  - Exceções permitidas ao lead: atendimento (`/atendimento/`), ouvidoria, link de
+    contrato/pagamento do fluxo de inscrição.
+- **Implementação**
+  - Regra 30 em `promptsLoader.js`; marcadores RAG em `knowledgeRowFormat.js` sem URL
+    exposta como "link oficial"; hints em `agentRunner.js` e `toolDefinitions.js`.
+  - `libShared/courseLinkOutboundGuard.js` + `replyGuard.js` (antes do envio LLM) +
+    `whatsappSender.js` (rede de segurança em todo outbound).
+- **Impacto**
+  - Agente informa curso por texto/PDF/inscrição; não direciona para o site para matricular.
+
+---
+
 ### 2026-06-15 - Reativação por inbound: responder leads fora do funil que mandam mensagem — IMPLEMENTADO
 
 - **Decisão** (aprovada pela operação)

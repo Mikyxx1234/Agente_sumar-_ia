@@ -1127,7 +1127,7 @@ export async function runAgent(env, input) {
             'PERGUNTA SOBRE LOCALIZAÇÃO/CONTATO DO CAMPUS OU CENTRAL: o lead quer telefone, contato ou endereço para falar com o campus/Central Sumaré ou saber onde são as aulas presenciais. ' +
             'OBRIGATÓRIO neste turno: responda PRIMEIRO essa pergunta — informe Central em Pinheiros (Rua Alegrete, 89, Sumaré, São Paulo/SP) e telefone/WhatsApp de contato institucional quando constar no CONTEXT. ' +
             'Chame buscar_conhecimento com query "central Pinheiros telefone contato campus endereço Rua Alegrete". ' +
-            'Se o lead também pediu grade na mesma mensagem, responda o contato E depois chame enviar_grade_pdf (PDF primeiro; link só se PDF indisponível). ' +
+            'Se o lead também pediu grade na mesma mensagem, responda o contato E depois chame enviar_grade_pdf (PDF pelo WhatsApp; PROIBIDO link do site). ' +
             'PROIBIDO neste turno: enviar só PDF da grade ignorando a pergunta de contato/campus; PROIBIDO encaminhar consultor só por endereço/telefone.',
         }
       : null
@@ -1184,8 +1184,8 @@ export async function runAgent(env, input) {
             'PEDIDO DE GRADE CURRICULAR / DISCIPLINAS: o lead quer saber matérias, disciplinas ou a grade do curso. ' +
             `OBRIGATÓRIO neste turno: chame enviar_grade_pdf com telefone, curso "${discussedCourse}" e modalidade se souber — envie o PDF automaticamente, sem perguntar "quer que eu envie?". ` +
             'Se enviar_grade_pdf funcionar: confirme brevemente no texto (2–3 exemplos de disciplinas + total) que o PDF foi enviado. ' +
-            'Link do site (URL no CONTEXT) SOMENTE se enviar_grade_pdf falhar ou STATUS DA GRADE for NAO DISPONIVEL — nunca como primeira opção. ' +
-            'PROIBIDO: mandar só link perguntando se quer PDF; PROIBIDO inventar disciplinas fora do CONTEXT.',
+            'Se enviar_grade_pdf falhar ou STATUS DA GRADE for NAO DISPONIVEL: resuma o que houver no CONTEXT e ofereça inscrição por este canal — PROIBIDO enviar link/URL do site ao lead. ' +
+            'PROIBIDO: mandar link do site como alternativa ao PDF; PROIBIDO inventar disciplinas fora do CONTEXT.',
         }
       : null
 

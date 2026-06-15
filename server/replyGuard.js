@@ -21,6 +21,7 @@ import {
   lgpdGuardEnabled,
   replyLeaksSensitiveCandidateData,
 } from '../libShared/lgpdCompliance.js'
+import { sanitizeCourseLinksFromReply } from '../libShared/courseLinkOutboundGuard.js'
 
 const PROMISE_FORM_SEND_RX =
   /\b(enviei|acabei de enviar|j[aá] enviei|j[aá] ativei|vou enviar|vou mandar|pode aguardar|aguarde um momento|em instantes (vou|envio))\b[\s\S]{0,80}\bformul[aá]rio\b/i
@@ -148,11 +149,44 @@ export function validateReplyLgpd({ reply, userMessage = '', env = process.env }
   }
 }
 
-/** Valida guard de ações + LGPD em sequência. */
+/**
+ * Remove links de curso/site oficial da resposta (captação deve ser pelo canal).
+ * @returns {{ violation: boolean, sanitized?: boolean, code?: string, safeReply?: string, original?: string, removed?: number }}
+ */
+export function sanitizeReplyCourseLinks({ reply } = {}) {
+  const text = String(reply || '')
+  if (!text || text.length < 4) return { violation: false }
+  const { text: cleaned, removed } = sanitizeCourseLinksFromReply(text)
+  if (removed === 0) return { violation: false }
+  let safeReply = cleaned
+  if (!safeReply || safeReply.length < 12) {
+    safeReply =
+      'Posso te passar todas as informações do curso por aqui mesmo. Se quiser seguir com a matrícula, é só me confirmar que te ajudo com o próximo passo.'
+  }
+  return {
+    violation: true,
+    sanitized: true,
+    code: 'course_site_link_stripped',
+    safeReply,
+    original: text,
+    removed,
+  }
+}
+
+/** Valida guard de ações + links de curso + LGPD em sequência. */
 export function validateReplyBeforeSend({ reply, toolCalls = [], stage = null, userMessage = '', env = process.env } = {}) {
   const actionVerdict = validateReplyAgainstActions({ reply, toolCalls, stage })
   if (actionVerdict.violation) return actionVerdict
-  return validateReplyLgpd({ reply, userMessage, env })
+
+  let currentReply = reply
+  const linkVerdict = sanitizeReplyCourseLinks({ reply: currentReply })
+  if (linkVerdict.violation) currentReply = linkVerdict.safeReply
+
+  const lgpdVerdict = validateReplyLgpd({ reply: currentReply, userMessage, env })
+  if (lgpdVerdict.violation) return lgpdVerdict
+  if (linkVerdict.violation) return linkVerdict
+
+  return { violation: false }
 }
 
 /** Para testes/inspeção: lista as regex usadas. */

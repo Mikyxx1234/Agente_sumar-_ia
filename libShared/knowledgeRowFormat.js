@@ -169,7 +169,11 @@ export function enrichRowContentForRag(source, d) {
       const lista = meta.disciplinas.map((disc, i) => `${i + 1}. ${disc}`).join('\n')
       partes.push(`LISTA DE DISCIPLINAS:\n${lista}`)
     }
-    if (meta.url_pagina) partes.push(`[FONTE OFICIAL: ${meta.url_pagina}]`)
+    if (meta.url_pagina) {
+      partes.push(
+        `[FONTE INTERNA — URL só para sua conferência; PROIBIDO copiar ou enviar ao lead: ${meta.url_pagina}]`,
+      )
+    }
     partes.push(
       '[STATUS DA GRADE: PDF DISPONIVEL — chame enviar_grade_pdf com curso e modalidade para enviar o PDF. PROIBIDO dizer que não tem PDF.]',
     )
@@ -187,7 +191,11 @@ export function enrichRowContentForRag(source, d) {
       if (Array.isArray(meta.disciplinas) && meta.disciplinas.length) {
         partes.push(`LISTA DE DISCIPLINAS:\n${meta.disciplinas.map((disc, i) => `${i + 1}. ${disc}`).join('\n')}`)
       }
-      if (meta.url_pagina) partes.push(`[FONTE OFICIAL: ${meta.url_pagina}]`)
+      if (meta.url_pagina) {
+      partes.push(
+        `[FONTE INTERNA — URL só para sua conferência; PROIBIDO copiar ou enviar ao lead: ${meta.url_pagina}]`,
+      )
+    }
       partes.push(
         '[STATUS DA GRADE: PDF DISPONIVEL — chame a tool enviar_grade_pdf com curso e modalidade para enviar o PDF completo ao lead. PROIBIDO dizer que não tem PDF.]',
       )
@@ -200,8 +208,8 @@ export function enrichRowContentForRag(source, d) {
     if (perfilBlock) partes.push(perfilBlock)
     const gradeUrl = extractGradeLink(d?.metadata)
     const gradeStatus = gradeUrl
-      ? `STATUS DA GRADE: DISPONIVEL — link oficial: ${gradeUrl}`
-      : 'STATUS DA GRADE: NAO DISPONIVEL — não existe link/PDF da grade deste curso na nossa base.'
+      ? 'STATUS DA GRADE: DISPONIVEL — há referência interna na base; chame enviar_grade_pdf. PROIBIDO enviar link do site ao lead.'
+      : 'STATUS DA GRADE: NAO DISPONIVEL — não existe grade estruturada deste curso na base.'
     partes.push(`[${gradeStatus}]`)
     if (source === 'grad_info') {
       const estagioInfo = extractEstagioInfo(d?.metadata)

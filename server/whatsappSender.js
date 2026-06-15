@@ -29,6 +29,7 @@ import {
   leadHasPostFormRegistradoNote,
   releasePostFormSendSync,
 } from './postFormSendGuard.js'
+import { sanitizeCourseLinksFromReply } from '../libShared/courseLinkOutboundGuard.js'
 
 /**
  * Marca a mensagem do cliente como "lida" e mostra o "digitando..." pro
@@ -217,6 +218,13 @@ export async function sendText(env, { to, text }) {
  */
 export async function sendMessageWithNote(env, { telefone, text, leadId, executionId }) {
   const cfg = getConfig(env)
+  const linkSan = sanitizeCourseLinksFromReply(text)
+  if (linkSan.removed > 0) {
+    console.warn(
+      `[WhatsApp] course_link_stripped to=${String(telefone || '').slice(0, 20)} removed=${linkSan.removed}`,
+    )
+    text = linkSan.text
+  }
   const parts = splitMessage(text, cfg.maxChars)
   if (!parts.length) {
     return { ok: false, code: 'EMPTY_BODY', error: 'texto vazio', total: 0, sent: 0, steps: [] }
