@@ -34,6 +34,26 @@ import { executeCaptacaoAfterFormResolved } from './inscricaoPostFormPipeline.js
 import { deliverInscricaoForm } from './inscricaoFormFlow.js'
 import { gateMatriculaConfirmacaoBeforeForm } from './inscricaoMatriculaConfirmFlow.js'
 import { listLeadNotes } from './kommoClient.js'
+import { resolveTransferenciaCursoCodigo } from './sumareCaptacaoClient.js'
+
+/**
+ * Transferência: o curso que o lead vai cursar na Sumaré (destino) fica em
+ * `transferencia_curso_destino` (código EAD). O lead citou DOIS cursos na
+ * conversa (origem + destino), o que confunde a heurística do resumo de
+ * matrícula. Resolvemos o nome humano do destino para usar como cursoHint e o
+ * resumo mostrar o curso CERTO. Sem transferência, retorna undefined (fluxo
+ * vestibular normal cai na heurística da conversa).
+ */
+async function resolveTransferenciaCursoHint(env, telefone) {
+  try {
+    const transfRow = await fetchDadosClienteByTelefone(env, telefone, 'transferencia_curso_destino')
+    if (!transfRow?.transferencia_curso_destino) return undefined
+    const dest = await resolveTransferenciaCursoCodigo(env, transfRow.transferencia_curso_destino)
+    return dest?.descricao || undefined
+  } catch {
+    return undefined
+  }
+}
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
 
@@ -165,11 +185,13 @@ export async function tryHandlePoloPreFormFlow(env, input) {
     },
   }).catch(() => {})
 
+  const cursoHint = await resolveTransferenciaCursoHint(env, telefone)
   const matriculaGate = await gateMatriculaConfirmacaoBeforeForm(env, {
     telefone,
     userMessage,
     historyMessages,
     leadId: idLead,
+    cursoHint,
     executionId,
     model,
     pushName,
