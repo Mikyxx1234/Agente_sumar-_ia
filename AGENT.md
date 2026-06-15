@@ -12,6 +12,53 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-06-15 - Reativação por inbound: responder leads fora do funil que mandam mensagem — IMPLEMENTADO
+
+- **Decisão** (aprovada pela operação)
+  - O scheduler só monitora `pipeline 13756724 (Agente-Sumaré) / status 106140284 (Atendimento)`.
+    Quem manda mensagem estando em outra etapa/pipeline vira "órfão" no buffer e
+    nunca é respondido. Diagnóstico em produção (`GET /api/scheduler/funnel`):
+    scheduler saudável (`running/enabled/kommoOk=true`, 0 pendentes no funil),
+    mas **79 sessões órfãs** — 45 em `SUMARÉ-COMERCIAL (13080160) / em atendimento
+    (100859840)`, 23 em `13756724/143 (Venda perdida)`, e o restante em academico/ativações.
+  - **Regra de reativação (mover p/ `13756724/106140284` ao chegar inbound):**
+    1. `13756724 / 106377088` (Aguardando resposta do próprio funil do agente) —
+       cliente respondeu enquanto esperava → reativa.
+    2. `13080160 (SUMARÉ-COMERCIAL)` nos status ATIVOS
+       (`100859828 incoming, 100859832 contato inicial, 100859836 sem resposta,
+       106076568 agente IA, 100859840 em atendimento, 100860052 aguardando resposta,
+       100871908 robô`) → reativa.
+  - **Nunca reativa:** status terminais `142 (ganha)` / `143 (perdida)`; etapas de
+    inscrição/pagamento em andamento na comercial (`100860056, 100860060, 100860064`);
+    pipelines fora do escopo aprovado (acadêmico `13123892`, ativações `13080228`,
+    cobrança, anhanguera). Lead já em `106140284` é ignorado (já está sendo atendido).
+  - **Mecanismo:** varredura no `agentScheduler` (`tryReactivateOrphanLeads`),
+    *throttled* (intervalo `LEAD_REACTIVATION_SWEEP_SEC`, default 45s) e com teto por
+    varredura (`LEAD_REACTIVATION_CAP`, default 15). Lista sessões com buffer pendente
+    (`listSessionsWithPendingMessages`), resolve o lead por telefone, aplica a regra e
+    move p/ o funil; o tick seguinte responde. Idade máxima da mensagem p/ reativar:
+    `LEAD_REACTIVATION_MAX_AGE_HOURS` (default 24h) — evita responder buffer obsoleto.
+  - Ligado por env `LEAD_REACTIVATION_ENABLED` (default `true`).
+- **Contexto**
+  - O cliente que responde fora do funil (ex.: enquanto está "Aguardando resposta",
+    ou que cai na pipeline comercial) ficava mudo. A operação decidiu que a IA deve
+    atender também a pipeline SUMARÉ-COMERCIAL e reativar respostas em "Aguardando resposta".
+- **Alternativas descartadas**
+  - Reativar no webhook de inbound (Evolution/Meta): resposta imediata, mas adiciona
+    um `findLeadByPhone` no caminho quente de cada mensagem e espalha a regra por 2
+    handlers; a varredura centraliza no scheduler com custo controlado.
+  - Ligar `KOMMO_SCHEDULER_WEBHOOK_ORPHAN_FLUSH`: não resolve — o `funnel_gate` bloqueia
+    leads fora do funil; seria preciso mover o lead de qualquer forma.
+  - Ampliar `KOMMO_AGENT_STATUS_IDS` p/ incluir comercial: o scheduler rodaria
+    proactiveGreet/inatividade pesado em centenas de leads/tick e mudaria a semântica
+    das etapas; mover só quem manda mensagem é mais cirúrgico.
+- **Impacto**
+  - Novo módulo `server/leadReactivation.js` + hook no `server/agentScheduler.js`.
+    Desligável por env. Move leads da pipeline comercial p/ a do agente conforme
+    aprovado — pode alterar a visão da equipe comercial no Kommo (decisão da operação).
+
+---
+
 ### 2026-06-15 - Saudação proativa: agente inicia a conversa quando o lead entra no Kommo — IMPLEMENTADO
 
 - **Decisão** (aprovada pela operação)

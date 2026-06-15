@@ -72,6 +72,7 @@ import {
 import { matchPoloFromUserMessage } from '../libShared/sumarePoloCatalog.js'
 import { tryInactivityReengagement } from './inactivityReengagement.js'
 import { tryProactiveGreet } from './proactiveGreet.js'
+import { reactivateOrphanLeads, isReactivationEnabled, getSweepIntervalMs } from './leadReactivation.js'
 import { sendMessageWithNote } from './whatsappSender.js'
 import { saveConversation } from './historyStore.js'
 import { generateExecutionId } from './ai/executionTelemetry.js'
@@ -107,6 +108,26 @@ let running = false
 
 /** Evita flood: aviso de funil vazio no máx. 1x / 90s. */
 let lastEmptyFunnelWarnMs = 0
+
+/** Throttle da varredura de reativação por inbound (ver leadReactivation.js). */
+let lastReactivationSweepMs = 0
+
+/**
+ * Reativa leads fora do funil que mandaram mensagem (move p/ Atendimento).
+ * Throttled — não roda a cada tick. Idempotente: lead já no funil é ignorado.
+ */
+async function maybeReactivationSweep(env, stats) {
+  if (!isReactivationEnabled(env)) return
+  const now = Date.now()
+  if (now - lastReactivationSweepMs < getSweepIntervalMs(env)) return
+  lastReactivationSweepMs = now
+  try {
+    const r = await reactivateOrphanLeads(env)
+    if (r.reactivated > 0) stats.reactivated = (stats.reactivated || 0) + r.reactivated
+  } catch (err) {
+    console.warn('[scheduler] reactivation sweep:', err.message)
+  }
+}
 
 function isSchedulerVerbose(env) {
   return ['true', '1', 'yes'].includes(String(env.KOMMO_SCHEDULER_VERBOSE || '').trim().toLowerCase())
@@ -286,6 +307,11 @@ export async function runSchedulerTick(env) {
   const { pipelineId, statusIds } = resolveAgentFunnelFromEnv(env)
   const debounceMs = getDebounceMs(env)
   const whitelist = getTestLeadWhitelist(env)
+
+  // 0) Reativação por inbound: traz p/ o funil quem mandou mensagem estando
+  //    fora dele (ex.: "Aguardando resposta" do agente, pipeline comercial).
+  //    Throttled internamente; o próprio tick (abaixo) responde no ciclo seguinte.
+  await maybeReactivationSweep(env, stats)
 
   // 1) Listar leads no funil (um ou vários status — ver KOMMO_AGENT_STATUS_IDS)
   const listing = await listLeadsInAgentQueue(env)
