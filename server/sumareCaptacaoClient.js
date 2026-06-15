@@ -190,6 +190,56 @@ export async function fetchCursosV2(env) {
   return _cursosV2Cache || []
 }
 
+/** Abreviações comuns citadas pelo lead → código EAD. */
+const TRANSFERENCIA_CURSO_ALIASES = new Map(
+  Object.entries({
+    ads: 'ADS_EAD',
+    adm: 'ADM_EAD',
+    rh: 'RH_EAD',
+    gti: 'GTI_EAD',
+    sisinf: 'SISINF_EAD',
+    ccomp: 'CCOMP_EAD',
+    redes: 'REDES_EAD',
+    mkt: 'MARK_EAD',
+    marketing: 'MARK_EAD',
+  }),
+)
+
+function resolveTransferenciaAlias(raw) {
+  const compact = normalizeCursoNomeKey(raw).replace(/\s+/g, '')
+  const code = TRANSFERENCIA_CURSO_ALIASES.get(compact)
+  return code ? code.toUpperCase() : null
+}
+
+/**
+ * Cursos EAD parecidos com o nome informado (para sugerir quando não há match exato).
+ * @returns {Promise<Array<{ codigo: string, descricao: string, score: number }>>}
+ */
+export async function suggestSimilarTransferenciaCursos(env, input, limit = 4) {
+  const key = normalizeCursoNomeKey(input)
+  if (!key) return []
+  const cursos = await fetchCursosV2(env)
+  const tokens = key.split(/\s+/).filter((t) => t.length > 2)
+  const scored = cursos.map((c) => {
+    const ck = normalizeCursoNomeKey(c.descricao)
+    let score = 0
+    for (const t of tokens) {
+      if (ck.includes(t)) score += 2
+    }
+    if (ck.includes(key) || key.includes(ck)) score += 3
+    if (/seguranca|informacao|informatica|tecnologia|sistema|comput|rede|dado/i.test(key)) {
+      if (/redes|informacao|comput|tecnologia|dado|internet/i.test(ck)) score += 1
+      if (/seguranca/i.test(key) && /redes de computadores/i.test(ck)) score += 3
+      if (/seguranca/i.test(key) && /ciencia da computacao/i.test(ck)) score += 2
+    }
+    return { codigo: c.curso, descricao: c.descricao, score }
+  })
+  return scored
+    .filter((s) => s.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, Math.max(1, limit))
+}
+
 /**
  * Resolve um curso (nome humano ou código) para o código EAD oficial via cursosv2.
  * @returns {Promise<{ codigo: string, descricao: string }|null>}
@@ -204,16 +254,30 @@ export async function resolveTransferenciaCursoCodigo(env, input) {
     const hit = cursos.find((c) => c.curso.toUpperCase() === up)
     return hit ? { codigo: hit.curso, descricao: hit.descricao } : { codigo: up, descricao: up }
   }
+  const aliasCode = resolveTransferenciaAlias(raw)
+  if (aliasCode) {
+    const hit = cursos.find((c) => c.curso.toUpperCase() === aliasCode)
+    if (hit) return { codigo: hit.curso, descricao: hit.descricao }
+  }
   const key = normalizeCursoNomeKey(raw)
   if (!key) return null
   let m = cursos.find((c) => normalizeCursoNomeKey(c.descricao) === key)
   if (!m) m = cursos.find((c) => normalizeCursoNomeKey(c.descricao).includes(key) || key.includes(normalizeCursoNomeKey(c.descricao)))
   if (!m) {
-    const tokens = key.split(/\s+/).filter((t) => t.length > 3)
-    if (tokens.length) m = cursos.find((c) => {
-      const ck = normalizeCursoNomeKey(c.descricao)
-      return tokens.every((t) => ck.includes(t))
-    })
+    const tokens = key.split(/\s+/).filter((t) => t.length > 2)
+    if (tokens.length) {
+      const ranked = cursos
+        .map((c) => {
+          const ck = normalizeCursoNomeKey(c.descricao)
+          const hits = tokens.filter((t) => ck.includes(t)).length
+          return { c, hits }
+        })
+        .filter((x) => x.hits > 0)
+        .sort((a, b) => b.hits - a.hits)
+      if (ranked.length === 1 || (ranked.length > 1 && ranked[0].hits > ranked[1].hits)) {
+        m = ranked[0].c
+      }
+    }
   }
   return m ? { codigo: m.curso, descricao: m.descricao } : null
 }

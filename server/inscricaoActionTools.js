@@ -44,7 +44,7 @@ import {
   getLeadIdByTelefone,
 } from './dadosClienteStore.js'
 import { findLeadByPhone } from './kommoClient.js'
-import { resolveTransferenciaCursoCodigo } from './sumareCaptacaoClient.js'
+import { resolveTransferenciaCursoCodigo, suggestSimilarTransferenciaCursos } from './sumareCaptacaoClient.js'
 import { deliverInscricaoForm } from './inscricaoFormFlow.js'
 import { executeCaptacaoAfterFormResolved } from './inscricaoPostFormPipeline.js'
 import { fetchLeadFormSnapshot } from './inscricaoKommoFields.js'
@@ -377,12 +377,17 @@ export async function runRegistrarTransferencia(env, args = {}, ctx = {}) {
   ])
 
   if (!destino) {
+    const sugestoes = await suggestSimilarTransferenciaCursos(env, cursoDesejadoRaw, 4)
+    const lista =
+      sugestoes.length > 0
+        ? `\n\nCursos parecidos na Sumaré EAD:\n${sugestoes.map((s) => `• ${s.descricao}`).join('\n')}\n\nQual deles você quer cursar?`
+        : '\n\nPode confirmar o nome exato do curso EAD que você quer cursar na Sumaré?'
     return {
       ok: false,
       code: 'CURSO_DESTINO_INVALIDO',
       text: `Curso desejado "${cursoDesejadoRaw}" não encontrado na lista EAD oficial. Peça o nome correto do curso.`,
-      replyOverride: `Não localizei o curso "${cursoDesejadoRaw}" na nossa lista EAD. Pode confirmar o nome do curso que você quer cursar na Sumaré?`,
-      ctxSnapshot: { inscricaoActionTool: 'registrar_transferencia', cursoDesejadoRaw },
+      replyOverride: `Não localizei o curso "${cursoDesejadoRaw}" na nossa lista EAD.${lista}`,
+      ctxSnapshot: { inscricaoActionTool: 'registrar_transferencia', cursoDesejadoRaw, sugestoes: sugestoes.map((s) => s.descricao) },
       steps: [{ type: 'tool_action', tool: 'registrar_transferencia', ok: false, code: 'CURSO_DESTINO_INVALIDO' }],
     }
   }

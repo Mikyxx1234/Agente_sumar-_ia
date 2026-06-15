@@ -48,6 +48,8 @@ import { tryHandleCaptacaoInscricaoExistenteFlow } from '../captacaoInscricaoExi
 import { tryHandlePoloPreFormFlow, tryHandlePoloEscolhaFlow } from '../inscricaoPoloFlow.js'
 import { tryHandleInscricaoFromKommoCard } from '../inscricaoKommoPreFilledFlow.js'
 import { tryHandleMatriculaResumoConfirmacao } from '../inscricaoMatriculaConfirmFlow.js'
+import { tryHandleTransferenciaDadosPendentes } from '../inscricaoTransferenciaFlow.js'
+import { maybeAuditActionToolFailure, recordInscricaoFailureAuditNote } from '../inscricaoFailureAudit.js'
 import {
   tryHandleInscricaoDesistenciaFlow,
   tryHandleDesistenciaJaRegistrada,
@@ -265,7 +267,7 @@ function isOpenAiTransientError(err) {
   return /OpenAI (429|500|502|503)\b/.test(String(err?.message || err || ''))
 }
 
-async function executeToolCalls(executors, toolCalls, trace, ctx) {
+async function executeToolCalls(executors, toolCalls, trace, ctx, auditCtx = {}) {
   const results = []
   /**
    * Tools de ação de inscrição retornam `{ ok, code, text, replyOverride, ctxSnapshot, steps }`.
@@ -297,6 +299,13 @@ async function executeToolCalls(executors, toolCalls, trace, ctx) {
         step.replyOverride = result.replyOverride || null
         step.ctxSnapshot = result.ctxSnapshot || null
         actionResults.push({ tool: fn.name, result })
+        if (result.ok === false && auditCtx.env) {
+          await maybeAuditActionToolFailure(auditCtx.env, {
+            telefone: auditCtx.telefone,
+            leadId: auditCtx.leadId,
+            executionId: auditCtx.executionId,
+          }, result)
+        }
         results.push({
           tool_call_id: tc.id,
           role: 'tool',
@@ -511,6 +520,20 @@ export async function runAgent(env, input) {
   // Passo de CONFIRMAÇÃO antes do formulário: quando o lead confirma a matrícula,
   // envia o resumo (curso/valor/taxa) e pede autorização ANTES de disparar o
   // formulário. Só depois do "autorizo" o fluxo de envio existente roda.
+  if (telefone) {
+    const transferenciaFlow = await tryHandleTransferenciaDadosPendentes(env, formFlowCtx)
+    if (transferenciaFlow?.handled) {
+      console.log(
+        `[${executionId}] TRANSFERENCIA_DADOS_PENDENTES code=${transferenciaFlow.result?.ctxSnapshot?.actionCode ?? transferenciaFlow.result?.toolCalls?.[0]?.code ?? 'n/a'}`,
+      )
+      return {
+        ...transferenciaFlow.result,
+        historyLoaded: historyMessages.length,
+        aiMeta: ctx.toAiMeta(),
+      }
+    }
+  }
+
   if (telefone) {
     const resumoFlow = await tryHandleMatriculaResumoConfirmacao(env, formFlowCtx)
     if (resumoFlow?.handled) {
@@ -1369,6 +1392,7 @@ export async function runAgent(env, input) {
           msg.tool_calls,
           toolTrace,
           ctx,
+          { env, telefone, leadId, executionId },
         )
         apiMessages.push(...toolResults)
 
@@ -1499,6 +1523,14 @@ export async function runAgent(env, input) {
           replacementApplied: true,
         })
         reply = guardVerdict.safeReply
+        await recordInscricaoFailureAuditNote(env, {
+          leadId,
+          telefone,
+          code: guardVerdict.code,
+          motivo: `Resposta bloqueada pelo guard: ${String(guardVerdict.original || '').slice(0, 300)}`,
+          tipo: 'resposta bloqueada',
+          executionId,
+        }).catch(() => {})
       }
 
       // Fix 1 — Auto-sync de inscricao_form_status quando o REPLY final

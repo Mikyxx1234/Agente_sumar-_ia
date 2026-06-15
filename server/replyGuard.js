@@ -38,9 +38,16 @@ const INSCRICAO_DONE_RX =
 const CAPTACAO_DONE_RX =
   /\b(cadastr(?:o|amos)|cadastrei|inscrev(?:i|emos)|registrei sua inscri[cç][aã]o)\b/i
 
+const CONSULTOR_PROMISE_RX =
+  /\b(consultor|atendente|equipe|nossa equipe)\b[\s\S]{0,80}\b(entrar[aá] em contato|vai te chamar|retornar|ligar|contato em breve)\b/i
+
+const TRANSFERENCIA_REGISTER_RX =
+  /\b(registr(?:ei|ar)|pedido de transfer[eê]ncia)\b/i
+
 const ACTION_TOOL_NAMES = new Set([
   'enviar_form_sumar_inscricao',
   'registrar_polo_inscricao',
+  'registrar_transferencia',
   'confirmar_recebimento_formulario',
 ])
 
@@ -129,6 +136,36 @@ export function validateReplyAgainstActions({ reply, toolCalls = [], stage = nul
 }
 
 /**
+ * Bloqueia promessa de consultor sem ter acionado distribuir_humano ou concluído
+ * ação de inscrição/transferência neste turno.
+ */
+export function validateReplyConsultorPromise({ reply, toolCalls = [] } = {}) {
+  const text = String(reply || '')
+  if (!text || text.length < 8) return { violation: false }
+  if (!CONSULTOR_PROMISE_RX.test(text)) return { violation: false }
+  if (toolWasCalledOk(toolCalls, ['distribuir_humano'])) return { violation: false }
+  if (toolWasCalledOk(toolCalls, ['registrar_transferencia', 'enviar_form_sumar_inscricao', 'registrar_polo_inscricao'])) {
+    return { violation: false }
+  }
+  if (TRANSFERENCIA_REGISTER_RX.test(text)) {
+    return {
+      violation: true,
+      code: 'transferencia_consultor_without_tool',
+      safeReply:
+        'Vou seguir com sua transferência por aqui mesmo — só preciso confirmar o curso desejado na Sumaré e o último semestre concluído. Me confirma esses dados?',
+      original: text,
+    }
+  }
+  return {
+    violation: true,
+    code: 'consultor_promise_without_handoff',
+    safeReply:
+      'Posso continuar te ajudando por aqui com a matrícula ou transferência. Me confirma qual curso você quer cursar na Sumaré para eu seguir com o próximo passo?',
+    original: text,
+  }
+}
+
+/**
  * Bloqueia respostas que vazam dados sensíveis de candidatos (LGPD).
  * @param {object} params
  * @param {string} params.reply
@@ -177,6 +214,9 @@ export function sanitizeReplyCourseLinks({ reply } = {}) {
 export function validateReplyBeforeSend({ reply, toolCalls = [], stage = null, userMessage = '', env = process.env } = {}) {
   const actionVerdict = validateReplyAgainstActions({ reply, toolCalls, stage })
   if (actionVerdict.violation) return actionVerdict
+
+  const consultorVerdict = validateReplyConsultorPromise({ reply, toolCalls })
+  if (consultorVerdict.violation) return consultorVerdict
 
   let currentReply = reply
   const linkVerdict = sanitizeReplyCourseLinks({ reply: currentReply })
