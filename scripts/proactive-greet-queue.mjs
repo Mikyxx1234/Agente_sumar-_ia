@@ -11,10 +11,22 @@
  *   --apply       envia de verdade (sem isso é dry-run)
  *   --limit N     processa no máximo N leads-alvo (os MAIS ANTIGOS primeiro)
  *   --delay-ms N  intervalo entre envios (default 2200)
+ *   --status A,B  lista leads diretamente nesses status do pipeline 13756724
+ *                 (ex.: 106377088 = "Aguardando resposta"). Sem isso, usa a
+ *                 fila fixa da IA (Atendimento + inscrição).
+ *   --move-to S   move cada lead-alvo para o status S (pipeline 13756724) antes
+ *                 de saudar — ex.: 106140284 (Atendimento) para que a resposta
+ *                 do lead passe a ser atendida pelo agente.
  */
 import fs from 'node:fs'
 import { listLeadsInAgentQueue } from '../server/kommoAgentFunnel.js'
-import { bulkGetContactsByIds, extractContactPhone, listLeadNotes } from '../server/kommoClient.js'
+import {
+  bulkGetContactsByIds,
+  extractContactPhone,
+  listLeadNotes,
+  listLeadsByStatus,
+  updateLeadPipelineStatus,
+} from '../server/kommoClient.js'
 import { phoneToWhatsAppSessionId } from '../server/phoneWhatsApp.js'
 import { getMessages } from '../server/evolution/messageBuffer.js'
 import { fetchRecentChatRows, saveConversation, appendChatMemory } from '../server/historyStore.js'
@@ -66,6 +78,13 @@ const dryRun = !args.includes('--apply')
 const delayMs = Number(args.find((a, i) => args[i - 1] === '--delay-ms') || 2200)
 const limitRaw = Number(args.find((a, i) => args[i - 1] === '--limit'))
 const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.floor(limitRaw) : Infinity
+const statusArg = String(args.find((a, i) => args[i - 1] === '--status') || '').trim()
+const statusIds = statusArg
+  ? statusArg.split(',').map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0)
+  : null
+const PIPELINE_ID = 13756724
+const moveToRaw = Number(args.find((a, i) => args[i - 1] === '--move-to'))
+const moveToStatus = Number.isFinite(moveToRaw) && moveToRaw > 0 ? Math.floor(moveToRaw) : null
 
 async function hasPriorAttendance(phone, leadId) {
   const sid = phoneToWhatsAppSessionId(phone)
@@ -91,14 +110,30 @@ async function hasPriorAttendance(phone, leadId) {
   return { attended: false }
 }
 
-const listing = await listLeadsInAgentQueue(env)
-if (!listing.ok) {
-  console.error('falha listar fila:', listing.error)
-  process.exit(1)
+let rawLeads = []
+if (statusIds) {
+  const byId = new Map()
+  for (const sid of statusIds) {
+    const r = await listLeadsByStatus(env, { pipelineId: PIPELINE_ID, statusId: sid })
+    if (!r.ok) {
+      console.error(`falha listar status ${sid}:`, r.error)
+      continue
+    }
+    for (const l of r.leads || []) byId.set(Number(l.id), l)
+  }
+  rawLeads = [...byId.values()]
+  console.log(`[fonte] status=[${statusIds.join(',')}] pipeline=${PIPELINE_ID} total=${rawLeads.length}`)
+} else {
+  const listing = await listLeadsInAgentQueue(env)
+  if (!listing.ok) {
+    console.error('falha listar fila:', listing.error)
+    process.exit(1)
+  }
+  rawLeads = listing.leads || []
 }
 
 // Mais antigos primeiro (created_at do Kommo em segundos).
-const leads = (listing.leads || [])
+const leads = rawLeads
   .slice()
   .sort((a, b) => (Number(a?.created_at) || 0) - (Number(b?.created_at) || 0))
 const contactIds = []
@@ -148,9 +183,21 @@ for (const lead of leads) {
   const createdIso = lead.created_at
     ? new Date(Number(lead.created_at) * 1000).toISOString().slice(0, 10)
     : '?'
-  console.log(`[${dryRun ? 'would-send' : 'send'}] lead=${lid} ${name} phone=${phone} criado=${createdIso}`)
+  const moveLabel = moveToStatus ? ` move->${moveToStatus}` : ''
+  console.log(`[${dryRun ? 'would-send' : 'send'}] lead=${lid} ${name} phone=${phone} criado=${createdIso}${moveLabel}`)
 
   if (!dryRun) {
+    if (moveToStatus) {
+      const mv = await updateLeadPipelineStatus(env, lid, { pipelineId: PIPELINE_ID, statusId: moveToStatus })
+      if (!mv.ok) {
+        console.log(`  FALHA mover lead=${lid} status->${moveToStatus}: ${mv.error || mv.code}`)
+        stats.fail++
+        if (stats.targets >= limit) break
+        continue
+      }
+      console.log(`  movido lead=${lid} -> status ${moveToStatus}`)
+    }
+
     const executionId = generateExecutionId()
     const sendRes = await sendMessageWithNote(env, {
       telefone: phone,
