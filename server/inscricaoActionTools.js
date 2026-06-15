@@ -44,6 +44,7 @@ import {
   getLeadIdByTelefone,
 } from './dadosClienteStore.js'
 import { findLeadByPhone } from './kommoClient.js'
+import { resolveTransferenciaCursoCodigo } from './sumareCaptacaoClient.js'
 import { deliverInscricaoForm } from './inscricaoFormFlow.js'
 import { executeCaptacaoAfterFormResolved } from './inscricaoPostFormPipeline.js'
 import { fetchLeadFormSnapshot } from './inscricaoKommoFields.js'
@@ -327,6 +328,95 @@ export async function runEnviarFormSumarInscricao(env, args = {}, ctx = {}) {
       },
     ],
   }
+}
+
+/**
+ * Tool: `registrar_transferencia`.
+ * Ingresso por transferência externa / aproveitamento de matérias: grava os 3
+ * campos extras (curso de origem, semestre concluído, curso desejado) e segue
+ * para o mesmo fluxo de polo + Form Sumar do vestibular. A geração na API
+ * Captação usa tipoIngresso=Transferencia_Ext (montado no pós-formulário).
+ */
+export async function runRegistrarTransferencia(env, args = {}, ctx = {}) {
+  const telefone = String(args.telefone || ctx.telefone || '').trim()
+  const cursoOrigemRaw = String(args.curso_origem || '').trim()
+  const semestreRaw = String(args.semestre_concluido || '').trim()
+  const cursoDesejadoRaw = String(args.curso_desejado || '').trim()
+  const poloId = args.polo_id ? String(args.polo_id).trim().toLowerCase() : null
+  const pushName = ctx.pushName
+
+  if (!telefone) {
+    return {
+      ok: false,
+      code: 'MISSING_TELEFONE',
+      text: 'Falha: telefone não informado.',
+      replyOverride: null,
+      ctxSnapshot: { inscricaoActionTool: 'registrar_transferencia', error: 'missing_telefone' },
+      steps: [{ type: 'tool_action', tool: 'registrar_transferencia', ok: false, code: 'MISSING_TELEFONE' }],
+    }
+  }
+
+  const faltando = []
+  if (!cursoOrigemRaw) faltando.push('curso de origem (o que você cursou/cursa)')
+  if (!semestreRaw) faltando.push('último semestre concluído')
+  if (!cursoDesejadoRaw) faltando.push('curso desejado na Sumaré')
+  if (faltando.length) {
+    return {
+      ok: false,
+      code: 'TRANSFERENCIA_DADOS_FALTANDO',
+      text: `Faltam dados da transferência: ${faltando.join(', ')}. Pergunte ao lead.`,
+      replyOverride: `Para dar entrada pela transferência/aproveitamento de matérias, me confirme: ${faltando.join(', ')}.`,
+      ctxSnapshot: { inscricaoActionTool: 'registrar_transferencia', faltando },
+      steps: [{ type: 'tool_action', tool: 'registrar_transferencia', ok: false, code: 'TRANSFERENCIA_DADOS_FALTANDO' }],
+    }
+  }
+
+  const [origem, destino] = await Promise.all([
+    resolveTransferenciaCursoCodigo(env, cursoOrigemRaw),
+    resolveTransferenciaCursoCodigo(env, cursoDesejadoRaw),
+  ])
+
+  if (!destino) {
+    return {
+      ok: false,
+      code: 'CURSO_DESTINO_INVALIDO',
+      text: `Curso desejado "${cursoDesejadoRaw}" não encontrado na lista EAD oficial. Peça o nome correto do curso.`,
+      replyOverride: `Não localizei o curso "${cursoDesejadoRaw}" na nossa lista EAD. Pode confirmar o nome do curso que você quer cursar na Sumaré?`,
+      ctxSnapshot: { inscricaoActionTool: 'registrar_transferencia', cursoDesejadoRaw },
+      steps: [{ type: 'tool_action', tool: 'registrar_transferencia', ok: false, code: 'CURSO_DESTINO_INVALIDO' }],
+    }
+  }
+  if (!origem) {
+    return {
+      ok: false,
+      code: 'CURSO_ORIGEM_INVALIDO',
+      text: `Curso de origem "${cursoOrigemRaw}" não bateu com a lista EAD oficial. Confirme o nome do curso anterior.`,
+      replyOverride: `Só pra confirmar: qual era exatamente o nome do curso que você cursou/está cursando? Não consegui identificar "${cursoOrigemRaw}".`,
+      ctxSnapshot: { inscricaoActionTool: 'registrar_transferencia', cursoOrigemRaw },
+      steps: [{ type: 'tool_action', tool: 'registrar_transferencia', ok: false, code: 'CURSO_ORIGEM_INVALIDO' }],
+    }
+  }
+
+  const semestre = semestreRaw.replace(/\D/g, '')
+  const leadId = await resolveLeadId(env, telefone, ctx.leadId)
+
+  await ensureDadosClienteRow(env, {
+    telefone,
+    idLead: leadId,
+    fields: {
+      transferencia_curso_origem: origem.codigo,
+      transferencia_semestre: semestre || semestreRaw,
+      transferencia_curso_destino: destino.codigo,
+    },
+  }).catch(() => {})
+
+  // Mesmo fluxo do vestibular: pede polo (se preciso), gate de matrícula e Form Sumar.
+  // O pós-formulário lê as colunas de transferência e gera com Transferencia_Ext.
+  return runEnviarFormSumarInscricao(
+    env,
+    { telefone, curso: destino.descricao, polo_id: poloId },
+    ctx,
+  )
 }
 
 /** Tool: `registrar_polo_inscricao`. */

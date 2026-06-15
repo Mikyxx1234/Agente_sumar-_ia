@@ -1064,6 +1064,7 @@ export async function runAgent(env, input) {
           'TOOLS DE INSCRIÇÃO — você NUNCA pode dizer que "enviou", "vai enviar", "registrou polo" ou "fez a inscrição" sem ter chamado a tool correspondente neste turno. Tools disponíveis:\n' +
           '- enviar_form_sumar_inscricao(telefone, curso[, polo_id]): chame quando o lead confirma matrícula em um curso específico. Se o polo ainda não foi escolhido, o servidor pede polo automaticamente.\n' +
           '- registrar_polo_inscricao(telefone, polo_id): chame quando o lead responde polo (1-5 ou nome). polo_id ∈ {sao_miguel, barra_funda, tatuape, santana, pinheiros}.\n' +
+          '- registrar_transferencia(telefone, curso_origem, semestre_concluido, curso_desejado[, polo_id]): chame para ingresso por transferência/aproveitamento de matérias, depois de confirmar com o lead o curso de origem, o último semestre concluído e o curso desejado (regra 31).\n' +
           '- confirmar_recebimento_formulario(telefone): chame quando o lead diz "pronto", "preenchi", "feito", "ok" após o estado aguardando_form_sumar.\n' +
           (inscricaoStage === INSCRICAO_FORM_STATUS_AGUARDANDO
             ? 'ESTADO ATUAL: aguardando_form_sumar — PROIBIDO chamar enviar_form_sumar_inscricao de novo; só oriente o lead a preencher o formulário já enviado.\n'

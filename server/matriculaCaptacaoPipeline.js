@@ -159,6 +159,27 @@ export async function runMatriculaCaptacaoAfterForm(env, ctx) {
     ...(ctx.snapshotOverride && typeof ctx.snapshotOverride === 'object' ? ctx.snapshotOverride : {}),
   }
 
+  // Ingresso por transferência: os 3 campos extras (curso origem, série,
+  // curso destino) ficam em dados_cliente_sum (gravados por registrar_transferencia)
+  // e precisam entrar no snapshot p/ o `gerar` montar tipoIngresso=Transferencia_Ext.
+  const transfRow = await fetchDadosClienteByTelefone(
+    env,
+    telefone,
+    'transferencia_curso_origem,transferencia_semestre,transferencia_curso_destino',
+  ).catch(() => null)
+  if (transfRow?.transferencia_curso_origem) {
+    snapshot.transferencia_curso_origem = transfRow.transferencia_curso_origem
+    snapshot.transferencia_semestre = transfRow.transferencia_semestre
+    if (!snapshot.tipo_inscricao || !/transfer/i.test(String(snapshot.tipo_inscricao))) {
+      snapshot.tipo_inscricao = 'Transferência'
+    }
+    // Curso desejado (destino) é o que o lead confirmou na transferência —
+    // prevalece sobre o curso que tenha vindo do formulário.
+    if (transfRow.transferencia_curso_destino) {
+      snapshot.curso_inscricao = transfRow.transferencia_curso_destino
+    }
+  }
+
   let priorRow = await fetchDadosClienteByTelefone(
     env,
     telefone,

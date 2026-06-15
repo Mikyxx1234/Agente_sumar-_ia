@@ -25,7 +25,7 @@ const ref = new URL(url).hostname.split('.')[0]
 
 async function probeColumns() {
   const r = await fetch(
-    `${url}/rest/v1/${encodeURIComponent(table)}?select=inscricao_form_status,reativacao_ping_at,reativacao_moved_at,proactive_greet_at&limit=1`,
+    `${url}/rest/v1/${encodeURIComponent(table)}?select=inscricao_form_status,reativacao_ping_at,reativacao_moved_at,proactive_greet_at,transferencia_curso_origem,transferencia_semestre,transferencia_curso_destino&limit=1`,
     { headers: { apikey: key, Authorization: `Bearer ${key}` } },
   )
   return r.status

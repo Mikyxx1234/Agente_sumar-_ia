@@ -178,6 +178,43 @@ export const TOOL_DEFINITIONS = [
   {
     type: 'function',
     function: {
+      name: 'registrar_transferencia',
+      description:
+        'Inicia o ingresso por TRANSFERÊNCIA EXTERNA / aproveitamento de matérias. ' +
+        'CHAME quando o lead quiser aproveitar/dispensar matérias, já cursou (ou cursa) outra faculdade e quer continuar/aproveitar, ' +
+        'quer voltar a cursar aproveitando o que já fez, ou pedir transferência. ' +
+        'Antes de chamar, colete e confirme: curso de origem (o que cursou/cursa), último semestre concluído e curso desejado na Sumaré. ' +
+        'O servidor grava esses dados e segue para o polo + formulário (mesmo fluxo da matrícula). ' +
+        'NÃO use para ingresso normal (vestibular) — nesse caso use enviar_form_sumar_inscricao.',
+      parameters: {
+        type: 'object',
+        properties: {
+          telefone: { type: 'string', description: 'Telefone do lead (Contexto do atendimento).' },
+          curso_origem: {
+            type: 'string',
+            description: 'Nome do curso que o lead cursou ou está cursando na faculdade anterior (ex.: "Banco de Dados").',
+          },
+          semestre_concluido: {
+            type: 'string',
+            description: 'Último semestre que o lead concluiu na faculdade anterior (ex.: "2", "4º semestre").',
+          },
+          curso_desejado: {
+            type: 'string',
+            description: 'Curso que o lead quer cursar na Sumaré (ex.: "Sistemas de Informação"). EAD.',
+          },
+          polo_id: {
+            type: 'string',
+            enum: ['sao_miguel', 'barra_funda', 'tatuape', 'santana', 'pinheiros'],
+            description: 'OPCIONAL — só informe se o lead já citou o polo nessa conversa.',
+          },
+        },
+        required: ['telefone', 'curso_origem', 'semestre_concluido', 'curso_desejado'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'confirmar_recebimento_formulario',
       description:
         'Confirma o recebimento do formulário preenchido e dispara a inscrição na API Captação Sumaré (gera link de aceite do contrato). ' +
@@ -283,6 +320,7 @@ export function getToolDefinitions(env = process.env) {
 export const INSCRICAO_ACTION_TOOLS = new Set([
   'enviar_form_sumar_inscricao',
   'registrar_polo_inscricao',
+  'registrar_transferencia',
   'confirmar_recebimento_formulario',
 ])
 

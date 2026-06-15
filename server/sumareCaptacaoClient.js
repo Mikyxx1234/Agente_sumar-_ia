@@ -172,6 +172,52 @@ export function resolveCursoCodigo(cursoInscricao, env = process.env) {
   return def ? def.toUpperCase() : ''
 }
 
+/** Cache da lista oficial de cursos EAD (transferência usa origem e destino dessa lista). */
+let _cursosV2Cache = null
+let _cursosV2CacheAt = 0
+
+/** GET /api-ingresso/ead/academico/ingresso/cursosv2 — [{ curso, descricao }]. Cacheado 1h. */
+export async function fetchCursosV2(env) {
+  if (_cursosV2Cache && Date.now() - _cursosV2CacheAt < 3_600_000) return _cursosV2Cache
+  const r = await captacaoFetch(env, '/api-ingresso/ead/academico/ingresso/cursosv2')
+  if (r.ok && Array.isArray(r.data)) {
+    _cursosV2Cache = r.data.map((c) => ({
+      curso: String(c.curso || '').trim(),
+      descricao: String(c.descricao || '').trim(),
+    }))
+    _cursosV2CacheAt = Date.now()
+  }
+  return _cursosV2Cache || []
+}
+
+/**
+ * Resolve um curso (nome humano ou código) para o código EAD oficial via cursosv2.
+ * @returns {Promise<{ codigo: string, descricao: string }|null>}
+ */
+export async function resolveTransferenciaCursoCodigo(env, input) {
+  const raw = String(input || '').trim()
+  if (!raw) return null
+  const cursos = await fetchCursosV2(env)
+  // Já é um código (ex.: SISINF_EAD)
+  if (/^[A-Z0-9]+_EAD$/i.test(raw)) {
+    const up = raw.toUpperCase()
+    const hit = cursos.find((c) => c.curso.toUpperCase() === up)
+    return hit ? { codigo: hit.curso, descricao: hit.descricao } : { codigo: up, descricao: up }
+  }
+  const key = normalizeCursoNomeKey(raw)
+  if (!key) return null
+  let m = cursos.find((c) => normalizeCursoNomeKey(c.descricao) === key)
+  if (!m) m = cursos.find((c) => normalizeCursoNomeKey(c.descricao).includes(key) || key.includes(normalizeCursoNomeKey(c.descricao)))
+  if (!m) {
+    const tokens = key.split(/\s+/).filter((t) => t.length > 3)
+    if (tokens.length) m = cursos.find((c) => {
+      const ck = normalizeCursoNomeKey(c.descricao)
+      return tokens.every((t) => ck.includes(t))
+    })
+  }
+  return m ? { codigo: m.curso, descricao: m.descricao } : null
+}
+
 /** Parâmetros que a API exige na query mesmo vazios (espelha workflow n8n). */
 export const GERAR_CANDIDATO_QUERY_DEFAULTS = {
   utmSource: '',
@@ -323,7 +369,7 @@ export function buildGerarCandidatoQuery(snapshot, telefone, env = process.env) 
     snapshot?.tipo_inscricao || getDefaultTipoIngresso(env),
   ).trim()
 
-  return {
+  const params = {
     ...GERAR_CANDIDATO_QUERY_DEFAULTS,
     cpf,
     celular: fone,
@@ -337,6 +383,33 @@ export function buildGerarCandidatoQuery(snapshot, telefone, env = process.env) 
     tipoIngresso,
     sumareComVc: 'N',
   }
+
+  // Ingresso por TRANSFERÊNCIA EXTERNA / aproveitamento de matérias.
+  // Espelha o frontend (dadosExternos.js): mesmo endpoint `gerar`, mudando
+  // tipoIngresso=Transferencia_Ext, cursoAntigo=curso de origem e a SÉRIE
+  // (último semestre concluído) carregada no campo `dispositivo`.
+  // ⚠️ "Transferência Externa" (acento/espaço) estoura a coluna no SQL Server.
+  applyTransferenciaParams(params, snapshot, env)
+
+  return params
+}
+
+/** True quando o snapshot indica ingresso por transferência externa. */
+export function isTransferenciaSnapshot(snapshot) {
+  if (!snapshot) return false
+  if (String(snapshot.transferencia_curso_origem || '').trim()) return true
+  return /transfer/i.test(String(snapshot.tipo_inscricao || ''))
+}
+
+/** Sobrescreve params do `gerar` para o fluxo de transferência (mutação in-place). */
+export function applyTransferenciaParams(params, snapshot, env = process.env) {
+  if (!isTransferenciaSnapshot(snapshot)) return params
+  params.tipoIngresso = 'Transferencia_Ext'
+  const origem = resolveCursoCodigo(snapshot?.transferencia_curso_origem, env)
+  if (origem) params.cursoAntigo = origem
+  const serie = String(snapshot?.transferencia_semestre || '').replace(/\D/g, '')
+  if (serie) params.dispositivo = serie
+  return params
 }
 
 /**

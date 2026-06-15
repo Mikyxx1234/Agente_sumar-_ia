@@ -23,6 +23,7 @@ import { userAsksCourseMoreDetails } from '../../libShared/courseMoreInfo.js'
 import {
   runEnviarFormSumarInscricao,
   runRegistrarPoloInscricao,
+  runRegistrarTransferencia,
   runConfirmarRecebimentoFormulario,
 } from '../inscricaoActionTools.js'
 import { runEnviarGradePdf } from '../gradeCurricularActionTools.js'
@@ -340,6 +341,8 @@ export function buildToolExecutors(env, ctx, flowCtx = {}) {
       runEnviarFormSumarInscricao(env, args, flowCtx),
     registrar_polo_inscricao: async (args) =>
       runRegistrarPoloInscricao(env, args, flowCtx),
+    registrar_transferencia: async (args) =>
+      runRegistrarTransferencia(env, args, flowCtx),
     confirmar_recebimento_formulario: async (args) =>
       runConfirmarRecebimentoFormulario(env, args, flowCtx),
     enviar_grade_pdf: async (args) => runEnviarGradePdf(env, args, flowCtx),

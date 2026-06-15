@@ -12,6 +12,53 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-06-15 - Ingresso por transferência / aproveitamento de matérias — EM IMPLEMENTAÇÃO
+
+- **Decisão** (aprovada pela operação)
+  - Nova forma de ingresso: lead que cursou (ou cursa) outra faculdade e quer
+    **transferência externa / aproveitamento de matérias**. Escopo aprovado: SÓ
+    `Transferencia_Ext` (externa). 2ª graduação/licenciatura e série de quem já tem
+    diploma ficam para depois.
+  - **Arquitetura:** reaproveitar 100% o pipeline do vestibular
+    (`gerar → status → aceite → link de contrato/pagamento`). O agente conduz
+    server-side e envia ao lead **só o link** — nunca o formulário do site (mantém captação).
+  - **Coleta:** dados pessoais via `Formulario_Sum` (igual vestibular) + 3 campos extras
+    coletados na conversa: **curso de origem**, **último semestre concluído**, **curso desejado**.
+  - Grade curricular: da **nossa base** (não expõe a tela de disciplinas do site).
+- **Descoberta validada na API Captação** (testes com CPF de teste autorizado)
+  - A transferência usa o MESMO `GET /api-ingresso/candidato/gerar`. Espelha
+    `dadosExternos.js` do site. Só mudam 3 parâmetros:
+    - `tipoIngresso = "Transferencia_Ext"`  (⚠️ `"Transferência Externa"` com acento/espaço
+      estoura a coluna no SQL Server → HTTP 500 "String or binary data would be truncated")
+    - `cursoAntigo = <código do curso de origem>` (ex.: `BD_EAD`)
+    - `dispositivo = <último semestre concluído>` (o frontend reusa o campo `dispositivo`
+      para carregar a série; ex.: `4`)
+    - `curso = <código do curso desejado>` (destino)
+  - Resultado: `pagina "Contrato"`, candidato gerado, valor da mensalidade; depois
+    `status contrato → aceite → meioPagamento`. Idêntico ao vestibular daí em diante.
+  - Endpoints auxiliares de leitura (GET): `cursosv2` (lista de cursos EAD),
+    `/api-triagem/triagem/candidato/obtemUnidades?curso=&turno=EAD` (polos),
+    `/api-triagem/triagem/obterDadosPessoais?cpf=` (pré-preenche por CPF).
+- **Implementação**
+  - `sumareCaptacaoClient.js` (`buildGerarCandidatoQuery`): detecta transferência pelo
+    snapshot e injeta `tipoIngresso/cursoAntigo/dispositivo`.
+  - `matriculaCaptacaoPipeline.js`: carrega colunas de transferência do `dados_cliente_sum`
+    para o snapshot.
+  - Tool `registrar_transferencia` (`toolDefinitions.js` + `inscricaoActionTools.js` +
+    dispatch em `toolExecutorsServer.js`): grava os 3 campos e segue para o fluxo de polo+form.
+  - Colunas novas em `dados_cliente_sum`: `transferencia_curso_origem`,
+    `transferencia_semestre`, `transferencia_curso_destino` (SQL + ensure script).
+  - Regra no `promptsLoader.js`: gatilhos (aproveitar/dispensar matéria, já cursou e quer
+    aproveitar, voltar a cursar) + textos explicativos do processo.
+- **Alternativas descartadas**
+  - Mandar o link do formulário de transferência do site ao lead — quebra a captação
+    (regra de 2026-06-15 sobre links do site) e o padrão server-side já existente.
+- **Impacto**
+  - Agente passa a matricular por transferência externa sem sair do canal; lead recebe
+    só o link de pagamento, como nos demais cenários.
+
+---
+
 ### 2026-06-15 - Links do site oficial: só consulta interna, nunca ao lead — IMPLEMENTADO
 
 - **Decisão** (solicitada pela operação)
