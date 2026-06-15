@@ -28,6 +28,7 @@ import {
   getLastTouchedAt,
   listSessionsWithPendingMessages,
 } from './evolution/messageBuffer.js'
+import { isSessionParkedForHuman } from './flushRetryBackoff.js'
 
 const AGENT_PIPELINE_ID = 13756724
 const AGENT_ATENDIMENTO_STATUS = 106140284
@@ -189,6 +190,14 @@ export async function reactivateOrphanLeads(env, opts = {}) {
     try {
       const msgs = await getMessages(env, sessionId)
       if (!msgs || msgs.length === 0) continue
+      // Sessão parada para humano por falha de envio (token Meta etc.): não
+      // re-puxar enquanto o buffer tiver o MESMO conteúdo não respondido —
+      // senão a reativação desfaz a escalação e vira loop. Conteúdo novo do
+      // cliente muda o hash e libera a reativação automaticamente.
+      if (isSessionParkedForHuman(sessionId, msgs)) {
+        stats.skipped += 1
+        continue
+      }
       const last = await getLastTouchedAt(env, sessionId)
       const age = last ? Date.now() - last.getTime() : Infinity
       if (Number.isFinite(maxAgeMs) && age > maxAgeMs) {

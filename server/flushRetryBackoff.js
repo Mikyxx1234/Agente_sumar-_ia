@@ -93,6 +93,54 @@ export function clearSendRetryBackoff(sessionId) {
 }
 
 /**
+ * Sessões paradas para humano após escalar por falha de envio.
+ *
+ * Problema que isto resolve: a escalação (webhookEvolution.js) move o lead para
+ * "Aguardando resposta" (106377088), mas a mensagem que NÃO conseguimos enviar
+ * continua no buffer. A reativação por inbound (leadReactivation.js) trata
+ * 106377088 como fonte e, vendo buffer pendente, re-puxa o lead para Atendimento
+ * — desfazendo a escalação e gerando loop quente enquanto o envio segue falhando
+ * (ex.: token Meta expirado).
+ *
+ * A marca guarda o hash do conteúdo do buffer no momento da escalação. A
+ * reativação ignora a sessão enquanto o buffer tiver o MESMO conteúdo (mensagem
+ * velha não respondida). Mensagem NOVA do cliente muda o hash → a marca cai
+ * sozinha e a reativação volta a funcionar normalmente.
+ *
+ * @type {Map<string, { hash: string }>}
+ */
+const parkedForHuman = new Map()
+
+/** Marca a sessão como parada para humano (chamar na escalação por falha de envio). */
+export function markSessionParkedForHuman(sessionId, items) {
+  const sid = String(sessionId || '').trim()
+  const h = hashItems(items)
+  if (!sid || !h) return
+  parkedForHuman.set(sid, { hash: h })
+}
+
+/**
+ * Está parada para humano com o MESMO conteúdo de buffer? Se o conteúdo mudou
+ * (inbound novo), limpa a marca e retorna false (libera reativação).
+ */
+export function isSessionParkedForHuman(sessionId, items) {
+  const sid = String(sessionId || '').trim()
+  const entry = parkedForHuman.get(sid)
+  if (!entry) return false
+  const h = hashItems(items)
+  if (!h || h !== entry.hash) {
+    parkedForHuman.delete(sid)
+    return false
+  }
+  return true
+}
+
+/** Remove a marca de parada para humano (envio confirmado ou turno novo tratado). */
+export function clearSessionParkedForHuman(sessionId) {
+  parkedForHuman.delete(String(sessionId || '').trim())
+}
+
+/**
  * Após N falhas consecutivas (default 2) a regra manda escalar ao humano:
  * nota no lead + mover para a etapa "Aguardando resposta" (fora do funil da IA).
  */
@@ -118,4 +166,5 @@ export function getSendRetryBackoffSnapshot() {
 /** Reset total (testes). */
 export function resetSendRetryBackoffForTests() {
   state.clear()
+  parkedForHuman.clear()
 }

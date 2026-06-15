@@ -57,7 +57,7 @@ const SEND_FAIL_ESCALATION_STATUS_ID = 106377088
  * A nota começa com "Encaminhamento automático" de propósito: o poll de notas
  * reconhece esse prefixo como nota de sistema e não a re-injeta como fala do lead.
  */
-async function escalateSendFailureToHuman(env, { executionId, sessionId, leadId, errorText, failCount }) {
+async function escalateSendFailureToHuman(env, { executionId, sessionId, leadId, errorText, failCount, items }) {
   const lid = Number(leadId)
   if (!Number.isFinite(lid) || lid <= 0) {
     console.warn(
@@ -76,6 +76,10 @@ async function escalateSendFailureToHuman(env, { executionId, sessionId, leadId,
   }).catch((e) => ({ ok: false, error: e.message }))
   // Lead saiu do funil da IA — zera o backoff para não re-escalar se voltar.
   clearSendRetryBackoff(sessionId)
+  // Marca a sessão como parada para humano (hash do buffer não respondido). A
+  // reativação por inbound (leadReactivation.js) deve ignorar essa sessão
+  // enquanto o conteúdo do buffer não mudar — evita o loop escalar↔reativar.
+  markSessionParkedForHuman(sessionId, items)
   console.warn(
     `[${executionId}] ESCALADO p/ humano lead=${lid} (falhas=${failCount}) ` +
       `note_ok=${note.ok} move_ok=${move.ok} destino=${SEND_FAIL_ESCALATION_PIPELINE_ID}/${SEND_FAIL_ESCALATION_STATUS_ID}` +
@@ -111,6 +115,8 @@ import {
   shouldHoldForSendRetryBackoff,
   clearSendRetryBackoff,
   shouldEscalateSendFailure,
+  markSessionParkedForHuman,
+  clearSessionParkedForHuman,
 } from '../flushRetryBackoff.js'
 
 function getBody(req) {
@@ -917,6 +923,7 @@ async function flushSessionInner(env, sessionId, opts = {}) {
     if (telefone && sentOk) {
       markReplyCooldown(env, telefone)
       clearSendRetryBackoff(sessionId)
+      clearSessionParkedForHuman(sessionId)
       if (sentReal) {
         // Hash do inbound só faz sentido após envio confirmado — gravar
         // antes (em dedupe ou race) descarta o próximo turno do cliente.
@@ -947,6 +954,7 @@ async function flushSessionInner(env, sessionId, opts = {}) {
             leadId: idLead ?? leadIdForAgent,
             errorText: executionError || out?.error,
             failCount: bo.failCount,
+            items: itens,
           })
         }
       } else if (out?.reply && !sentOk && !sendResult?.suppressed) {
@@ -962,6 +970,7 @@ async function flushSessionInner(env, sessionId, opts = {}) {
             leadId: idLead ?? leadIdForAgent,
             errorText: executionError,
             failCount: bo.failCount,
+            items: itens,
           })
         }
       }

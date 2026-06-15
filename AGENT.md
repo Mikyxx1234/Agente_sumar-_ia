@@ -12,6 +12,44 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-06-15 - Fix do loop escalar↔reativar na falha de envio (token Meta) — IMPLEMENTADO
+
+- **Decisão** (aprovada pela operação)
+  - Quando a escalação por falha de envio para o lead em "Aguardando resposta"
+    (13756724/106377088), a reativação por inbound (`leadReactivation.js`) passa a
+    **ignorar** essa sessão enquanto o buffer tiver o MESMO conteúdo não respondido.
+    Mensagem NOVA do cliente (hash do buffer muda) libera a reativação normalmente.
+- **Contexto / causa raiz**
+  - Diagnóstico no lead 23952513 (RIVALDO): a cada ~7 min o lead ciclava
+    `erro de envio → "Encaminhamento automático após 2 tentativas" → Aguardando
+    resposta → volta p/ Atendimento → tenta de novo`. A regra das 2 tentativas
+    (`flushRetryBackoff` + `escalateSendFailureToHuman`, 2026-06-11) estava sendo
+    **desfeita**: a escalação move o lead p/ 106377088 mas a mensagem não enviada
+    fica no buffer; `leadReactivation` lista 106377088 como fonte e, vendo buffer
+    pendente, re-puxa o lead p/ Atendimento → loop, enquanto o envio segue
+    falhando (token Meta `code 190 / OAuthException` expirado em produção).
+  - Falha de envio raiz (infra, fora deste código): `WHATSAPP_ACCESS_TOKEN` da
+    Meta expirado no easypanel — precisa renovar; senão NENHUM lead recebe.
+- **Implementação**
+  - `flushRetryBackoff.js`: marca `parkedForHuman` (Map sessão→hash do buffer) +
+    `markSessionParkedForHuman` / `isSessionParkedForHuman` (auto-limpa quando o
+    hash muda) / `clearSessionParkedForHuman`.
+  - `webhookEvolution.js`: `escalateSendFailureToHuman` recebe `items` e marca a
+    sessão; envio confirmado limpa a marca (junto do `clearSendRetryBackoff`).
+  - `leadReactivation.js`: a varredura pula sessões paradas com o mesmo conteúdo.
+  - Estado em memória por processo (scheduler + webhook no mesmo Express) — igual
+    ao backoff; restart só custa 1 tentativa extra.
+- **Alternativas descartadas**
+  - Remover 106377088 das fontes de reativação: quebraria o caso legítimo
+    "lead respondeu enquanto aguardava → reativa".
+  - Limpar o buffer na escalação: perderia a fala do lead que ficou sem resposta.
+- **Impacto**
+  - A escalação "gruda": após 2 falhas o lead fica parado p/ humano e não volta
+    sozinho ao funil até o cliente mandar algo novo. Acaba o loop quente / queima
+    de LLM. Loop ativo do RIVALDO já interrompido (buffer limpo + lead em 106377088).
+
+---
+
 ### 2026-06-15 - Ingresso por transferência / aproveitamento de matérias — EM IMPLEMENTAÇÃO
 
 - **Decisão** (aprovada pela operação)
