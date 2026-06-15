@@ -481,11 +481,28 @@ export async function runRegistrarPoloInscricao(env, args = {}, ctx = {}) {
     },
   }).catch(() => {})
 
+  // Transferência: o polo chega em um turno separado do registrar_transferencia,
+  // então o curso desejado (destino) não está na conversa deste turno — e o lead
+  // citou DOIS cursos (origem + destino), o que confunde a heurística do resumo.
+  // Resolvemos o nome humano do destino persistido p/ usar como cursoHint e o
+  // resumo de matrícula mostrar o curso CERTO (o que o lead vai cursar na Sumaré).
+  let cursoHint
+  try {
+    const transfRow = await fetchDadosClienteByTelefone(env, telefone, 'transferencia_curso_destino')
+    if (transfRow?.transferencia_curso_destino) {
+      const dest = await resolveTransferenciaCursoCodigo(env, transfRow.transferencia_curso_destino)
+      cursoHint = dest?.descricao || undefined
+    }
+  } catch {
+    /* sem hint: gate cai na heurística da conversa (fluxo vestibular normal) */
+  }
+
   const matriculaGate = await gateMatriculaConfirmacaoBeforeForm(env, {
     telefone,
     userMessage: String(args.polo_id || ''),
     historyMessages: ctx.historyMessages || [],
     leadId,
+    cursoHint,
     executionId: ctx.executionId,
     model: ctx.model,
     pushName,
