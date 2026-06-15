@@ -5,6 +5,12 @@
  *   node scripts/proactive-greet-queue.mjs --dry-run
  *   node scripts/proactive-greet-queue.mjs --apply
  *   node scripts/proactive-greet-queue.mjs --apply --delay-ms 2500
+ *   node scripts/proactive-greet-queue.mjs --apply --limit 10   (10 leads mais antigos)
+ *
+ * Flags:
+ *   --apply       envia de verdade (sem isso é dry-run)
+ *   --limit N     processa no máximo N leads-alvo (os MAIS ANTIGOS primeiro)
+ *   --delay-ms N  intervalo entre envios (default 2200)
  */
 import fs from 'node:fs'
 import { listLeadsInAgentQueue } from '../server/kommoAgentFunnel.js'
@@ -16,6 +22,7 @@ import { fetchDadosClienteByTelefone } from '../server/dadosClienteStore.js'
 import { sendMessageWithNote } from '../server/whatsappSender.js'
 import { generateExecutionId } from '../server/ai/executionTelemetry.js'
 import { runBuscarHistorico } from '../server/memoryTool.js'
+import { buildGreeting } from '../server/proactiveGreet.js'
 import {
   INSCRICAO_FORM_STATUS_AGUARDANDO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
@@ -24,8 +31,16 @@ import {
   INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO,
 } from '../libShared/inscricaoFormHeuristics.js'
 
-const GREETING =
-  'Olá! Sou o assistente da Faculdade Sumaré e posso te ajudar com cursos, valores, matrícula e informações sobre nossos programas. Você já tem algum curso em mente ou quer conhecer as opções?'
+const SUM_NIVEL_FIELD_ID = Number(process.env.KOMMO_FIELD_SUM_NIVEL_ID) || 1475427
+
+/** Lê sum_Nivel (Graduação/Pós) do objeto lead do Kommo. */
+function extractNivel(lead) {
+  const fields = lead?.custom_fields_values
+  if (!Array.isArray(fields)) return ''
+  const f = fields.find((x) => Number(x?.field_id) === SUM_NIVEL_FIELD_ID)
+  const v = f?.values?.[0]?.value
+  return v ? String(v).trim() : ''
+}
 
 const AGENT_NOTE_RE =
   /assistente|faculdade sumaré|sou o assistente|sou assistente|encaminhei seu atendimento|já encaminhei|bem-vindo|bem vindo|\s-\sEX-\d{6}/i
@@ -49,6 +64,8 @@ for (const line of fs.readFileSync('.env', 'utf8').split(/\r?\n/)) {
 const args = process.argv.slice(2)
 const dryRun = !args.includes('--apply')
 const delayMs = Number(args.find((a, i) => args[i - 1] === '--delay-ms') || 2200)
+const limitRaw = Number(args.find((a, i) => args[i - 1] === '--limit'))
+const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.floor(limitRaw) : Infinity
 
 async function hasPriorAttendance(phone, leadId) {
   const sid = phoneToWhatsAppSessionId(phone)
@@ -80,7 +97,10 @@ if (!listing.ok) {
   process.exit(1)
 }
 
-const leads = listing.leads || []
+// Mais antigos primeiro (created_at do Kommo em segundos).
+const leads = (listing.leads || [])
+  .slice()
+  .sort((a, b) => (Number(a?.created_at) || 0) - (Number(b?.created_at) || 0))
 const contactIds = []
 for (const l of leads) for (const c of l._embedded?.contacts || []) contactIds.push(Number(c.id))
 const bulk = await bulkGetContactsByIds(env, [...new Set(contactIds)])
@@ -124,37 +144,45 @@ for (const lead of leads) {
 
   stats.targets++
   const name = String(lead.name || '').slice(0, 28)
-  console.log(`[${dryRun ? 'would-send' : 'send'}] lead=${lid} ${name} phone=${phone}`)
+  const greeting = buildGreeting({ nome: lead.name, nivel: extractNivel(lead) })
+  const createdIso = lead.created_at
+    ? new Date(Number(lead.created_at) * 1000).toISOString().slice(0, 10)
+    : '?'
+  console.log(`[${dryRun ? 'would-send' : 'send'}] lead=${lid} ${name} phone=${phone} criado=${createdIso}`)
 
-  if (dryRun) continue
+  if (!dryRun) {
+    const executionId = generateExecutionId()
+    const sendRes = await sendMessageWithNote(env, {
+      telefone: phone,
+      text: greeting,
+      leadId: lid,
+      executionId,
+    })
 
-  const executionId = generateExecutionId()
-  const sendRes = await sendMessageWithNote(env, {
-    telefone: phone,
-    text: GREETING,
-    leadId: lid,
-    executionId,
-  })
+    if (!sendRes?.ok || sendRes.deduped) {
+      console.log(`  FALHA ok=${sendRes?.ok} deduped=${sendRes?.deduped} err=${sendRes?.error || sendRes?.reason || 'n/a'}`)
+      stats.fail++
+      await new Promise((r) => setTimeout(r, delayMs))
+    } else {
+      await appendChatMemory(env, { telefone: phone, userMessage: '', botMessage: greeting }).catch(() => {})
+      await saveConversation(env, {
+        telefone: phone,
+        userMessage: '',
+        botMessage: greeting,
+        messageType: 'proactive_greet',
+        idLead: lid,
+      }).catch(() => {})
 
-  if (!sendRes?.ok || sendRes.deduped) {
-    console.log(`  FALHA ok=${sendRes?.ok} deduped=${sendRes?.deduped} err=${sendRes?.error || sendRes?.reason || 'n/a'}`)
-    stats.fail++
-    await new Promise((r) => setTimeout(r, delayMs))
-    continue
+      console.log(`  OK exec=${executionId}`)
+      stats.sent++
+      await new Promise((r) => setTimeout(r, delayMs))
+    }
   }
 
-  await appendChatMemory(env, { telefone: phone, userMessage: '', botMessage: GREETING }).catch(() => {})
-  await saveConversation(env, {
-    telefone: phone,
-    userMessage: '',
-    botMessage: GREETING,
-    messageType: 'proactive_greet',
-    idLead: lid,
-  }).catch(() => {})
-
-  console.log(`  OK exec=${executionId}`)
-  stats.sent++
-  await new Promise((r) => setTimeout(r, delayMs))
+  if (stats.targets >= limit) {
+    console.log(`[limit] atingido o limite de ${limit} lead(s)-alvo — parando.`)
+    break
+  }
 }
 
 console.log('\n--- resumo ---')

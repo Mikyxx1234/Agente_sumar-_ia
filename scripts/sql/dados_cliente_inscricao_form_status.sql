@@ -6,6 +6,7 @@ ALTER TABLE public.dados_cliente_sum
   ADD COLUMN IF NOT EXISTS inscricao_form_recebido_at timestamptz,
   ADD COLUMN IF NOT EXISTS reativacao_ping_at timestamptz,
   ADD COLUMN IF NOT EXISTS reativacao_moved_at timestamptz,
+  ADD COLUMN IF NOT EXISTS proactive_greet_at timestamptz,
   ADD COLUMN IF NOT EXISTS captacao_candidato_id text,
   ADD COLUMN IF NOT EXISTS captacao_contrato_link text,
   ADD COLUMN IF NOT EXISTS captacao_contrato_link_at timestamptz,

@@ -12,6 +12,50 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-06-15 - Saudação proativa: agente inicia a conversa quando o lead entra no Kommo — IMPLEMENTADO
+
+- **Decisão** (aprovada pela operação)
+  - Abordagem **híbrida**: o agente envia a 1ª mensagem (saudação) ao lead
+    assim que ele é criado no Kommo, sem esperar o lead falar primeiro.
+    1. **Caminho instantâneo (n8n):** endpoint `POST /api/leads/proactive-greet`
+       — o workflow `criacao_leads_sumaread_kommo_v3` pode chamar logo após
+       criar o lead, enviando `{ id_lead, telefone/celular, nome, nivel/tipo }`.
+       Saudação sai em segundos.
+    2. **Rede de segurança (scheduler):** no ramo "buffer vazio" do
+       `agentScheduler`, antes do reengajamento por inatividade, roda
+       `tryProactiveGreet` para qualquer lead da fila ainda sem atendimento —
+       cobre leads que não passaram pelo endpoint (inclusive os antigos).
+  - **Saudação personalizada:** primeiro nome do lead + nível de interesse
+    (Graduação/Pós), derivados de `lead.name` e do campo `sum_Nivel` (1475427).
+  - **Escopo:** todos os leads da fila sem atendimento prévio (inclusive
+    backlog antigo), não só os recém-criados.
+  - **Idempotência (nunca saudar 2x):** coluna persistente
+    `proactive_greet_at` em `dados_cliente_sum` (claim-exclusivo via PATCH
+    `?...&proactive_greet_at=is.null`, padrão do reengajamento) + dedupe em
+    memória + `hasPriorAttendance` (buffer, memória n8n, chat_messages com
+    resposta do bot, nota do agente no Kommo) + dedupe de outbound do
+    `sendMessageWithNote`. Lead em `atendimento_ia='pause'` ou em fluxo de
+    inscrição ativo é pulado.
+  - Ligado por env `PROACTIVE_GREET_ENABLED` (default `false`).
+- **Contexto**
+  - Hoje o agente é reativo: o scheduler só responde quando há mensagem no
+    buffer; lead novo fica em silêncio até falar primeiro. A operação quer que
+    o agente puxe a conversa assim que o lead chega pelo formulário do site.
+- **Alternativas descartadas**
+  - Só scheduler (sem endpoint): simples, mas adiciona ~10s de latência e faz
+    varredura pesada de histórico por tick; o endpoint dá saudação imediata.
+  - Só endpoint n8n: instantâneo, mas não cobre leads que não passam pelo
+    workflow nem o backlog; por isso o scheduler entra como rede de segurança.
+  - Reaproveitar só o script manual `proactive-greet-queue.mjs`: exige rodar à
+    mão, não atende "reconhecer automaticamente".
+- **Impacto**
+  - Novos módulos: `server/proactiveGreet.js` (core), endpoint em `server.js`,
+    hook no `agentScheduler.js`, coluna `proactive_greet_at` no SQL de
+    `dados_cliente_sum`. Comportamento desligável por env; sem efeito enquanto
+    `PROACTIVE_GREET_ENABLED` não for `true`.
+
+---
+
 ### 2026-06-11 - Regra de escalação por falha de envio (retry 2min → nota + humano) — IMPLEMENTADO
 
 - **Decisão** (regra definida pela operação)

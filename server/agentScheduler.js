@@ -71,6 +71,7 @@ import {
 } from '../libShared/inscricaoFormHeuristics.js'
 import { matchPoloFromUserMessage } from '../libShared/sumarePoloCatalog.js'
 import { tryInactivityReengagement } from './inactivityReengagement.js'
+import { tryProactiveGreet } from './proactiveGreet.js'
 import { sendMessageWithNote } from './whatsappSender.js'
 import { saveConversation } from './historyStore.js'
 import { generateExecutionId } from './ai/executionTelemetry.js'
@@ -488,6 +489,25 @@ export async function runSchedulerTick(env) {
         }
       }
       if (!messages || messages.length === 0) {
+        // Rede de segurança da saudação proativa: lead na fila ainda sem
+        // atendimento → o agente puxa a conversa (idempotente).
+        try {
+          const greet = await tryProactiveGreet(env, {
+            telefone: phone,
+            leadId: Number(lead.id),
+            sessionId,
+            lead,
+            source: 'scheduler',
+          })
+          if (greet?.action === 'greet_sent') {
+            console.log(`[scheduler] saudação proativa lead=${lead.id} enviada`)
+            stats.processed += 1
+            return
+          }
+        } catch (greetErr) {
+          console.warn(`[scheduler] saudação proativa lead=${lead.id}:`, greetErr.message)
+        }
+
         try {
           const inact = await tryInactivityReengagement(env, {
             telefone: phone,

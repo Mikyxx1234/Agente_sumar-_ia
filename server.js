@@ -86,6 +86,7 @@ import { getDebounceMs } from './server/evolution/debouncer.js'
 import { runAgent } from './server/ai/agentRunner.js'
 import { classifyMessageScope } from './server/ai/scopeClassifier.js'
 import { startAgentScheduler, runSchedulerTick, isSchedulerRunning } from './server/agentScheduler.js'
+import { tryProactiveGreet, isProactiveGreetEnabled } from './server/proactiveGreet.js'
 import { getKommoRateLimiterSnapshot } from './server/kommoRateLimiter.js'
 import { maybeFallbackPollModeWhenDispatcherDown, normalizeKommoInboundPollMode } from './server/kommoInboundPoll.js'
 import { runSalesbotCsv, extractLeadIdFromWebhookBody, probePos } from './server/salesbot/csvSearch.js'
@@ -814,6 +815,39 @@ app.post('/api/kommo/lead-note', async (req, res) => {
     }
     const out = await createLeadNote(process.env, id, text)
     res.status(out.ok ? 200 : 500).json(out)
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+// ── Saudação proativa: agente inicia a conversa quando o lead entra no Kommo ──
+//    Chamado pelo workflow n8n (criacao_leads_sumaread_kommo_v3) logo após
+//    criar o lead. Aceita os mesmos nomes de campo que o webhook do site usa
+//    (celular/telefone, tipo/nivel). Idempotente — ver server/proactiveGreet.js.
+app.post('/api/leads/proactive-greet', async (req, res) => {
+  try {
+    const b = req.body || {}
+    const telefone = b.telefone ?? b.celular ?? b.phone
+    const leadId = b.id_lead ?? b.leadId ?? b.lead_id
+    const nome = b.nome ?? b.name
+    const nivel = b.nivel ?? b.tipo ?? b.sum_Nivel
+    if (!telefone && !leadId) {
+      res.status(400).json({ ok: false, error: 'telefone (ou celular) ou id_lead é obrigatório' })
+      return
+    }
+    if (!isProactiveGreetEnabled(process.env)) {
+      res.status(200).json({ ok: true, action: 'disabled', reason: 'PROACTIVE_GREET_ENABLED=false' })
+      return
+    }
+    const out = await tryProactiveGreet(process.env, {
+      telefone,
+      leadId,
+      nome,
+      nivel,
+      source: 'endpoint',
+    })
+    const ok = out.action !== 'greet_failed'
+    res.status(ok ? 200 : 502).json({ ok, ...out })
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })
   }
