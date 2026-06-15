@@ -12,6 +12,40 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-06-15 - Fix do resumo de matrícula na transferência (curso destino) — IMPLEMENTADO
+
+- **Decisão**
+  - No ingresso por transferência, o resumo de matrícula ("Você irá ingressar no
+    curso de X…") passa a usar SEMPRE o curso **destino** persistido em
+    `transferencia_curso_destino`, e não a heurística da conversa.
+- **Contexto / causa raiz** (achado no teste do lead 23841399)
+  - O lead cita DOIS cursos na conversa: o de origem (o que cursou) e o destino
+    (o que quer na Sumaré). O resumo determinístico (`resolveCursoNomeForResumo`
+    → `detectCursoConfirmadoPeloLead`/`extractDiscussedCourseFromHistory`)
+    pegava o curso de ORIGEM (ex.: "Análise e Desenvolvimento de Sistemas",
+    5 sem) em vez do destino ("Sistemas de Informação", 8 sem).
+  - O polo chega em turno separado do `registrar_transferencia`, então o handler
+    determinístico `tryHandlePoloPreFormFlow` (`inscricaoPoloFlow.js`) — que é o
+    que realmente roda (sem tool) — não tinha o curso no contexto e não passava
+    `cursoHint` ao gate. (`runRegistrarPoloInscricao` na tool path tinha o mesmo
+    gap; corrigido junto.)
+- **Implementação**
+  - `inscricaoPoloFlow.js`: `resolveTransferenciaCursoHint()` resolve o nome
+    humano do código destino (via `resolveTransferenciaCursoCodigo`/cursosv2) e
+    passa como `cursoHint` ao `gateMatriculaConfirmacaoBeforeForm`.
+  - `inscricaoActionTools.js` (`runRegistrarPoloInscricao`): mesmo cursoHint.
+  - Sem transferência, `cursoHint` fica `undefined` → fluxo vestibular normal
+    segue na heurística da conversa (1 curso só, sem ambiguidade).
+- **Impacto**
+  - Resumo mostra o curso/duração corretos do destino. `gerar` no pós-formulário
+    já usava `transferencia_curso_destino` (curso=SISINF_EAD,
+    tipoIngresso=Transferencia_Ext), então só o texto lead-facing estava errado.
+  - Validado end-to-end no lead 23841399: intenção → 3 campos → polo → resumo
+    correto → autorização → Formulario_Sum; e `gerar` Transferencia_Ext
+    (ADS_EAD→SISINF_EAD, série 2) retorna candidato + link de pagamento.
+
+---
+
 ### 2026-06-15 - Fix do loop escalar↔reativar na falha de envio (token Meta) — IMPLEMENTADO
 
 - **Decisão** (aprovada pela operação)
