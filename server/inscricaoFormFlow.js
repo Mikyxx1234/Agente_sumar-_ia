@@ -48,6 +48,7 @@ import {
 } from '../libShared/historySanitize.js'
 import { DADOS_CLIENTE_FORM_GUARD_SELECT, DADOS_CLIENTE_INSCRICAO_SELECT } from './dadosClienteInscricaoFields.js'
 import { gateMatriculaConfirmacaoBeforeForm } from './inscricaoMatriculaConfirmFlow.js'
+import { moveLeadToInscricaoIfNeeded } from './kommoFunnelMoves.js'
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
 
@@ -222,10 +223,11 @@ export async function deliverInscricaoForm(env, { telefone, leadId, executionId,
   }
 
   if (useWhatsappTemplateDelivery(env)) {
-    return {
-      delivery: 'whatsapp_template',
-      result: await sendFormSumarTemplate(env, { to: telefone, leadId, executionId }),
+    const result = await sendFormSumarTemplate(env, { to: telefone, leadId, executionId })
+    if (result?.ok && leadId) {
+      await moveLeadToInscricaoIfNeeded(env, leadId, { reason: 'formulario_sum_template' }).catch(() => {})
     }
+    return { delivery: 'whatsapp_template', result }
   }
 
   if (leadId == null) {
@@ -244,10 +246,14 @@ export async function deliverInscricaoForm(env, { telefone, leadId, executionId,
     force: forceResend,
     note: `Salesbot Formulario_Sum ativado (inscrição via agente IA) — ${executionId || ''}`.trim(),
   })
+  const sendOk = Boolean(salesbotRes.ok && !salesbotRes.skipped)
+  if (sendOk) {
+    await moveLeadToInscricaoIfNeeded(env, leadId, { reason: 'formulario_sum_enviado' }).catch(() => {})
+  }
   return {
     delivery: 'kommo_salesbot',
     result: {
-      ok: Boolean(salesbotRes.ok && !salesbotRes.skipped),
+      ok: sendOk,
       skipped: Boolean(salesbotRes.skipped),
       reason: salesbotRes.reason,
       code: salesbotRes.code || (salesbotRes.ok ? 'SALESBOT_STARTED' : 'SALESBOT_FAILED'),

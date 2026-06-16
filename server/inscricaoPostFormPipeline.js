@@ -31,6 +31,7 @@ import {
 } from '../libShared/sumarePoloCatalog.js'
 import { runKommoSalesbot } from './kommoSalesbot.js'
 import { findLeadByPhone, listLeadNotes, listLeadEvents } from './kommoClient.js'
+import { moveLeadToInscricaoIfNeeded } from './kommoFunnelMoves.js'
 import {
   updateDadosCliente,
   marcarClienteIA,
@@ -531,6 +532,12 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
     await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE).catch(() => {})
     const pauseRes = await pauseAtendimentoIa(env, telefone)
     steps.unshift({ type: 'ia_paused', ok: pauseRes.ok, reason: 'aguardando_aceite_contrato' })
+    if (idLead) {
+      const funnelMove = await moveLeadToInscricaoIfNeeded(env, idLead, {
+        reason: 'pos_captacao_aguardando_aceite',
+      }).catch(() => ({ ok: false }))
+      steps.unshift({ type: 'move_lead_inscricao', ...funnelMove })
+    }
   } else if (captacaoFailedTerminal && !matriculaOk) {
     // Plano_Inscricao_CardKommo — captação falhou definitivamente e o salesbot
     // fallback também não rodou. Estado terminal evita o loop do scheduler
