@@ -17,6 +17,10 @@
 
 import { buildPoloEscolhaPreFormMessage } from '../libShared/sumarePoloCatalog.js'
 import {
+  buildAcademicAffairsRedirectReply,
+  messageAsksAcademicAffairsSupport,
+} from '../libShared/academicAffairsHeuristics.js'
+import {
   DEFAULT_LGPD_SENSITIVE_REFUSAL,
   lgpdGuardEnabled,
   replyLeaksSensitiveCandidateData,
@@ -43,6 +47,9 @@ const CONSULTOR_PROMISE_RX =
 
 const TRANSFERENCIA_REGISTER_RX =
   /\b(registr(?:ei|ar)|pedido de transfer[eê]ncia)\b/i
+
+const ACADEMIC_CONSULTOR_RX =
+  /\b(consultor|encaminhar|registrar\s+(o\s+)?seu\s+pedido|entrar[aá] em contato)\b/i
 
 const ACTION_TOOL_NAMES = new Set([
   'enviar_form_sumar_inscricao',
@@ -214,6 +221,18 @@ export function sanitizeReplyCourseLinks({ reply } = {}) {
 export function validateReplyBeforeSend({ reply, toolCalls = [], stage = null, userMessage = '', env = process.env } = {}) {
   const actionVerdict = validateReplyAgainstActions({ reply, toolCalls, stage })
   if (actionVerdict.violation) return actionVerdict
+
+  if (messageAsksAcademicAffairsSupport(userMessage)) {
+    const text = String(reply || '')
+    if (text.length > 8 && ACADEMIC_CONSULTOR_RX.test(text) && !text.includes('sumare.edu.br/atendimento')) {
+      return {
+        violation: true,
+        code: 'academic_consultor_without_redirect',
+        safeReply: buildAcademicAffairsRedirectReply({}),
+        original: text,
+      }
+    }
+  }
 
   const consultorVerdict = validateReplyConsultorPromise({ reply, toolCalls })
   if (consultorVerdict.violation) return consultorVerdict

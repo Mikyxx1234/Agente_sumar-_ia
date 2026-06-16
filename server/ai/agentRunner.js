@@ -49,6 +49,7 @@ import { tryHandlePoloPreFormFlow, tryHandlePoloEscolhaFlow } from '../inscricao
 import { tryHandleInscricaoFromKommoCard } from '../inscricaoKommoPreFilledFlow.js'
 import { tryHandleMatriculaResumoConfirmacao } from '../inscricaoMatriculaConfirmFlow.js'
 import { tryHandleTransferenciaDadosPendentes } from '../inscricaoTransferenciaFlow.js'
+import { tryHandleAcademicAffairsInquiry } from '../academicAffairsFlow.js'
 import { maybeAuditActionToolFailure, recordInscricaoFailureAuditNote } from '../inscricaoFailureAudit.js'
 import {
   tryHandleInscricaoDesistenciaFlow,
@@ -105,6 +106,9 @@ import {
   messageAsksOuvidoria,
   sanitizeLeadInboundMessage,
 } from '../../libShared/inboundMessageSanitize.js'
+import {
+  messageAsksAcademicAffairsSupport,
+} from '../../libShared/academicAffairsHeuristics.js'
 import { formatPoloListaNumerada } from '../../libShared/sumarePoloCatalog.js'
 import { userAsksCourseMoreDetails } from '../../libShared/courseMoreInfo.js'
 import { isAtendimentoIaPaused } from '../dadosClienteStore.js'
@@ -557,6 +561,18 @@ export async function runAgent(env, input) {
     if (exitConfirm?.handled) {
       console.log(`[${executionId}] SAIDA_CANAL_CONFIRMADA telefone=${telefone}`)
       return { ...exitConfirm.result, historyLoaded: historyMessages.length, aiMeta: ctx.toAiMeta() }
+    }
+  }
+
+  if (telefone) {
+    const academicFlow = await tryHandleAcademicAffairsInquiry(env, formFlowCtx)
+    if (academicFlow?.handled) {
+      console.log(`[${executionId}] ACADEMIC_AFFAIRS_REDIRECT`)
+      return {
+        ...academicFlow.result,
+        historyLoaded: historyMessages.length,
+        aiMeta: ctx.toAiMeta(),
+      }
     }
   }
 
@@ -1167,6 +1183,17 @@ export async function runAgent(env, input) {
       }
     : null
 
+  const academicAffairsHint = messageAsksAcademicAffairsSupport(userMessage, historyMessages)
+    ? {
+        role: 'system',
+        content:
+          'ASSUNTO ACADÊMICO INSTITUCIONAL (trancamento, cancelamento de matrícula, ex-aluno, documentos escolares, inadimplência como aluno matriculado, etc.). ' +
+          'OBRIGATÓRIO neste turno: responda com o direcionamento aos canais oficiais — Portal do Aluno (matrícula ativa), https://sumare.edu.br/atendimento/ (ex-aluno, cancelamento, trancamento, dúvidas gerais) e https://sumare.edu.br/ouvidoria.html (manifestação formal). ' +
+          'Use o texto institucional completo (alunos ativos → Portal do Aluno; ex-alunos/cancelamento/trancamento → atendimento; ouvidoria → link da ouvidoria). ' +
+          'PROIBIDO neste turno: prometer consultor, registrar pedido para equipe ligar, ou distribuir_humano — o canal oficial é a resposta correta.',
+      }
+    : null
+
   const posGratisPromocaoHint = messageAsksPosGratisPromocao(userMessage)
     ? {
         role: 'system',
@@ -1271,6 +1298,7 @@ export async function runAgent(env, input) {
     ...(poloListHint ? [poloListHint] : []),
     ...(locationInfoHint ? [locationInfoHint] : []),
     ...(ouvidoriaHint ? [ouvidoriaHint] : []),
+    ...(academicAffairsHint ? [academicAffairsHint] : []),
     ...(posGratisPromocaoHint ? [posGratisPromocaoHint] : []),
     ...(courseInquiryHint ? [courseInquiryHint] : []),
     ...(gradeCurricularHint ? [gradeCurricularHint] : []),
