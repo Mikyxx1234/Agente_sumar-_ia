@@ -50,6 +50,7 @@ import { tryHandleInscricaoFromKommoCard } from '../inscricaoKommoPreFilledFlow.
 import { tryHandleMatriculaResumoConfirmacao } from '../inscricaoMatriculaConfirmFlow.js'
 import { tryHandleTransferenciaDadosPendentes } from '../inscricaoTransferenciaFlow.js'
 import { tryHandleAcademicAffairsInquiry } from '../academicAffairsFlow.js'
+import { tryHandlePriceUntilCourseEndInquiry } from '../priceDurationFlow.js'
 import { maybeAuditActionToolFailure, recordInscricaoFailureAuditNote } from '../inscricaoFailureAudit.js'
 import {
   tryHandleInscricaoDesistenciaFlow,
@@ -109,6 +110,7 @@ import {
 import {
   messageAsksAcademicAffairsSupport,
 } from '../../libShared/academicAffairsHeuristics.js'
+import { messageAsksPriceUntilCourseEnd } from '../../libShared/priceDurationHeuristics.js'
 import { formatPoloListaNumerada } from '../../libShared/sumarePoloCatalog.js'
 import { userAsksCourseMoreDetails } from '../../libShared/courseMoreInfo.js'
 import { isAtendimentoIaPaused } from '../dadosClienteStore.js'
@@ -561,6 +563,18 @@ export async function runAgent(env, input) {
     if (exitConfirm?.handled) {
       console.log(`[${executionId}] SAIDA_CANAL_CONFIRMADA telefone=${telefone}`)
       return { ...exitConfirm.result, historyLoaded: historyMessages.length, aiMeta: ctx.toAiMeta() }
+    }
+  }
+
+  if (telefone) {
+    const priceDurationFlow = await tryHandlePriceUntilCourseEndInquiry(env, formFlowCtx)
+    if (priceDurationFlow?.handled) {
+      console.log(`[${executionId}] PRICE_UNTIL_COURSE_END`)
+      return {
+        ...priceDurationFlow.result,
+        historyLoaded: historyMessages.length,
+        aiMeta: ctx.toAiMeta(),
+      }
     }
   }
 
@@ -1194,6 +1208,16 @@ export async function runAgent(env, input) {
       }
     : null
 
+  const priceUntilCourseEndHint = messageAsksPriceUntilCourseEnd(userMessage, historyMessages)
+    ? {
+        role: 'system',
+        content:
+          'PERGUNTA SOBRE VALOR ATÉ O FIM DO CURSO / REAJUSTE ANUAL: o lead quer saber se o desconto/mensalidade se mantém até o final da graduação ou o valor total do curso. ' +
+          'OBRIGATÓRIO neste turno: informe a mensalidade promocional do curso em pauta (buscar_precos se necessário) e explique que o desconto especial se mantém até o final do curso, com reajuste anual pequeno de 8% a 12% com base na inflação; não informe valor exato do curso inteiro; mencione que as mensalidades costumam variar entre R$ 20 e R$ 40 ao ano. ' +
+          'PROIBIDO neste turno: prometer mensalidade fixa sem reajuste, calcular valor total do curso, ou encaminhar consultor só por esta dúvida.',
+      }
+    : null
+
   const posGratisPromocaoHint = messageAsksPosGratisPromocao(userMessage)
     ? {
         role: 'system',
@@ -1299,6 +1323,7 @@ export async function runAgent(env, input) {
     ...(locationInfoHint ? [locationInfoHint] : []),
     ...(ouvidoriaHint ? [ouvidoriaHint] : []),
     ...(academicAffairsHint ? [academicAffairsHint] : []),
+    ...(priceUntilCourseEndHint ? [priceUntilCourseEndHint] : []),
     ...(posGratisPromocaoHint ? [posGratisPromocaoHint] : []),
     ...(courseInquiryHint ? [courseInquiryHint] : []),
     ...(gradeCurricularHint ? [gradeCurricularHint] : []),
