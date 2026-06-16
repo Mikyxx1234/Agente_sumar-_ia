@@ -193,8 +193,9 @@ section('Tools de ação registradas')
 const toolNames = TOOL_DEFINITIONS.map((t) => t.function?.name)
 assert(toolNames.includes('enviar_form_sumar_inscricao'), 'tool enviar_form_sumar_inscricao definida')
 assert(toolNames.includes('registrar_polo_inscricao'), 'tool registrar_polo_inscricao definida')
+assert(toolNames.includes('registrar_transferencia'), 'tool registrar_transferencia definida')
 assert(toolNames.includes('confirmar_recebimento_formulario'), 'tool confirmar_recebimento_formulario definida')
-assertEqual(INSCRICAO_ACTION_TOOLS.size, 3, 'INSCRICAO_ACTION_TOOLS tem 3 tools')
+assertEqual(INSCRICAO_ACTION_TOOLS.size, 4, 'INSCRICAO_ACTION_TOOLS tem 4 tools')
 
 /* ────────────────────────────────────────────────────────────────────────── */
 /* Cobertura 1 — Lead novo: quero me inscrever em administração               */
