@@ -13,6 +13,17 @@ import { isClassifierPromptNode, isLocationAgentNode, sanitizePromptBody } from 
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
+/**
+ * Flag mestre das camadas editaveis em DB (prompts via agent_prompts e, no
+ * futuro, regras). Default DESLIGADO — producao so passa a consumir as novas
+ * tabelas quando AGENT_DB_OVERRIDES_ENABLED=true (hoje, apenas no .env local).
+ * Com a flag off, o agente se comporta exatamente como antes (APAGAR.txt
+ * saneado + regras hardcoded/agent_rules atuais).
+ */
+export function isAgentDbOverridesEnabled(env = process.env) {
+  return String(env.AGENT_DB_OVERRIDES_ENABLED ?? '').toLowerCase() === 'true'
+}
+
 // Em produção (Easypanel/Docker), o stage final do Dockerfile não traz
 // `public/` — só `dist/`. Antes da correção do Dockerfile (e em qualquer
 // imagem antiga ainda em execução), o arquivo só existia em `dist/`.
@@ -99,7 +110,7 @@ function extractPrompts(data) {
   return prompts
 }
 
-export async function loadPrompts() {
+export async function loadBasePrompts() {
   const path = await resolveApagarPath()
   if (!path) {
     // Não é fatal: o `buildSystemMessage` ainda devolve o override
@@ -129,6 +140,95 @@ export async function loadPrompts() {
     console.warn(`[promptsLoader] falha ao ler ${path}: ${err.message}. Mantendo cache anterior (${cache ? cache.length : 0} prompts).`)
     return cache || []
   }
+}
+
+/**
+ * Cache em memória dos overrides de prompt vindos do DB (tabela
+ * agent_prompts). Mesmo padrão das regras: TTL curto, refresh em
+ * background, fallback silencioso pro APAGAR.txt saneado.
+ *
+ * Shape: { ts, overrides: Map<prompt_id, body> | null, source, error? }
+ */
+let _promptsCache = { ts: 0, overrides: null, source: 'fallback' }
+const PROMPTS_CACHE_TTL_MS = 60_000
+let _promptsRefreshInFlight = null
+
+export function refreshAgentPromptsCache(env = process.env, opts = {}) {
+  if (_promptsRefreshInFlight) return _promptsRefreshInFlight
+  _promptsRefreshInFlight = (async () => {
+    try {
+      const mod = await import('../feedbackIA/promptsStore.js')
+      const r = await mod.listPromptOverrides(env)
+      if (r.ok && Array.isArray(r.data)) {
+        const map = new Map()
+        for (const row of r.data) {
+          if (row && row.prompt_id && typeof row.body === 'string') {
+            map.set(row.prompt_id, row.body)
+          }
+        }
+        _promptsCache = { ts: Date.now(), overrides: map, source: 'db' }
+        if (!opts.silent) {
+          console.log(`[promptsLoader] prompts override carregados do DB (${map.size})`)
+        }
+      } else if (!r.ok && r.code === 'TABLE_MISSING') {
+        _promptsCache = { ts: Date.now(), overrides: null, source: 'fallback', error: 'TABLE_MISSING' }
+        if (!opts.silent) {
+          console.log('[promptsLoader] agent_prompts ausente; usando APAGAR.txt. Rode scripts/sql/agent_prompts.sql para ativar overlay.')
+        }
+      } else if (!r.ok) {
+        _promptsCache = { ts: Date.now(), overrides: _promptsCache.overrides, source: 'fallback', error: r.error || r.code }
+        console.warn(`[promptsLoader] falha ao ler agent_prompts: ${r.error || r.code}. Usando APAGAR.txt.`)
+      } else {
+        _promptsCache = { ts: Date.now(), overrides: null, source: 'fallback' }
+      }
+    } catch (e) {
+      _promptsCache = { ts: Date.now(), overrides: _promptsCache.overrides, source: 'fallback', error: e.message }
+      console.warn('[promptsLoader] refresh prompts cache exception:', e.message)
+    } finally {
+      _promptsRefreshInFlight = null
+    }
+  })()
+  return _promptsRefreshInFlight
+}
+
+export function getAgentPromptsCacheInfo() {
+  return {
+    source: _promptsCache.source,
+    overridesCount: _promptsCache.overrides?.size || 0,
+    ageMs: _promptsCache.ts ? Date.now() - _promptsCache.ts : null,
+    error: _promptsCache.error || null,
+  }
+}
+
+/**
+ * Devolve o Map de overrides do DB, populando o cache na 1ª chamada e
+ * refrescando em background quando stale. Retorna null quando não há
+ * overrides (cai no fallback APAGAR.txt).
+ */
+async function getPromptOverrides(env) {
+  const stale = Date.now() - _promptsCache.ts > PROMPTS_CACHE_TTL_MS
+  if (_promptsCache.ts === 0) {
+    // primeira leitura: aguarda pra já aplicar overlay no boot
+    await refreshAgentPromptsCache(env, { silent: true }).catch(() => {})
+  } else if (stale) {
+    refreshAgentPromptsCache(env, { silent: true }).catch(() => {})
+  }
+  return _promptsCache.overrides
+}
+
+/**
+ * Lista de prompts que alimenta o system message do orquestrador.
+ * Base = APAGAR.txt saneado (sempre). Quando AGENT_DB_OVERRIDES_ENABLED,
+ * sobrepõe o corpo dos prompts cujo id existir em agent_prompts.
+ */
+export async function loadPrompts(env = process.env) {
+  const base = await loadBasePrompts()
+  if (!isAgentDbOverridesEnabled(env)) return base
+  const overrides = await getPromptOverrides(env)
+  if (!overrides || overrides.size === 0) return base
+  return base.map((p) =>
+    overrides.has(p.id) ? { ...p, body: overrides.get(p.id), overridden: true } : p,
+  )
 }
 
 const FALLBACK_CLASSIFIER_PROMPT = `Você é um classificador de escopo do atendimento da Faculdade Sumaré.
@@ -856,4 +956,5 @@ export const AGENT_RULES_CATALOG = [
   { id: 30, title: 'Links do site — só consulta interna, nunca ao lead' },
   { id: 31, title: 'Transferência / aproveitamento de matérias' },
   { id: 32, title: 'Assuntos acadêmicos institucionais — canais oficiais' },
+  { id: 33, title: 'Valor até o fim do curso / reajuste anual' },
 ]

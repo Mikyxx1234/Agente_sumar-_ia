@@ -169,7 +169,41 @@ function PromptRow({ prompt, defaultOpen, onSave, getVersions, onRestore }) {
   )
 }
 
-export default function PromptViewer({ prompts, onSave, getVersions, onRestore }) {
+function PersistenceBanner({ promptMode, promptsMeta }) {
+  if (promptMode !== 'server') {
+    return (
+      <div className="ai-off-banner" role="status" style={{ background: '#7c5e10', color: '#fff' }}>
+        <FileText size={14} />
+        <span>
+          <strong>Modo local</strong> — as edições ficam só no seu navegador (não persistem no banco nem afetam o agente).
+          Inicie o servidor para salvar no Supabase.
+        </span>
+      </div>
+    )
+  }
+  if (promptsMeta?.flagEnabled) {
+    return (
+      <div className="ai-off-banner" role="status" style={{ background: '#0f5132', color: '#fff' }}>
+        <Check size={14} />
+        <span>
+          <strong>Persistência ativa</strong> — edições são salvas no banco (Supabase) e <strong>já valem para o agente</strong>
+          {' '}(AGENT_DB_OVERRIDES_ENABLED=true).
+        </span>
+      </div>
+    )
+  }
+  return (
+    <div className="ai-off-banner" role="status" style={{ background: '#084298', color: '#fff' }}>
+      <Save size={14} />
+      <span>
+        <strong>Salvando no banco</strong> — edições persistem no Supabase, mas o agente ainda usa o prompt base
+        {' '}(flag <code>AGENT_DB_OVERRIDES_ENABLED</code> desligada). Ligue a flag para aplicar ao atendimento.
+      </span>
+    </div>
+  )
+}
+
+export default function PromptViewer({ prompts, onSave, getVersions, onRestore, promptMode = 'local', promptsMeta }) {
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState('all')
 
@@ -201,6 +235,7 @@ export default function PromptViewer({ prompts, onSave, getVersions, onRestore }
         </div>
       </div>
       <div className="page">
+        <PersistenceBanner promptMode={promptMode} promptsMeta={promptsMeta} />
         <div className="prompts-toolbar">
           <div className="search-wrap">
             <Search size={14} className="search-icon" />

@@ -91,6 +91,9 @@ export default function App() {
   const [originalPrompts, setOriginalPrompts] = useState([])
   const [edits, setEdits] = useState(loadEdits)
   const [versions, setVersions] = useState(loadVersions)
+  // 'server' = persistência em DB (agent_prompts); 'local' = fallback localStorage.
+  const [promptMode, setPromptMode] = useState('local')
+  const [promptsMeta, setPromptsMeta] = useState({ flagEnabled: false, overridesAvailable: false })
   const [profileId, setProfileId] = useState(() => loadProfile())
   const [page, setPage] = useState(() => loadPageForProfile(loadProfile()))
   const [loading, setLoading] = useState(true)
@@ -108,7 +111,7 @@ export default function App() {
     savePageForProfile(profileId, nextPage)
   }, [profileId])
 
-  useEffect(() => {
+  const loadFromApagarFallback = useCallback(() => {
     fetch('/APAGAR.txt')
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
@@ -117,6 +120,7 @@ export default function App() {
       .then((txt) => {
         const data = JSON.parse(txt)
         setOriginalPrompts(extractPrompts(data))
+        setPromptMode('local')
         setLoading(false)
       })
       .catch((e) => {
@@ -125,41 +129,109 @@ export default function App() {
       })
   }, [])
 
-  const prompts = originalPrompts.map((p) => ({
-    ...p,
-    body: edits[p.id] !== undefined ? edits[p.id] : p.body,
-    originalBody: p.body,
-  }))
+  useEffect(() => {
+    // Fonte preferida: servidor (persistência em DB agent_prompts).
+    // Fallback: APAGAR.txt + localStorage (comportamento antigo).
+    fetch('/api/feedback-ia/prompts')
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((json) => {
+        if (!json?.ok || !Array.isArray(json.data) || json.data.length === 0) {
+          throw new Error('prompts indisponíveis no servidor')
+        }
+        setOriginalPrompts(
+          json.data.map((p) => ({
+            id: p.id,
+            name: p.name,
+            type: p.type,
+            toolDesc: '',
+            body: p.body,
+            originalBody: p.baseBody,
+            version: p.version,
+            overridden: p.overridden,
+          })),
+        )
+        setPromptsMeta({
+          flagEnabled: Boolean(json.flagEnabled),
+          overridesAvailable: Boolean(json.overridesAvailable),
+        })
+        setPromptMode('server')
+        setLoading(false)
+      })
+      .catch(() => loadFromApagarFallback())
+  }, [loadFromApagarFallback])
+
+  const prompts = promptMode === 'server'
+    ? originalPrompts.map((p) => ({ ...p, originalBody: p.originalBody ?? p.body }))
+    : originalPrompts.map((p) => ({
+        ...p,
+        body: edits[p.id] !== undefined ? edits[p.id] : p.body,
+        originalBody: p.body,
+      }))
+
+  const pushLocalVersion = useCallback((id, previousBody, newBody) => {
+    if (previousBody === newBody) return
+    setVersions((vPrev) => {
+      const list = vPrev[id] || []
+      const entry = { body: previousBody, ts: Date.now() }
+      const updated = { ...vPrev, [id]: [...list, entry].slice(-20) }
+      localStorage.setItem(VERSIONS_KEY, JSON.stringify(updated))
+      return updated
+    })
+  }, [])
 
   const handleSavePrompt = useCallback((id, newBody) => {
+    if (promptMode === 'server') {
+      const original = originalPrompts.find((p) => p.id === id)
+      const previousBody = original?.body || ''
+      fetch(`/api/feedback-ia/prompts/${encodeURIComponent(id)}/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          body: newBody,
+          node_name: original?.name,
+          node_type: original?.type,
+          applied_by: 'dashboard',
+        }),
+      })
+        .then((r) => r.json())
+        .then((json) => {
+          if (!json?.ok) throw new Error(json?.error || json?.code || 'falha ao salvar')
+          pushLocalVersion(id, previousBody, newBody)
+          setOriginalPrompts((prev) =>
+            prev.map((p) =>
+              p.id === id
+                ? { ...p, body: newBody, version: json.newVersion ?? p.version, overridden: true }
+                : p,
+            ),
+          )
+        })
+        .catch((e) => alert(`Não foi possível salvar o prompt no servidor: ${e.message}`))
+      return
+    }
+
+    // Modo local (fallback)
     setEdits((prev) => {
       const current = prev[id]
       const original = originalPrompts.find((p) => p.id === id)
       const previousBody = current !== undefined ? current : original?.body || ''
-
-      if (previousBody !== newBody) {
-        setVersions((vPrev) => {
-          const list = vPrev[id] || []
-          const entry = { body: previousBody, ts: Date.now() }
-          const updated = { ...vPrev, [id]: [...list, entry].slice(-20) }
-          localStorage.setItem(VERSIONS_KEY, JSON.stringify(updated))
-          return updated
-        })
-      }
-
+      pushLocalVersion(id, previousBody, newBody)
       const next = { ...prev, [id]: newBody }
       localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
       return next
     })
-  }, [originalPrompts])
+  }, [promptMode, originalPrompts, pushLocalVersion])
 
   const handleRestore = useCallback((id, body) => {
+    if (promptMode === 'server') {
+      handleSavePrompt(id, body)
+      return
+    }
     setEdits((prev) => {
       const next = { ...prev, [id]: body }
       localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
       return next
     })
-  }, [])
+  }, [promptMode, handleSavePrompt])
 
   const getVersions = useCallback((id) => {
     return (versions[id] || []).slice().reverse()
@@ -206,7 +278,14 @@ export default function App() {
             <FunilKommo kommoScope={getProfile('atendimento').kommoFunnelScope} />
           )}
           {!loading && !error && page === 'prompts' && (
-            <PromptViewer prompts={prompts} onSave={handleSavePrompt} getVersions={getVersions} onRestore={handleRestore} />
+            <PromptViewer
+              prompts={prompts}
+              onSave={handleSavePrompt}
+              getVersions={getVersions}
+              onRestore={handleRestore}
+              promptMode={promptMode}
+              promptsMeta={promptsMeta}
+            />
           )}
           {!loading && !error && page === 'playground' && <Playground prompts={prompts} />}
           {!loading && !error && page === 'executions' && (

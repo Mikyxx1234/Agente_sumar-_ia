@@ -24,7 +24,22 @@ import {
 } from './server/feedbackIA/rulesStore.js'
 import { seedAgentRulesIfEmpty } from './server/feedbackIA/rulesSeed.js'
 import { generateRulePatch } from './server/feedbackIA/patchGenerator.js'
-import { refreshAgentRulesCache, getAgentRulesCacheInfo, AGENT_RULES_CATALOG } from './server/ai/promptsLoader.js'
+import {
+  refreshAgentRulesCache,
+  getAgentRulesCacheInfo,
+  AGENT_RULES_CATALOG,
+  refreshAgentPromptsCache,
+  getAgentPromptsCacheInfo,
+  isAgentDbOverridesEnabled,
+  loadBasePrompts,
+} from './server/ai/promptsLoader.js'
+import {
+  listPromptOverrides,
+  getPromptOverride,
+  applyPromptPatch,
+  listPromptVersions,
+  rollbackPrompt,
+} from './server/feedbackIA/promptsStore.js'
 import { runNearestPolo } from './server/locationTool.js'
 import { runInscricao } from './server/inscricaoTool.js'
 import { isInscricaoAutomaticaEnabled, matriculaViaConsultorInstruction } from './server/inscricaoConfig.js'
@@ -561,6 +576,111 @@ app.post('/api/feedback-ia/rules/:id/rollback', async (req, res) => {
   }
 })
 
+// ── Prompts editáveis (agent_prompts) — overlay sobre APAGAR.txt ──
+// Gated por AGENT_DB_OVERRIDES_ENABLED: com a flag off, edições ficam
+// salvas no DB mas o agente continua usando o APAGAR.txt saneado.
+
+app.get('/api/feedback-ia/prompts', async (_req, res) => {
+  try {
+    const flagOn = isAgentDbOverridesEnabled(process.env)
+    const base = await loadBasePrompts()
+    const ov = await listPromptOverrides(process.env)
+    const overrideMap = new Map()
+    let overridesAvailable = true
+    if (ov.ok) {
+      for (const row of ov.data) overrideMap.set(row.prompt_id, row)
+    } else {
+      overridesAvailable = false
+    }
+    const data = base.map((p) => {
+      const o = overrideMap.get(p.id)
+      return {
+        id: p.id,
+        name: p.name,
+        type: p.type,
+        baseBody: p.body,
+        body: o ? o.body : p.body,
+        overridden: Boolean(o),
+        version: o ? o.version : 0,
+        updatedAt: o?.updated_at || null,
+        updatedBy: o?.updated_by || null,
+        appliesToAgent: flagOn,
+      }
+    })
+    res.json({
+      ok: true,
+      data,
+      flagEnabled: flagOn,
+      overridesAvailable,
+      overridesCode: ov.ok ? null : ov.code,
+      cache: getAgentPromptsCacheInfo(),
+    })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.get('/api/feedback-ia/prompts/:id/versions', async (req, res) => {
+  try {
+    const r = await listPromptVersions(process.env, req.params.id)
+    if (!r.ok) {
+      res.json({ ok: false, code: r.code, error: r.error, data: [] })
+      return
+    }
+    res.json({ ok: true, data: r.data })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.post('/api/feedback-ia/prompts/:id/apply', async (req, res) => {
+  try {
+    const { body, node_name, node_type, applied_by } = req.body || {}
+    if (!body || String(body).trim().length < 20) {
+      res.status(400).json({ ok: false, error: 'body obrigatório (>= 20 chars)' })
+      return
+    }
+    const out = await applyPromptPatch(process.env, req.params.id, {
+      body: String(body),
+      node_name,
+      node_type,
+      applied_by: applied_by || 'dashboard',
+    })
+    if (!out.ok) {
+      res.status(out.code === 'BAD_PROMPT_ID' ? 400 : 500).json(out)
+      return
+    }
+    await refreshAgentPromptsCache(process.env).catch(() => {})
+    res.json({
+      ok: true,
+      ...out,
+      flagEnabled: isAgentDbOverridesEnabled(process.env),
+      cache: getAgentPromptsCacheInfo(),
+    })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+app.post('/api/feedback-ia/prompts/:id/rollback', async (req, res) => {
+  try {
+    const { version, applied_by } = req.body || {}
+    if (!Number.isFinite(Number(version))) {
+      res.status(400).json({ ok: false, error: 'version (numérica) é obrigatória' })
+      return
+    }
+    const out = await rollbackPrompt(process.env, req.params.id, version, applied_by || 'dashboard')
+    if (!out.ok) {
+      res.status(out.code === 'VERSION_NOT_FOUND' ? 404 : 500).json(out)
+      return
+    }
+    await refreshAgentPromptsCache(process.env).catch(() => {})
+    res.json({ ok: true, ...out, cache: getAgentPromptsCacheInfo() })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
 // Boot: tenta seed (idempotente) e popula cache do promptsLoader.
 ;(async () => {
   try {
@@ -577,6 +697,13 @@ app.post('/api/feedback-ia/rules/:id/rollback', async (req, res) => {
       console.warn('[Server] Feedback IA · seed falhou:', seed.error)
     }
     await refreshAgentRulesCache(process.env).catch(() => {})
+    if (isAgentDbOverridesEnabled(process.env)) {
+      await refreshAgentPromptsCache(process.env).catch(() => {})
+      const pc = getAgentPromptsCacheInfo()
+      console.log(`[Server] Prompts editáveis ATIVOS (AGENT_DB_OVERRIDES_ENABLED=true) — overrides=${pc.overridesCount}, source=${pc.source}`)
+    } else {
+      console.log('[Server] Prompts editáveis em modo leitura/edição apenas (AGENT_DB_OVERRIDES_ENABLED=false) — agente usa APAGAR.txt saneado')
+    }
   } catch (e) {
     console.warn('[Server] Feedback IA · boot exception:', e.message)
   }

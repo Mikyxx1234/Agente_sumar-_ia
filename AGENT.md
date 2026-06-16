@@ -12,6 +12,86 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-06-16 - Alinhamento dos prompts às regras (eliminar contradições corrigidas em runtime) — IMPLEMENTADO (local, sem deploy)
+
+- **Decisão**
+  - Reescrever os 4 prompts (em `agent_prompts`) para que já OBEDEÇAM às regras de
+    prioridade máxima ANTES de elas serem aplicadas, eliminando o "trabalho dobrado"
+    do agente (ler instrução obsoleta no prompt e depois ter que sobrepô-la pela regra).
+- **Contexto / causa raiz**
+  - `agentRunner.js` (linha ~954) monta `buildSystemMessage(prompts)` concatenando os 4
+    prompts num ÚNICO system message + regras no fim. É um agente só. Mas os prompts eram
+    de um desenho multi-agente n8n, então traziam contradições que as regras corrigiam:
+    saída em XML/JSON, enquadramento de sub-agente ("você fala só com o orquestrador",
+    "você NÃO fornece valores/preços/contatos") e nomes de tool antigos (`agente_*`,
+    `receptivo_*`, `inscricao`, `agente_localizacao`).
+- **Implementação (cada prompt virou nova versão em agent_prompt_versions)**
+  - orquestrador: identidade de atendente único (não "orquestra agentes"); tools reais
+    `buscar_conhecimento/_informacoes/_pos/_precos/_perguntas`, `enviar_grade_pdf`,
+    `distribuir_humano`; fluxo Form Sumar (sem ENEM/tipo_ingresso/localização).
+  - agente preços: removidos os templates XML (`<graduacao>`/`<pos_graduacao>`/`<sem_resultado>`);
+    `sem_resultado` virou DECISÃO INTERNA (não mensagem); resposta em linguagem natural;
+    mantida a lógica forte de precisão de correspondência de curso.
+  - receptivo informacoes: removido o bloqueio "não fornece valores/preços/contatos" — agora
+    orienta usar `buscar_precos`/`buscar_conhecimento` p/ valores; mantida a separação
+    graduação×pós (uma tool por resposta) que alinha com as regras 13/15.
+  - agente preguntas: removido o formato JSON e o "fala só com o orquestrador"; resposta
+    natural baseada em `buscar_perguntas`; fallback `distribuir_humano` (regra 4.c).
+  - Marca: cláusula "EXCLUSIVAMENTE Faculdade Sumaré" em todos; saneador de runtime mantém
+    fallback do APAGAR.txt sem marcas legadas.
+- **Verificação automática (sobre loadPrompts efetivo)**: sem ENEM positivo, sem
+  tipo_ingresso/vestibular, sem agente_localizacao, sem nomes de tool antigos, sem XML/JSON
+  de saída, sem "fala só com orquestrador", sem "não fornece preços", sem EAD/EAD; presentes
+  tools `buscar_*`, Semipresencial, Form Sumar e marca Sumaré. RESULTADO: todos alinhados.
+- **Impacto**
+  - Menos sinal conflitante para o LLM (as regras deixam de precisar "consertar" o prompt).
+    Tudo versionado/reversível. Produção intocada (flag off). Comparação base×overlay confirmou
+    que a produção atual ainda carrega essas contradições — o overlay local é estritamente
+    mais consistente, sem regressão.
+
+---
+
+### 2026-06-16 - Prompts editáveis persistidos em DB (agent_prompts) com overlay gated por flag — IMPLEMENTADO (validado local, sem deploy)
+
+- **Decisão**
+  - Os prompts do agente (systemMessage de cada node do `APAGAR.txt`) passam a ser
+    editáveis pelo painel e persistidos no Supabase principal em duas tabelas novas:
+    `agent_prompts` (estado atual) e `agent_prompt_versions` (histórico imutável).
+  - O `promptsLoader.loadPrompts()` aplica um **overlay**: base = `APAGAR.txt` saneado
+    (marca Faculdade Sumaré) + sobreposição do corpo vindo do DB, por `prompt_id`.
+  - Tudo atrás da flag `AGENT_DB_OVERRIDES_ENABLED`. Com a flag **off** (produção hoje),
+    o agente se comporta exatamente como antes (lê só o `APAGAR.txt` saneado); a tabela
+    pode existir e ser editada sem qualquer efeito em produção. Com a flag **on** (apenas
+    `.env` local por enquanto), o agente usa o texto do DB.
+- **Contexto**
+  - O editor de "Prompts" do painel só gravava em `localStorage` (não afetava o agente
+    nem persistia). A fonte real do system message era o `APAGAR.txt` + regras hardcoded /
+    `agent_rules`. Objetivo: centralizar e tornar os prompts editáveis, persistentes e
+    seguros, mantendo velocidade (cache em memória com TTL de 60s, mesmo padrão das regras).
+- **Implementação**
+  - `scripts/sql/agent_prompts.sql`: DDL das 2 tabelas. Criadas via Management API (PAT).
+  - `server/feedbackIA/promptsStore.js`: list/get/seed/apply/versions/rollback (PostgREST,
+    mesmo shape do `rulesStore.js`; upsert por `prompt_id` com merge-duplicates).
+  - `server/ai/promptsLoader.js`: `isAgentDbOverridesEnabled`, cache de overrides com TTL,
+    `loadBasePrompts()` (cru por mtime) + `loadPrompts()` (overlay gated), regra 33 no catálogo.
+  - `server.js`: endpoints `GET /api/feedback-ia/prompts`, `GET .../:id/versions`,
+    `POST .../:id/apply`, `POST .../:id/rollback`; refresh de cache no apply/rollback e boot.
+  - `src/App.jsx` + `src/components/PromptViewer.jsx`: painel passa a ler/gravar no servidor
+    (fallback localStorage se o endpoint não responder) + banner de status de persistência.
+  - `scripts/ensureAgentPrompts.mjs`: cria tabela (Management API/pg) e semeia base saneada.
+  - `scripts/validate-prompt-cycle.mjs`: validação E2E (editar→persistir→`loadPrompts`→rollback).
+- **Alternativas descartadas**
+  - Só cache/localStorage: perde dados e não persiste (rejeitado pelo requisito de segurança).
+  - Escrever já em `agent_rules` (compartilhada com produção, regras 1-30): adiado para o
+    rollout para não afetar produção durante a validação local. Editor livre de regras e
+    `syncMissingRules` ficaram para a fase de rollout.
+- **Impacto**
+  - Validado local: editar prompt no painel → grava em `agent_prompts`/`_versions` → o agente
+    (`loadPrompts`) já usa o texto novo; rollback restaura versão anterior. Produção intacta
+    (flag off). Próximo passo (após avaliação): ligar a flag em produção para ativar o overlay.
+
+---
+
 ### 2026-06-15 - Fix do resumo de matrícula na transferência (curso destino) — IMPLEMENTADO
 
 - **Decisão**
@@ -1938,3 +2018,62 @@ Histórico das decisões estruturais do agente. Formato por entrada:
   - Agente responde grade/disciplinas de qualquer curso com dados no site.
   - Próximo passo opcional: rodar `scripts/sql/grad_grade_curricular.sql` no
     SQL Editor e re-ingerir na tabela dedicada (`npm run register:grade-curricular-rag`).
+
+### 16/06 - Match de oferta oficial por tokens (corrige alucinação de curso inexistente)
+
+- **Decisão**
+  - Em `libShared/cursoOfertaFilter.js`, `lookupOfertaModalidades` deixou de casar
+    cursos por substring bidirecional e passou a casar por **tokens (palavras
+    inteiras)** — subconjunto em qualquer direção.
+
+- **Contexto**
+  - Simulação local revelou que, para "vocês têm Medicina?", o `buscar_conhecimento`
+    injetava no CONTEXT a linha falsa
+    `[OFERTA OFICIAL — medicina: ... Semipresencial]`. Causa: `"biomedicina".includes("medicina")`
+    fazia a query "medicina" herdar a modalidade de "biomedicina", e
+    `buildOfficialOfferContextBlock` emitia uma oferta oficial inexistente. O LLM
+    obedecia à instrução determinística e afirmava que a Sumaré oferece Medicina
+    (4/4 nas iterações de teste, tanto na base quanto na versão editada).
+  - Nenhum ajuste de prompt resolvia, pois o erro era determinístico no CONTEXT.
+    Guard "CURSO FORA DO CATÁLOGO" adicionado ao orquestrador como reforço.
+
+- **Alternativas descartadas**
+  - Só fortalecer o prompt: insuficiente (o CONTEXT continuava afirmando a oferta).
+  - Exigir match exato (`map.has`) para a query: perderia casos legítimos como
+    `pedagogia` ↔ `pedagogia licenciatura`.
+
+- **Impacto**
+  - Linha falsa some do CONTEXT; agente passou a 4/4 corretas em "Medicina"
+    (nega + oferece Biomedicina/Farmácia/Fisioterapia/Nutrição, regra 20).
+  - Casos compostos legítimos seguem casando (`gestao rh` ↔ `gestao de rh`).
+
+### 16/06 - Transferência/aproveitamento no orquestrador + fix de heurística acadêmica
+
+- **Decisão**
+  - Orquestrador (prompt, v6 no DB): incluída a ferramenta `registrar_transferencia`
+    na lista de tools e no fluxo de decisão, com instrução explícita de NÃO usar
+    `distribuir_humano` para transferência/aproveitamento (é ingresso comercial) e
+    de reconhecer a fala coloquial ("vim de outra faculdade", "aproveitar matérias").
+  - `libShared/academicAffairsHeuristics.js`: removido o `\b` final dos radicais
+    financeiros em duas regex (`looksLikeCommercialEnrollment` linha do filtro
+    financeiro e `messageAsksAcademicAffairsSupportInText` linha de inadimplência).
+
+- **Contexto**
+  - Bateria local: transferência caía em `distribuir_humano` ~1/3 das vezes porque
+    o orquestrador reescrito não listava `registrar_transferencia` (embora a tool
+    exista em `toolDefinitions.js` com boa descrição).
+  - Novo cenário "aluno atual com dúvida acadêmica" revelou bug pré-existente: o
+    `\b` ao final de `atrasad`/`inadimpl`/`negativad` nunca casava palavras reais
+    ("mensalidade atrasada", "inadimplente"), então o caso financeiro de aluno ia
+    para `distribuir_humano` em vez do redirecionamento acadêmico canônico.
+
+- **Alternativas descartadas**
+  - Expor `registrar_transferencia` só via descrição da tool (já existia): não
+    bastava, o prompt empurrava para `distribuir_humano`.
+
+- **Impacto**
+  - Transferência/aproveitamento: 3/3 chamam `registrar_transferencia`.
+  - Aluno acadêmico (trancamento, declaração, mensalidade atrasada, inadimplente):
+    4/4 caem no redirecionamento acadêmico determinístico (Portal do Aluno /
+    atendimento / ouvidoria).
+  - Medicina e pós seguem corretos (sem regressão).

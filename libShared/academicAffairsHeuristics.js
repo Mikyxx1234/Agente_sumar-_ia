@@ -19,7 +19,7 @@ function normalize(text) {
 /** Nova captação / inscrição comercial — não é assunto acadêmico institucional. */
 function looksLikeCommercialEnrollment(t) {
   if (/\b(quero|gostaria|posso|como)\s+(me\s+)?(matricular|inscrever|fazer\s+(a\s+)?inscri)/i.test(t)) return true
-  if (/\b(valor|pre[cç]o|mensalidade|bolsa|desconto)\b/i.test(t) && !/\b(atrasad|inadimpl|d[eé]bito)\b/i.test(t)) return true
+  if (/\b(valor|pre[cç]o|mensalidade|bolsa|desconto)\b/i.test(t) && !/\b(atrasad|inadimpl|d[eé]bito)/i.test(t)) return true
   if (/\b(transfer[eê]ncia|aproveitamento\s+de\s+mat[eé]rias?|dispensa\s+de\s+mat[eé]ria)\b/i.test(t)) return true
   return false
 }
@@ -39,7 +39,7 @@ export function messageAsksAcademicAffairsSupportInText(text) {
   if (/\bsegunda\s+via\b/i.test(t) && /\b(documento|diploma|certificado|hist[oó]rico)\b/i.test(t)) return true
   if (/\b(cola[cç][aã]o\s+de\s+grau|jubilamento|abandono\s+de\s+curso)\b/i.test(t)) return true
   if (/\b(portal\s+do\s+aluno|acesso\s+ao\s+portal)\b/i.test(t) && /\b(problema|senha|acesso|solicitar|pedido)\b/i.test(t)) return true
-  if (/\b(inadimpl|mensalidade\s+atrasad|d[eé]bito\s+em\s+aberto|negativad)\b/i.test(t)) return true
+  if (/\b(inadimpl|mensalidade[s]?\s+atrasad|d[eé]bito\s+em\s+aberto|negativad)/i.test(t)) return true
   if (/\b(reclama[cç][aã]o|protocolo)\b/i.test(t) && /\b(acad[eê]mica|matr[ií]cula|curso|faculdade)\b/i.test(t)) return true
   if (/\bemitir\s+(o\s+)?diploma\b/i.test(t) || /\b(retirada\s+do\s+diploma)\b/i.test(t)) return true
 

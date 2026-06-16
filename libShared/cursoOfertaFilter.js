@@ -12,13 +12,29 @@ export function normalizeCursoKey(name) {
     .trim()
 }
 
+function tokenSet(s) {
+  return new Set(String(s || '').split(' ').filter(Boolean))
+}
+
+/** Retorna true se todos os tokens de `a` estão presentes em `b` (palavras inteiras). */
+function isTokenSubset(a, b) {
+  for (const t of a) if (!b.has(t)) return false
+  return true
+}
+
 export function lookupOfertaModalidades(map, key) {
   if (!map || !key) return null
   if (map.has(key)) return map.get(key)
+  const keyTok = tokenSet(key)
+  if (!keyTok.size) return null
   let best = null
   for (const [k, set] of map) {
     if (!k || k.length < 5) continue
-    if (k.includes(key) || key.includes(k)) {
+    const kTok = tokenSet(k)
+    // Match apenas por tokens inteiros (subconjunto em qualquer direção). Evita
+    // falsos positivos por substring tipo "medicina" ⊂ "biomedicina", que injetava
+    // ofertas oficiais inexistentes no CONTEXT.
+    if (isTokenSubset(keyTok, kTok) || isTokenSubset(kTok, keyTok)) {
       if (!best || k.length > best.k.length) best = { k, set }
     }
   }

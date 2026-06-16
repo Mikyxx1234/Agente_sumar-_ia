@@ -442,7 +442,7 @@ export async function runAgent(env, input) {
   }
 
   const [prompts, historyResult] = await Promise.all([
-    loadPrompts(),
+    loadPrompts(env),
     loadRecentHistoryMessages(env, telefone),
   ])
   let historyMessages = historyResult.messages
