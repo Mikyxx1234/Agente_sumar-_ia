@@ -175,6 +175,10 @@ function Set-EnvKey([string]$text, [string]$key, [string]$value) {
   return ($text.TrimEnd() + "`r`n$key=$value`r`n")
 }
 
+function Remove-EnvKey([string]$text, [string]$key) {
+  return [regex]::Replace($text, "(?m)^\s*$([regex]::Escape($key))\s*=.*\r?\n?", '')
+}
+
 Write-Host "=== Deploy EasyPanel | target=$Target | service=$Service | project=$Project ==="
 
 # Pré-deploy: testes E2E do fluxo de inscrição (tools de ação + reply guard).
@@ -228,6 +232,12 @@ foreach ($kv in $profile.EnvOverrides.GetEnumerator()) {
   $envText = Set-EnvKey $envText $kv.Key $kv.Value
   $logVal = if ($kv.Key -match 'TOKEN|KEY|PASSWORD|SECRET') { '***' } else { $kv.Value }
   Write-Host "env $($kv.Key)=$logVal"
+}
+
+# Funil fixo no código — CSV conflitante (106377088 = inatividade) gera warn e confusão.
+if ($Target -eq 'prod' -and $envText -match '(?m)^\s*KOMMO_AGENT_STATUS_IDS\s*=') {
+  $envText = Remove-EnvKey $envText 'KOMMO_AGENT_STATUS_IDS'
+  Write-Host 'env KOMMO_AGENT_STATUS_IDS=(removido — funil fixo no código)'
 }
 
 if ($env:SUMARE_CAPTACAO_TOKEN) {
@@ -288,9 +298,10 @@ if ($svc2.commit.sha) {
 
 $checks = @(
   'APP_ENV',
+  'AGENT_DB_OVERRIDES_ENABLED',
   'KOMMO_AGENT_TEST_LEAD_IDS',
   'KOMMO_SCHEDULER_WEBHOOK_ORPHAN_FLUSH',
-  'KOMMO_AGENT_STATUS_IDS',
+  'SUMARE_CAPTACAO_TEST_ALLOW',
   'AGENT_QUEUE_SESSION_ENABLED'
 )
 foreach ($k in $checks) {
