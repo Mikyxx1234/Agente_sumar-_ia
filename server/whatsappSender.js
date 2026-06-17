@@ -264,7 +264,7 @@ export async function sendMessageWithNote(env, { telefone, text, leadId, executi
       holdPostFormSync = true
     }
 
-    const dedupe = await shouldSkipDuplicateOutbound(env, telefone, text)
+    const dedupe = await shouldSkipDuplicateOutbound(env, telefone, text, { leadId })
     if (dedupe.skip) {
       // Race do lock in-memory (tryReserveOutboundSync falhou) NÃO é
       // dedupe: a mensagem precisa ir. Retornamos ok:false para o caller

@@ -41,8 +41,8 @@ function getConfig(env) {
   return {
     url: url.replace(/\/$/, ''),
     key,
-    chatsTable: env.SUPABASE_CHATS_TABLE || 'chats',
-    messagesTable: env.SUPABASE_CHAT_MESSAGES_TABLE || 'chat_messages',
+    chatsTable: env.SUPABASE_CHATS_TABLE || 'chats_sum',
+    messagesTable: env.SUPABASE_CHAT_MESSAGES_TABLE || 'chat_messages_sum',
     faceInstaTable: env.SUPABASE_FACE_INSTA_TABLE || 'face-insta',
     memoryTable: env.N8N_MEMORY_TABLE || 'n8n_chat_histories',
   }

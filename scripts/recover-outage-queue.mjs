@@ -39,6 +39,7 @@ const args = process.argv.slice(2)
 const dryRun = !args.includes('--apply')
 const fromOutage = args.includes('--from-outage')
 const limit = Number(args.find((a, i) => args[i - 1] === '--limit') || 0) || 0
+const offset = Number(args.find((a, i) => args[i - 1] === '--offset') || 0) || 0
 const statusFilter = args.find((a, i) => args[i - 1] === '--status') || 'all'
 const leadIdsArg = args.find((a, i) => args[i - 1] === '--lead-ids')
 const filterIds = leadIdsArg
@@ -146,6 +147,23 @@ function pickSeedText(raw) {
   return (clean.at(-1) || chunks.at(-1) || '').trim()
 }
 
+const AGENT_EX_NOTE = /\s-\sEX-\d{6}-\d{4}-\d{3}(-[a-f0-9]+)?\s*$/i
+const RECENT_AGENT_MS = 6 * 60 * 60 * 1000
+
+/** Evita re-flush em massa quando o agente já respondeu recentemente (nota Kommo com EX-). */
+async function leadHasRecentAgentOutbound(env, leadId) {
+  const notesRes = await listLeadNotes(env, leadId, { limit: 8 })
+  if (!notesRes.ok) return false
+  const now = Date.now()
+  for (const n of notesRes.notes || []) {
+    const raw = String(n?.params?.text || n?.params?.message || '').trim()
+    if (!AGENT_EX_NOTE.test(raw)) continue
+    const at = Number(n?.created_at) * 1000
+    if (Number.isFinite(at) && now - at < RECENT_AGENT_MS) return true
+  }
+  return false
+}
+
 /** Leads com resposta IA gerada mas WhatsApp falhou (token Meta) desde 10/06. */
 async function loadOutageVictims(env) {
   const url = (env.SUPABASE_URL || '').replace(/\/$/, '')
@@ -198,6 +216,7 @@ let outageRows = []
 if (fromOutage) {
   outageRows = await loadOutageVictims(env)
   if (filterIds?.size) outageRows = outageRows.filter((r) => filterIds.has(r.lid))
+  if (offset > 0) outageRows = outageRows.slice(offset)
   if (limit > 0) outageRows = outageRows.slice(0, limit)
   for (const row of outageRows) {
     const lr = await fetch(
@@ -333,6 +352,12 @@ const stats = { moved: 0, synced: 0, seeded: 0, flushed: 0, errors: 0, skipped: 
 for (const c of work) {
   if (c.statusId === STATUS_INSCRICAO) {
     console.log(`[skip] lead=${c.lid} em inscrição — não força flush automático`)
+    stats.skipped++
+    continue
+  }
+
+  if (!dryRun && (await leadHasRecentAgentOutbound(env, c.lid))) {
+    console.log(`[skip] lead=${c.lid} resposta IA recente no Kommo (EX-) — evita duplicata`)
     stats.skipped++
     continue
   }
