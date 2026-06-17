@@ -200,6 +200,125 @@ async function mapWithConcurrency(items, limit, fn) {
   return results
 }
 
+const TOPIC_LABELS = {
+  buscar_conhecimento: 'Busca base Sumaré (RAG)',
+  buscar_precos: 'Pediu preço',
+  buscar_informacoes: 'Pediu informações do curso',
+  buscar_pos: 'Pediu pós-graduação',
+  buscar_perguntas: 'Fez uma pergunta (FAQ)',
+  localizacao: 'Pediu polo / localização',
+  inscricao: 'Inscrição / matrícula',
+  distribuir_humano: 'Distribuição para humano',
+}
+
+function chartLabelFromDayKey(dayKey) {
+  const [y, m, d] = dayKey.split('-').map(Number)
+  const date = new Date(y, m - 1, d)
+  return date.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit' })
+}
+
+function buildDaySeries(startDate, endDate, byDayRows, valueKey) {
+  const map = {}
+  for (const row of byDayRows || []) {
+    if (row?.dayKey) map[row.dayKey] = Number(row[valueKey]) || 0
+  }
+  const out = []
+  for (const dayKey of [...iterDateKeys(startDate, endDate)]) {
+    out.push({
+      label: chartLabelFromDayKey(dayKey),
+      value: map[dayKey] ?? 0,
+    })
+  }
+  return out
+}
+
+function dashboardRpcEnabled(env) {
+  return String(env.DASHBOARD_METRICS_RPC || '').toLowerCase() === 'true'
+}
+
+async function fetchDashboardMetricsRpc(env, startISO, endISO) {
+  const { url, key } = getSupabaseConfig(env)
+  if (!url || !key) return { ok: false, error: 'SUPABASE_NOT_CONFIGURED' }
+  try {
+    const r = await fetchWithTimeout(
+      `${url}/rest/v1/rpc/dashboard_metrics`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+        },
+        body: JSON.stringify({ p_start: startISO, p_end: endISO }),
+      },
+      60_000,
+    )
+    if (!r.ok) {
+      const err = await r.text().catch(() => '')
+      return { ok: false, error: sanitizeFetchError(err) || `HTTP ${r.status}` }
+    }
+    const data = await r.json()
+    return { ok: true, data }
+  } catch (e) {
+    return { ok: false, error: sanitizeFetchError(e.message) }
+  }
+}
+
+function formatRpcMetrics(data, opts, range) {
+  const messagesCount = Number(data.messagesCount) || 0
+  const durationSum = Number(data.durationSum) || 0
+  const costOrchestrator = Number(data.costOrchestrator) || 0
+  const costRewrite = Number(data.costRewrite) || 0
+  const costEmbeddings = Number(data.costEmbeddings) || 0
+  const costAuxTools = Number(data.costAuxTools) || 0
+  const cost = costOrchestrator + costRewrite + costEmbeddings + costAuxTools
+
+  const chartByDay = Array.isArray(data.chartByDay) ? data.chartByDay : []
+  const toolsRaw = Array.isArray(data.toolsRaw) ? data.toolsRaw : []
+  const toolCounts = {}
+  const topicCounts = {}
+  for (const row of toolsRaw) {
+    const name = row?.tool || 'unknown'
+    const value = Number(row?.count) || 0
+    toolCounts[name] = value
+    const label = TOPIC_LABELS[name] || name
+    topicCounts[label] = value
+  }
+
+  return {
+    ok: true,
+    messagesCount,
+    whatsappSentExecutions: Number(data.whatsappSentExecutions) || 0,
+    whatsappPartsCount: Number(data.whatsappPartsCount) || 0,
+    tokens: Number(data.tokens) || 0,
+    cost,
+    errorsCount: Number(data.errorsCount) || 0,
+    avgTime: messagesCount > 0 ? Math.round(durationSum / messagesCount) : 0,
+    chartData: buildDaySeries(opts.startDate, opts.endDate, chartByDay, 'executions'),
+    whatsappChartData: buildDaySeries(opts.startDate, opts.endDate, chartByDay, 'whatsapp'),
+    toolsData: Object.entries(toolCounts)
+      .map(([label, value]) => ({ label, value }))
+      .sort((a, b) => b.value - a.value),
+    topicsData: Object.entries(topicCounts)
+      .map(([label, value]) => ({ label, value }))
+      .sort((a, b) => b.value - a.value),
+    costBreakdown: [
+      { key: 'orchestrator', label: 'Orquestrador (chat)', cost: costOrchestrator },
+      { key: 'rewrite', label: 'Reescrita de query', cost: costRewrite },
+      { key: 'embeddings', label: 'Embeddings (RAG)', cost: costEmbeddings },
+      { key: 'auxTools', label: 'Tools auxiliares', cost: costAuxTools },
+    ],
+    meta: {
+      fetchedTotal: Number(data.fetchedTotal) || messagesCount,
+      filteredTotal: messagesCount,
+      scopeMode: 'all',
+      scopeLeadCount: null,
+      range,
+      source: 'rpc',
+    },
+  }
+}
+
 /** Evita timeout do PostgREST em ranges longos (consulta dia a dia). */
 async function fetchAllRowsForRange(env, startDate, endDate) {
   const dayKeys = [...iterDateKeys(startDate, endDate)]
@@ -236,6 +355,12 @@ export async function computeDashboardMetrics(env, opts) {
           statusIds: opts.statusIds,
           scopeMode,
         })
+
+  if (dashboardRpcEnabled(env) && scopeMode === 'all' && !scopeLeadIds) {
+    const rpc = await fetchDashboardMetricsRpc(env, range.startISO, range.endISO)
+    if (rpc.ok) return formatRpcMetrics(rpc.data, opts, range)
+    console.warn('[dashboardMetrics] RPC falhou, usando fallback paginado:', rpc.error)
+  }
 
   const fetched = await fetchAllRowsForRange(env, opts.startDate, opts.endDate)
   if (!fetched.ok) return { ok: false, error: fetched.error }
@@ -278,17 +403,6 @@ export async function computeDashboardMetrics(env, opts) {
   let costRewrite = 0
   let costEmbeddings = 0
   let costAuxTools = 0
-
-  const TOPIC_LABELS = {
-    buscar_conhecimento: 'Busca base Sumaré (RAG)',
-    buscar_precos: 'Pediu preço',
-    buscar_informacoes: 'Pediu informações do curso',
-    buscar_pos: 'Pediu pós-graduação',
-    buscar_perguntas: 'Fez uma pergunta (FAQ)',
-    localizacao: 'Pediu polo / localização',
-    inscricao: 'Inscrição / matrícula',
-    distribuir_humano: 'Distribuição para humano',
-  }
 
   for (const row of filtered) {
     const usage = row.usage || {}
@@ -369,6 +483,7 @@ export async function computeDashboardMetrics(env, opts) {
       scopeMode,
       scopeLeadCount: scopeLeadIds ? scopeLeadIds.size : null,
       range: range,
+      source: 'paginated',
     },
   }
 }
