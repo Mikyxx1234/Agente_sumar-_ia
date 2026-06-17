@@ -40,6 +40,7 @@ export default defineConfig(({ mode }) => {
         '/api/training': { target: 'http://127.0.0.1:8000', changeOrigin: true },
         '/api/feedback-ia': { target: 'http://127.0.0.1:8000', changeOrigin: true },
         '/api/inscricao': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+        '/api/dashboard': { target: 'http://127.0.0.1:8000', changeOrigin: true },
       },
     },
   }

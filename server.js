@@ -126,6 +126,30 @@ import { listSessionsWithPendingMessages, clearMessages as clearBufferSession } 
 import { computeDashboardMetrics } from './server/dashboardMetrics.js'
 import multer from 'multer'
 
+const dashboardMetricsCache = new Map()
+const DASHBOARD_CACHE_TTL_MS = 3 * 60 * 1000
+
+function dashboardCacheKey(params) {
+  return JSON.stringify(params)
+}
+
+function getDashboardCache(key) {
+  const hit = dashboardMetricsCache.get(key)
+  if (!hit) return null
+  if (Date.now() > hit.expiresAt) {
+    dashboardMetricsCache.delete(key)
+    return null
+  }
+  return hit.payload
+}
+
+function setDashboardCache(key, payload) {
+  dashboardMetricsCache.set(key, {
+    expiresAt: Date.now() + DASHBOARD_CACHE_TTL_MS,
+    payload,
+  })
+}
+
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const app = express()
 const PORT = Number(process.env.PORT) || 8000
@@ -152,6 +176,17 @@ app.get('/api/dashboard/metrics', async (req, res) => {
       .split(',')
       .map((s) => Number(s.trim()))
       .filter((n) => Number.isFinite(n) && n > 0)
+    const cacheKey = dashboardCacheKey({
+      startDate,
+      endDate,
+      scopeMode,
+      pipelineId: pipelineId || null,
+      statusIds: statusIds.length ? statusIds : null,
+    })
+    const cached = getDashboardCache(cacheKey)
+    if (cached) {
+      return res.json({ ...cached, meta: { ...cached.meta, cached: true } })
+    }
     const out = await computeDashboardMetrics(process.env, {
       startDate,
       endDate,
@@ -160,6 +195,7 @@ app.get('/api/dashboard/metrics', async (req, res) => {
       scopeMode,
     })
     if (!out.ok) return res.status(400).json(out)
+    setDashboardCache(cacheKey, out)
     res.json(out)
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message })

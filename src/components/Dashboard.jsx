@@ -1,7 +1,7 @@
 import {
   MessageSquare, Zap, DollarSign, AlertTriangle, Clock,
   TrendingUp, Database, Search, RefreshCw, Calendar, Filter, Tag,
-  Wand2, Bot, Wrench, Layers
+  Wand2, Bot, Wrench, Layers, Send
 } from 'lucide-react'
 import { useState, useEffect, useMemo, useCallback } from 'react'
 
@@ -234,6 +234,7 @@ function Donut({ data }) {
 
 const PRESETS = [
   { label: 'Hoje', days: 0 },
+  { label: '3 dias', days: 3 },
   { label: '7 dias', days: 7 },
   { label: '15 dias', days: 15 },
   { label: '30 dias', days: 30 },
@@ -243,11 +244,12 @@ export default function Dashboard({ kommoScope = null }) {
   const [metrics, setMetrics] = useState(null)
   const [loadError, setLoadError] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [activePreset, setActivePreset] = useState(7)
+  const [activePreset, setActivePreset] = useState(3)
 
   const today = toInputDate(new Date())
   const sevenAgo = toInputDate(new Date(Date.now() - 6 * 86400000))
-  const [startDate, setStartDate] = useState(sevenAgo)
+  const threeAgo = toInputDate(new Date(Date.now() - 2 * 86400000))
+  const [startDate, setStartDate] = useState(threeAgo)
   const [endDate, setEndDate] = useState(today)
 
   const fetchData = useCallback(async () => {
@@ -263,6 +265,15 @@ export default function Dashboard({ kommoScope = null }) {
         params.set('scopeMode', 'all')
       }
       const r = await fetch(`/api/dashboard/metrics?${params}`)
+      const ct = r.headers.get('content-type') || ''
+      if (!ct.includes('application/json')) {
+        const text = await r.text()
+        throw new Error(
+          /<!DOCTYPE/i.test(text)
+            ? 'Servidor demorou demais ou Supabase indisponível — tente Hoje ou 3 dias'
+            : `Resposta inválida (HTTP ${r.status})`,
+        )
+      }
       const j = await r.json()
       if (!r.ok || !j.ok) throw new Error(j.error || `HTTP ${r.status}`)
       setMetrics(j)
@@ -289,6 +300,8 @@ export default function Dashboard({ kommoScope = null }) {
     if (!metrics) {
       return {
         messagesCount: 0,
+        whatsappSentExecutions: 0,
+        whatsappPartsCount: 0,
         tokens: 0,
         cost: 0,
         errorsCount: 0,
@@ -317,6 +330,8 @@ export default function Dashboard({ kommoScope = null }) {
 
     return {
       messagesCount: metrics.messagesCount || 0,
+      whatsappSentExecutions: metrics.whatsappSentExecutions || 0,
+      whatsappPartsCount: metrics.whatsappPartsCount || 0,
       tokens: metrics.tokens || 0,
       cost: metrics.cost || 0,
       errorsCount: metrics.errorsCount || 0,
@@ -373,7 +388,7 @@ export default function Dashboard({ kommoScope = null }) {
             <span>{periodLabel}</span>
             <span>·</span>
             <strong className="tnum">{stats.messagesCount}</strong>
-            <span>mensagens</span>
+            <span>execuções IA</span>
             {stats.meta?.fetchedTotal != null && stats.meta.fetchedTotal !== stats.messagesCount && (
               <>
                 <span>·</span>
@@ -392,11 +407,31 @@ export default function Dashboard({ kommoScope = null }) {
         {loading ? (
           <div className="state-msg" style={{ minHeight: 200 }}>
             <div className="loader" />
+            <div style={{ marginTop: 12, color: 'var(--text-2)', fontSize: 13 }}>
+              Carregando métricas… períodos longos podem levar até 2 minutos.
+            </div>
           </div>
         ) : (
           <>
             <div className="kpi-grid">
-              <KPI icon={MessageSquare} label="Mensagens" value={stats.messagesCount} />
+              <KPI
+                icon={MessageSquare}
+                label="Execuções IA"
+                value={stats.messagesCount.toLocaleString('pt-BR')}
+                sub="Turnos processados pelo agente"
+              />
+              <KPI
+                icon={Send}
+                label="WhatsApp enviados"
+                value={stats.whatsappSentExecutions.toLocaleString('pt-BR')}
+                sub={
+                  stats.whatsappPartsCount > stats.whatsappSentExecutions
+                    ? `${stats.whatsappPartsCount.toLocaleString('pt-BR')} partes enviadas na API`
+                    : stats.messagesCount > 0
+                      ? `${((stats.whatsappSentExecutions / stats.messagesCount) * 100).toFixed(0)}% das execuções com resposta`
+                      : 'Confirmados na API WhatsApp'
+                }
+              />
               <KPI icon={Zap} label="Tokens usados" value={stats.tokens > 1000000 ? (stats.tokens/1000000).toFixed(2) : stats.tokens.toLocaleString('pt-BR')} unit={stats.tokens > 1000000 ? 'M' : ''} sub="Total de tokens consumidos" />
               <KPI icon={DollarSign} label="Custo estimado" value={formatBRL(stats.cost)} sub="Soma de todos os componentes" />
               <KPI icon={Clock} label="Tempo médio" value={stats.avgTime > 0 ? (stats.avgTime / 1000).toFixed(1) : '-'} unit={stats.avgTime > 0 ? 's' : ''} />
@@ -424,6 +459,7 @@ export default function Dashboard({ kommoScope = null }) {
                       <TrendingUp size={14} />
                       Mensagens por dia
                     </div>
+                    <span className="card-title-sub">Execuções IA por dia civil (SP)</span>
                   </div>
                   <div className="card-body">
                     <AreaChart data={stats.chartData} />

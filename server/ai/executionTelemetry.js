@@ -63,6 +63,14 @@ export async function saveExecution(env, execution) {
   if (execution.aiMeta && typeof execution.aiMeta === 'object') {
     usage._meta = execution.aiMeta
   }
+  for (const s of execution.steps || []) {
+    if (s?.tool !== 'whatsapp.sendMessageWithNote') continue
+    const sent = Number(s?.result?.sent)
+    if (s?.result?.ok && Number.isFinite(sent) && sent > 0) {
+      usage.whatsapp_sent = sent
+      break
+    }
+  }
 
   const row = {
     id: execution.id,

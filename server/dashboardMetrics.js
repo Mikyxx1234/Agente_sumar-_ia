@@ -6,7 +6,43 @@
 import { calcCostBRL } from '../src/lib/openaiPricing.js'
 import { listLeadsByStatus } from './kommoClient.js'
 
-const PAGE_SIZE = 1000
+const PAGE_SIZE = 500
+const FETCH_TIMEOUT_MS = 25_000
+const DAY_FETCH_CONCURRENCY = 4
+
+function sanitizeFetchError(raw) {
+  const text = String(raw || '').trim()
+  if (!text) return 'Erro desconhecido ao consultar Supabase'
+  if (/^\s*<!DOCTYPE/i.test(text) || /^\s*<html/i.test(text)) {
+    if (/522|timed out|timeout/i.test(text)) {
+      return 'Supabase temporariamente indisponível (timeout) — aguarde 1–2 min e tente Hoje ou 3 dias'
+    }
+    return 'Timeout ou indisponibilidade do Supabase — tente um período menor (Hoje ou 3 dias)'
+  }
+  try {
+    const j = JSON.parse(text)
+    if (j?.message) return String(j.message)
+    if (j?.error) return String(j.error)
+  } catch {
+    /* texto cru */
+  }
+  return text.slice(0, 200)
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
+  try {
+    return await fetch(url, { ...options, signal: ctrl.signal })
+  } catch (e) {
+    if (e?.name === 'AbortError') {
+      throw new Error(`Timeout (${Math.round(timeoutMs / 1000)}s) ao consultar Supabase`)
+    }
+    throw e
+  } finally {
+    clearTimeout(timer)
+  }
+}
 
 function getSupabaseConfig(env) {
   return {
@@ -72,9 +108,38 @@ function calcExecutionCostBRL(row) {
   return total
 }
 
+export function extractWhatsappSendFromRow(row) {
+  const usage = row?.usage && typeof row.usage === 'object' ? row.usage : {}
+  const fromUsage = Number(usage.whatsapp_sent)
+  if (Number.isFinite(fromUsage) && fromUsage > 0) {
+    return { parts: fromUsage, confirmed: true }
+  }
+
+  let parts = 0
+  let confirmed = false
+  for (const s of row?.steps || []) {
+    if (s?.tool !== 'whatsapp.sendMessageWithNote') continue
+    const r = s?.result || {}
+    const n = Number(r.sent)
+    if (r.ok && Number.isFinite(n) && n > 0) {
+      parts += n
+      confirmed = true
+    }
+  }
+  return { parts, confirmed }
+}
+
 function toLocalDateKey(iso) {
   const d = new Date(iso)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function* iterDateKeys(startDate, endDate) {
+  const start = new Date(startDate + 'T12:00:00')
+  const end = new Date(endDate + 'T12:00:00')
+  for (const d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    yield toLocalDateKey(d)
+  }
 }
 
 async function fetchScopedLeadIds(env, { pipelineId, statusIds }) {
@@ -96,23 +161,60 @@ async function fetchAllRows(env, startISO, endISO) {
   const { url, key } = getSupabaseConfig(env)
   if (!url || !key) return { ok: false, error: 'SUPABASE_NOT_CONFIGURED', rows: [] }
   const rows = []
-  for (let offset = 0; ; offset += PAGE_SIZE) {
-    const q =
-      `mensagens_ia?select=id,created_at,user_message,model,steps,tool_calls,response,error,total_duration_ms,usage` +
-      `&created_at=gte.${encodeURIComponent(startISO)}` +
-      `&created_at=lte.${encodeURIComponent(endISO)}` +
-      `&order=created_at.asc&limit=${PAGE_SIZE}&offset=${offset}`
-    const r = await fetch(`${url}/rest/v1/${q}`, {
-      headers: { apikey: key, Authorization: `Bearer ${key}` },
-    })
-    if (!r.ok) {
-      const err = await r.text().catch(() => '')
-      return { ok: false, error: err.slice(0, 300) || `HTTP ${r.status}`, rows }
+  try {
+    for (let offset = 0; ; offset += PAGE_SIZE) {
+      const q =
+        `mensagens_ia?select=id,created_at,model,steps,tool_calls,error,total_duration_ms,usage` +
+        `&created_at=gte.${encodeURIComponent(startISO)}` +
+        `&created_at=lte.${encodeURIComponent(endISO)}` +
+        `&order=created_at.asc&limit=${PAGE_SIZE}&offset=${offset}`
+      const r = await fetchWithTimeout(`${url}/rest/v1/${q}`, {
+        headers: { apikey: key, Authorization: `Bearer ${key}` },
+      })
+      if (!r.ok) {
+        const err = await r.text().catch(() => '')
+        return { ok: false, error: sanitizeFetchError(err) || `HTTP ${r.status}`, rows }
+      }
+      const batch = await r.json()
+      if (!Array.isArray(batch) || !batch.length) break
+      rows.push(...batch)
+      if (batch.length < PAGE_SIZE) break
     }
-    const batch = await r.json()
-    if (!Array.isArray(batch) || !batch.length) break
-    rows.push(...batch)
-    if (batch.length < PAGE_SIZE) break
+    return { ok: true, rows }
+  } catch (e) {
+    return { ok: false, error: sanitizeFetchError(e.message), rows }
+  }
+}
+
+async function mapWithConcurrency(items, limit, fn) {
+  const results = new Array(items.length)
+  let next = 0
+  async function worker() {
+    while (next < items.length) {
+      const i = next++
+      results[i] = await fn(items[i], i)
+    }
+  }
+  const workers = Array.from({ length: Math.min(limit, items.length) }, () => worker())
+  await Promise.all(workers)
+  return results
+}
+
+/** Evita timeout do PostgREST em ranges longos (consulta dia a dia). */
+async function fetchAllRowsForRange(env, startDate, endDate) {
+  const dayKeys = [...iterDateKeys(startDate, endDate)]
+  if (dayKeys.length <= 1) {
+    const range = saoPauloRangeIso(startDate, endDate)
+    return fetchAllRows(env, range.startISO, range.endISO)
+  }
+  const batches = await mapWithConcurrency(dayKeys, DAY_FETCH_CONCURRENCY, async (day) => {
+    const range = saoPauloRangeIso(day, day)
+    return fetchAllRows(env, range.startISO, range.endISO)
+  })
+  const rows = []
+  for (const batch of batches) {
+    if (!batch.ok) return batch
+    rows.push(...batch.rows)
   }
   return { ok: true, rows }
 }
@@ -135,7 +237,7 @@ export async function computeDashboardMetrics(env, opts) {
           scopeMode,
         })
 
-  const fetched = await fetchAllRows(env, range.startISO, range.endISO)
+  const fetched = await fetchAllRowsForRange(env, opts.startDate, opts.endDate)
   if (!fetched.ok) return { ok: false, error: fetched.error }
 
   const filtered = []
@@ -154,17 +256,22 @@ export async function computeDashboardMetrics(env, opts) {
   )
 
   const dayMap = {}
+  const whatsappDayMap = {}
   const baseDate = new Date(opts.startDate + 'T12:00:00')
   for (let i = 0; i < totalDays; i++) {
     const d = new Date(baseDate)
     d.setDate(baseDate.getDate() + i)
-    dayMap[toLocalDateKey(d)] = 0
+    const key = toLocalDateKey(d)
+    dayMap[key] = 0
+    whatsappDayMap[key] = 0
   }
 
   let tokens = 0
   let cost = 0
   let errors = 0
   let durationSum = 0
+  let whatsappSentExecutions = 0
+  let whatsappPartsCount = 0
   const toolCounts = {}
   const topicCounts = {}
   let costOrchestrator = 0
@@ -199,6 +306,13 @@ export async function computeDashboardMetrics(env, opts) {
     const dayKey = toLocalDateKey(row.created_at)
     if (dayMap[dayKey] != null) dayMap[dayKey] += 1
 
+    const wa = extractWhatsappSendFromRow(row)
+    if (wa.confirmed) {
+      whatsappSentExecutions += 1
+      whatsappPartsCount += wa.parts
+      if (whatsappDayMap[dayKey] != null) whatsappDayMap[dayKey] += 1
+    }
+
     for (const tc of row.tool_calls || []) {
       const name = tc?.tool || 'unknown'
       toolCounts[name] = (toolCounts[name] || 0) + 1
@@ -222,11 +336,21 @@ export async function computeDashboardMetrics(env, opts) {
   return {
     ok: true,
     messagesCount,
+    whatsappSentExecutions,
+    whatsappPartsCount,
     tokens,
     cost,
     errorsCount: errors,
     avgTime,
     chartData,
+    whatsappChartData: Object.entries(whatsappDayMap).map(([key, value]) => {
+      const [y, m, d] = key.split('-').map(Number)
+      const date = new Date(y, m - 1, d)
+      return {
+        label: date.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit' }),
+        value,
+      }
+    }),
     toolsData: Object.entries(toolCounts)
       .map(([label, value]) => ({ label, value }))
       .sort((a, b) => b.value - a.value),
