@@ -679,7 +679,12 @@ export function messageLooksLikePosMatriculaFollowUp(text) {
 
 /** Mensagem padrão após comprovante de pagamento (aguardar finalização + e-mail de acesso). */
 export function buildPosMatriculaAguardandoFinalizacaoReply(opts = {}) {
-  const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
+  const raw = opts.pushName ? String(opts.pushName).trim().split(/\s+/)[0] : ''
+  const first =
+    raw && raw.length >= 2
+      ? raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase()
+      : null
+  const nameBit = first ? `, ${first}` : ''
   return (
     `Maravilha${nameBit}! Agora que tudo está feito, é só aguardar a matrícula ser finalizada. ` +
     `Quando tudo estiver certinho, vamos te encaminhar as informações de primeiro acesso pelo seu e-mail.\n\n` +
