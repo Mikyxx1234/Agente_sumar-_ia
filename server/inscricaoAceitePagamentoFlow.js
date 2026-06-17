@@ -11,6 +11,8 @@ import {
   buildContratoLinkResendReply,
   buildPagamentoSemComprovanteReply,
   buildComprovantePagamentoRecebidoReply,
+  buildPosMatriculaAguardandoFinalizacaoReply,
+  messageLooksLikePosMatriculaFollowUp,
 } from '../libShared/inscricaoFormHeuristics.js'
 import { messageIsInboundMediaPlaceholder } from '../libShared/scopeHeuristics.js'
 import {
@@ -103,15 +105,20 @@ export async function tryHandleMatriculaAceitePagamentoFlow(env, input) {
   const candidatoId = String(row?.captacao_candidato_id || '').trim()
 
   if (status === INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO) {
+    const followUp =
+      messageLooksLikePosMatriculaFollowUp(userMessage) ||
+      /^\s*(ok|obrigad[oa]|certo|entendi|beleza|perfeito)[!.?\s]*$/i.test(String(userMessage || '').trim())
+    const reply = followUp
+      ? buildPosMatriculaAguardandoFinalizacaoReply({ pushName })
+      : 'Já recebemos seu comprovante! Nossa equipe está conferindo e em breve você recebe as orientações por aqui, tudo bem?'
     return {
       handled: true,
       result: buildAgentReturn({
         executionId,
         model,
         t0,
-        reply:
-          'Já recebemos seu comprovante! Nossa equipe está conferindo e um consultor da Faculdade Sumaré fala com você em breve por aqui, tudo bem?',
-        steps: [{ type: 'comprovante_already_received' }],
+        reply,
+        steps: [{ type: followUp ? 'pos_matricula_follow_up' : 'comprovante_already_received' }],
         ctxSnapshot: { inscricaoForm: status },
       }),
     }
@@ -213,8 +220,7 @@ export async function tryHandleMatriculaAceitePagamentoFlow(env, input) {
           executionId,
           model,
           t0,
-          reply:
-            'Já recebemos seu comprovante! Um consultor da Faculdade Sumaré segue com você em breve por aqui.',
+          reply: buildPosMatriculaAguardandoFinalizacaoReply({ pushName }),
           steps: [{ type: 'comprovante_dedupe' }],
           ctxSnapshot: { inscricaoForm: INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO },
         }),

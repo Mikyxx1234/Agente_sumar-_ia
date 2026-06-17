@@ -665,11 +665,28 @@ export function buildPagamentoSemComprovanteReply(opts = {}) {
   )
 }
 
-export function buildComprovantePagamentoRecebidoReply(opts = {}) {
+/** Lead já enviou comprovante e pergunta sobre próximos passos / início do curso. */
+export function messageLooksLikePosMatriculaFollowUp(text) {
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (!t || t.length < 3) return false
+  return (
+    /\b(s[oó]\s+esperar|aguardar|e\s+agora|como\s+(vai\s+)?seguir|pr[oó]ximo\s+passo)\b/i.test(t) ||
+    /\b(come[çc]ar|iniciar|in[ií]cio)\b[\s\S]{0,35}\b(mat[eé]ria|curso|aula)\b/i.test(t) ||
+    /\b(quando|j[aá])\b[\s\S]{0,45}\b(come[çc]o|matr[ií]cula|acesso|e-mail|email)\b/i.test(t) ||
+    /\b(primeiro\s+acesso|dados\s+de\s+acesso|finaliz\w*\s+matr[ií]cula)\b/i.test(t)
+  )
+}
+
+/** Mensagem padrão após comprovante de pagamento (aguardar finalização + e-mail de acesso). */
+export function buildPosMatriculaAguardandoFinalizacaoReply(opts = {}) {
   const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
   return (
-    `Agradecemos sua matrícula${nameBit}! ` +
-    `Em breve, assim que seu pagamento for reconhecido, vamos encaminhar aqui as informações ` +
-    `de como prosseguir para iniciar o curso. Qualquer dúvida, é só responder por aqui.`
+    `Maravilha${nameBit}! Agora que tudo está feito, é só aguardar a matrícula ser finalizada. ` +
+    `Quando tudo estiver certinho, vamos te encaminhar as informações de primeiro acesso pelo seu e-mail.\n\n` +
+    `Qualquer dúvida, é só responder por aqui.`
   )
+}
+
+export function buildComprovantePagamentoRecebidoReply(opts = {}) {
+  return buildPosMatriculaAguardandoFinalizacaoReply(opts)
 }

@@ -909,7 +909,25 @@ Você representa a **Faculdade Sumaré** no atendimento comercial (WhatsApp via 
     c) Deixe claro que não é possível informar o valor exato do curso inteiro por causa do
        reajuste, e que as mensalidades costumam variar entre R$ 20 e R$ 40 ao ano.
     d) PROIBIDO prometer mensalidade totalmente fixa sem reajuste ou calcular/inventar o
-       valor total do curso. PROIBIDO encaminhar consultor só por esta dúvida.`
+       valor total do curso. PROIBIDO encaminhar consultor só por esta dúvida.
+
+34. PÓS-COMPROVANTE DE PAGAMENTO — AGUARDAR FINALIZAÇÃO DA MATRÍCULA
+
+    Depois que a matrícula foi executada na API Captação e o lead enviou o comprovante
+    de pagamento (print/foto no WhatsApp):
+    a) Confirme o recebimento com tom positivo e explique que agora é só aguardar a
+       finalização da matrícula.
+    b) Informe que as orientações de *primeiro acesso* serão encaminhadas pelo *e-mail*
+       cadastrado quando tudo estiver certo — NÃO prometa prazo exato nem invente login/senha.
+    c) Modelo de resposta (adapte o nome se souber):
+       "Maravilha! Agora que tudo está feito, é só aguardar a matrícula ser finalizada.
+       Quando tudo estiver certinho, vamos te encaminhar as informações de primeiro acesso
+       pelo seu e-mail."
+    d) Se o lead perguntar "e agora?", "só esperar?", "quando começo as matérias?" ou
+       similar após o comprovante, use a MESMA orientação (aguardar + e-mail de acesso).
+    e) PROIBIDO prometer consultor "em breve" como única resposta nesta etapa — o fluxo
+       correto é aguardar finalização e e-mail de acesso. Consultor humano só se houver
+       problema real (pagamento não reconhecido após dias, dúvida fora do escopo comercial).`
 }
 
 export function buildSystemMessage(prompts, env = process.env) {
@@ -957,4 +975,5 @@ export const AGENT_RULES_CATALOG = [
   { id: 31, title: 'Transferência / aproveitamento de matérias' },
   { id: 32, title: 'Assuntos acadêmicos institucionais — canais oficiais' },
   { id: 33, title: 'Valor até o fim do curso / reajuste anual' },
+  { id: 34, title: 'Pós-comprovante — aguardar matrícula + e-mail de primeiro acesso' },
 ]
