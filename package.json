@@ -26,6 +26,7 @@
     "test:funnel-gate": "node scripts/test-kommo-agent-funnel-gate.mjs",
     "test:phone-variants": "node scripts/test-phone-whatsapp-variants.mjs",
     "test:flush-retry-backoff": "node scripts/test-flush-retry-backoff.mjs",
+    "test:lgpd-compliance": "node scripts/test-lgpd-compliance.mjs",
     "test:form-notes-age-cap": "node scripts/test-form-notes-age-cap.mjs",
     "update:precos-rag": "node --env-file=.env scripts/update-precos-sumare-rag.mjs",
     "audit:precos": "node --env-file=.env scripts/audit-precos-sumare.mjs",

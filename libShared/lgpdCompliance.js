@@ -24,8 +24,13 @@ const PHONE_WITH_LABEL_RX =
   /\b(telefone|celular|whatsapp|fone)\s*(do|da|de|:)?\s*[:\s]*(?:\+?55\s?)?(?:\(?\d{2}\)?\s?)?\d{4,5}[-\s]?\d{4}\b/i
 const ADDRESS_LEAK_RX =
   /\b(endereço|endereco|rua|avenida|av\.|cep)\s*(do|da|de|:)?\s*[:\s]*.{8,}/i
+/** Dados bancários do candidato — NÃO incluir "banco" solto (falso positivo em "Banco de Dados"). */
 const BANK_LEAK_RX =
-  /\b(cartão|cartao|conta bancária|conta bancaria|pix|agência|agencia|banco)\s*(do|da|de|:)?\s*[:\s]*.{4,}/i
+  /\b(cartão|cartao|conta bancária|conta bancaria|pix|agência|agencia)\s*(do|da|de|:)?\s*[:\s]*.{4,}/i
+const BANK_INSTITUTION_LEAK_RX =
+  /\bbanco\b(?!\s+de\s+dados\b)\s*(do|da|de)\s*(?:\w+\s+){0,3}(conta|corrente|poupan[cç]a|ag[eê]ncia|pix)\b/i
+/** Curso tecnólogo — remover antes do guard financeiro para não confundir com "banco do lead". */
+const CURSO_BANCO_DE_DADOS_RX = /\bbanco\s+de\s+dados\b/gi
 const THIRD_PARTY_DATA_REQUEST_RX =
   /\b(cpf|e-?mail|email|telefone|celular|whatsapp|endereço|endereco|dados|informações|informacoes|cadastro|matrícula|matricula|inscrição|inscricao|nota|boletim|histórico|historico)\b[\s\S]{0,50}\b(de|do|da|d[oa]s)\b[\s\S]{0,40}\b(outr[oa]|terceir[oa]|alun[oa]|candidat[oa]|pessoa|fulano|cliente|lead|colega|amig[oa]|namorad[oa]|espos[oa]|marido|esposa|filh[oa]|mãe|mae|pai)\b/i
 const RA_ALLOWED_CONTEXT_RX = /\b(ra|registro acad[eê]mico|n[úu]mero do aluno|n[úu]mero de matr[ií]cula acad[eê]mica)\b/i
@@ -91,7 +96,8 @@ export function replyLeaksSensitiveCandidateData(reply, { userMessage = '' } = {
   if (ADDRESS_LEAK_RX.test(text) && !replyContainsInstitutionalLocationInfo(text)) {
     return { leak: true, code: 'lgpd_address_leak' }
   }
-  if (BANK_LEAK_RX.test(text)) {
+  const textForBankCheck = text.replace(CURSO_BANCO_DE_DADOS_RX, 'curso tecnologo dados')
+  if (BANK_LEAK_RX.test(textForBankCheck) || BANK_INSTITUTION_LEAK_RX.test(textForBankCheck)) {
     return { leak: true, code: 'lgpd_financial_leak' }
   }
 
