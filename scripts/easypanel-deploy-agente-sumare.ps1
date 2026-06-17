@@ -246,9 +246,16 @@ if ($env:SUMARE_CAPTACAO_TOKEN) {
 } elseif ($Target -eq 'prod') {
   Write-Warning 'SUMARE_CAPTACAO_TOKEN nao definido — matricula API pode falhar em prod.'
 }
-if ($env:WHATSAPP_ACCESS_TOKEN) {
+# NUNCA sobrescrever WHATSAPP_ACCESS_TOKEN em prod a partir do .env local — token Meta
+# é por ambiente; sobrescrever quebrou envio (OAuth 190) em 16/06/2026.
+# Para atualizar token em prod: cole manualmente no EasyPanel ou defina
+# EP_WHATSAPP_ACCESS_TOKEN_OVERRIDE na sessão antes do deploy.
+if ($Target -eq 'prod' -and $env:EP_WHATSAPP_ACCESS_TOKEN_OVERRIDE) {
+  $envText = Set-EnvKey $envText 'WHATSAPP_ACCESS_TOKEN' $env:EP_WHATSAPP_ACCESS_TOKEN_OVERRIDE
+  Write-Host 'env WHATSAPP_ACCESS_TOKEN=*** (override explícito EP_WHATSAPP_ACCESS_TOKEN_OVERRIDE)'
+} elseif ($Target -ne 'prod' -and $env:WHATSAPP_ACCESS_TOKEN) {
   $envText = Set-EnvKey $envText 'WHATSAPP_ACCESS_TOKEN' $env:WHATSAPP_ACCESS_TOKEN
-  Write-Host 'env WHATSAPP_ACCESS_TOKEN=*** (instancia Evolution / Cloud API)'
+  Write-Host 'env WHATSAPP_ACCESS_TOKEN=*** (staging/local)'
 }
 
 if ($env:SUMARE_CAPTACAO_CURSO_MAP) {
