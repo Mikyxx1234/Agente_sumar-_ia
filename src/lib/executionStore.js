@@ -85,14 +85,23 @@ export async function getAllExecutions() {
 
 export async function getExecutionsByRange(startDate, endDate) {
   try {
-    const startISO = `${startDate}T00:00:00.000Z`
-    const endISO = `${endDate}T23:59:59.999Z`
-    const res = await fetch(
-      `${BASE}/rest/v1/mensagens_ia?select=*&created_at=gte.${startISO}&created_at=lte.${endISO}&order=created_at.desc`
-    )
-    if (!res.ok) return []
-    const rows = await res.json()
-    return rows.map(mapRow)
+    const startISO = `${startDate}T03:00:00.000Z`
+    const [ey, em, ed] = endDate.split('-').map(Number)
+    const endUtc = new Date(Date.UTC(ey, em - 1, ed + 1, 2, 59, 59, 999))
+    const endISO = endUtc.toISOString()
+    const PAGE = 1000
+    const all = []
+    for (let offset = 0; ; offset += PAGE) {
+      const res = await fetch(
+        `${BASE}/rest/v1/mensagens_ia?select=*&created_at=gte.${encodeURIComponent(startISO)}&created_at=lte.${encodeURIComponent(endISO)}&order=created_at.desc&limit=${PAGE}&offset=${offset}`,
+      )
+      if (!res.ok) break
+      const rows = await res.json()
+      if (!Array.isArray(rows) || !rows.length) break
+      all.push(...rows.map(mapRow))
+      if (rows.length < PAGE) break
+    }
+    return all
   } catch (e) {
     console.error('[ExecutionStore] Fetch range error:', e.message)
     return []

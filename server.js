@@ -123,6 +123,7 @@ import {
   listTrainingFeedback,
 } from './server/trainingFeedbackStore.js'
 import { listSessionsWithPendingMessages, clearMessages as clearBufferSession } from './server/evolution/messageBuffer.js'
+import { computeDashboardMetrics } from './server/dashboardMetrics.js'
 import multer from 'multer'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -139,6 +140,30 @@ app.get('/api/health', (_req, res) => {
     port: PORT,
     dist: existsSync(join(__dirname, 'dist', 'index.html')),
   })
+})
+
+app.get('/api/dashboard/metrics', async (req, res) => {
+  try {
+    const startDate = String(req.query.startDate || '').trim()
+    const endDate = String(req.query.endDate || startDate).trim()
+    const scopeMode = String(req.query.scopeMode || 'all').trim()
+    const pipelineId = Number(req.query.pipelineId) || undefined
+    const statusIds = String(req.query.statusIds || '')
+      .split(',')
+      .map((s) => Number(s.trim()))
+      .filter((n) => Number.isFinite(n) && n > 0)
+    const out = await computeDashboardMetrics(process.env, {
+      startDate,
+      endDate,
+      pipelineId,
+      statusIds: statusIds.length ? statusIds : undefined,
+      scopeMode,
+    })
+    if (!out.ok) return res.status(400).json(out)
+    res.json(out)
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
 })
 
 app.use(

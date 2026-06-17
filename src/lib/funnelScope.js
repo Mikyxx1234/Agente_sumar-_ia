@@ -27,6 +27,8 @@ import { useEffect, useState } from 'react'
  * PAGAMENTO.
  */
 export function getExecutionLeadId(exec) {
+  const fromUsage = Number(exec?.usage?.lead_id)
+  if (Number.isFinite(fromUsage) && fromUsage > 0) return fromUsage
   const steps = Array.isArray(exec?.steps) ? exec.steps : []
   for (const s of steps) {
     const candidate = s?.result?.leadId ?? s?.leadId ?? null

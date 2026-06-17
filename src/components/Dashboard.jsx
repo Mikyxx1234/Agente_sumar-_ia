@@ -1,12 +1,9 @@
-import { useState, useEffect, useMemo, useCallback } from 'react'
 import {
   MessageSquare, Zap, DollarSign, AlertTriangle, Clock,
   TrendingUp, Database, Search, RefreshCw, Calendar, Filter, Tag,
   Wand2, Bot, Wrench, Layers
 } from 'lucide-react'
-import { getExecutionsByRange } from '../lib/executionStore'
-import { calcCostBRL } from '../lib/openaiPricing'
-import { useScopedLeadIds, getExecutionLeadId, leadMatchesScope } from '../lib/funnelScope'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 
 const TOPIC_LABELS = {
   buscar_conhecimento: 'Busca base Sumaré (RAG)',
@@ -39,51 +36,19 @@ function resolveTopicColor(label, index) {
   return TOPIC_COLORS[label] || FALLBACK_TOPIC_COLORS[index % FALLBACK_TOPIC_COLORS.length]
 }
 
-/**
- * Custo da execução em BRL.
- *
- * Considera além do orquestrador:
- *   - usage do query rewrite (ai_meta.queryRewriteUsage[])
- *   - usage de tools auxiliares com LLM próprio
- *     (ai_meta.toolUsage[]: inscricao, distribuir_humano)
- *   - usage de embeddings RAG (ai_meta.embeddingsUsage[])
- *
- * Fallback gracioso: execuções antigas (sem ai_meta) são contadas só
- * pelo usage do orquestrador, igual antes.
- */
-function calcCost(usage, model, aiMeta) {
-  let total = calcCostBRL(usage, model)
-  const extras = [
-    ...((aiMeta?.queryRewriteUsage) || []),
-    ...((aiMeta?.toolUsage) || []),
-    ...((aiMeta?.embeddingsUsage) || []),
-    ...((aiMeta?.scopeClassifierUsage) || []),
-  ]
-  for (const x of extras) total += calcCostBRL(x?.usage || {}, x?.model)
-  return total
-}
-
 function formatBRL(value) {
   return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 }
 
 function toInputDate(date) {
-  return date.toISOString().slice(0, 10)
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
 }
 
 function getDayLabel(date) {
   return date.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit' })
-}
-
-function daysBetween(start, end) {
-  const s = new Date(start); s.setHours(0,0,0,0)
-  const e = new Date(end); e.setHours(0,0,0,0)
-  return Math.round((e - s) / 86400000) + 1
-}
-
-function isInRange(iso, start, end) {
-  const d = new Date(iso)
-  return d >= new Date(start) && d <= new Date(end + 'T23:59:59.999Z')
 }
 
 /* ── UI Components ── */
@@ -275,7 +240,8 @@ const PRESETS = [
 ]
 
 export default function Dashboard({ kommoScope = null }) {
-  const [executionsRaw, setExecutionsRaw] = useState([])
+  const [metrics, setMetrics] = useState(null)
+  const [loadError, setLoadError] = useState(null)
   const [loading, setLoading] = useState(true)
   const [activePreset, setActivePreset] = useState(7)
 
@@ -284,22 +250,29 @@ export default function Dashboard({ kommoScope = null }) {
   const [startDate, setStartDate] = useState(sevenAgo)
   const [endDate, setEndDate] = useState(today)
 
-  // Filtro por escopo de perfil (Agente Inscrição): mantém só execuções
-  // cujo leadId está no funil filtrado pelos statusIds do escopo.
-  // Quando kommoScope é null (Atendimento), leadIds = null = sem filtro.
-  const scopedLeadIds = useScopedLeadIds(kommoScope)
-
-  const executions = useMemo(() => {
-    if (!scopedLeadIds.leadIds) return executionsRaw
-    return executionsRaw.filter((exec) => leadMatchesScope(getExecutionLeadId(exec), scopedLeadIds))
-  }, [executionsRaw, scopedLeadIds])
-
   const fetchData = useCallback(async () => {
     setLoading(true)
-    const data = await getExecutionsByRange(startDate, endDate)
-    setExecutionsRaw(data)
-    setLoading(false)
-  }, [startDate, endDate])
+    setLoadError(null)
+    try {
+      const params = new URLSearchParams({ startDate, endDate })
+      if (kommoScope) {
+        params.set('scopeMode', kommoScope.mode || 'include')
+        if (kommoScope.pipelineId) params.set('pipelineId', String(kommoScope.pipelineId))
+        if (kommoScope.statusIds?.length) params.set('statusIds', kommoScope.statusIds.join(','))
+      } else {
+        params.set('scopeMode', 'all')
+      }
+      const r = await fetch(`/api/dashboard/metrics?${params}`)
+      const j = await r.json()
+      if (!r.ok || !j.ok) throw new Error(j.error || `HTTP ${r.status}`)
+      setMetrics(j)
+    } catch (e) {
+      setLoadError(e.message)
+      setMetrics(null)
+    } finally {
+      setLoading(false)
+    }
+  }, [startDate, endDate, kommoScope])
 
   useEffect(() => { fetchData() }, [fetchData])
 
@@ -313,180 +286,48 @@ export default function Dashboard({ kommoScope = null }) {
   }
 
   const stats = useMemo(() => {
-    const totalDays = daysBetween(startDate, endDate)
-
-    const tokens = executions.reduce((sum, e) => sum + (e.usage?.total_tokens || 0), 0)
-    const cost = executions.reduce((sum, e) => sum + calcCost(e.usage, e.model, e.aiMeta), 0)
-    const errors = executions.filter((e) => e.error).length
-    const avgTime = executions.length > 0
-      ? Math.round(executions.reduce((sum, e) => sum + (e.totalDurationMs || 0), 0) / executions.length)
-      : 0
-
-    // Breakdown de custo por componente — útil pra identificar quem está
-    // gastando mais (orquestrador, reescrita de query, embeddings ou
-    // tools auxiliares com LLM próprio como inscricao/distribuir_humano).
-    let costOrchestrator = 0
-    let costRewrite = 0
-    let costEmbeddings = 0
-    let costAuxTools = 0
-    let tokensOrchestrator = 0
-    let tokensRewrite = 0
-    let tokensEmbeddings = 0
-    let tokensAuxTools = 0
-    const modelsByComponent = {
-      orchestrator: new Set(),
-      rewrite: new Set(),
-      embeddings: new Set(),
-      auxTools: new Set(),
-    }
-    executions.forEach((e) => {
-      costOrchestrator += calcCostBRL(e.usage || {}, e.model)
-      tokensOrchestrator += Number(e.usage?.total_tokens) || 0
-      if (e.model) modelsByComponent.orchestrator.add(e.model)
-
-      for (const u of e.aiMeta?.queryRewriteUsage || []) {
-        costRewrite += calcCostBRL(u.usage || {}, u.model)
-        tokensRewrite += Number(u.usage?.total_tokens) || 0
-        if (u.model) modelsByComponent.rewrite.add(u.model)
+    if (!metrics) {
+      return {
+        messagesCount: 0,
+        tokens: 0,
+        cost: 0,
+        errorsCount: 0,
+        avgTime: 0,
+        chartData: [],
+        toolsData: [],
+        topicsData: [],
+        costBreakdown: [],
+        meta: null,
       }
-      for (const u of e.aiMeta?.embeddingsUsage || []) {
-        costEmbeddings += calcCostBRL(u.usage || {}, u.model)
-        tokensEmbeddings += Number(u.usage?.total_tokens) || Number(u.usage?.prompt_tokens) || 0
-        if (u.model) modelsByComponent.embeddings.add(u.model)
-      }
-      for (const u of e.aiMeta?.toolUsage || []) {
-        costAuxTools += calcCostBRL(u.usage || {}, u.model)
-        tokensAuxTools += Number(u.usage?.total_tokens) || 0
-        if (u.model) modelsByComponent.auxTools.add(u.model)
-      }
-    })
-    const costBreakdown = [
-      {
-        key: 'orchestrator',
-        label: 'Orquestrador',
-        hint: 'LLM principal que decide qual tool usar e responde ao cliente.',
-        cost: costOrchestrator,
-        tokens: tokensOrchestrator,
-        models: [...modelsByComponent.orchestrator],
-        color: '#34d399',
-        icon: Bot,
-      },
-      {
-        key: 'rewrite',
-        label: 'Reescrita de query',
-        hint: 'LLM nano que transforma a pergunta do cliente em uma query melhor antes do RAG.',
-        cost: costRewrite,
-        tokens: tokensRewrite,
-        models: [...modelsByComponent.rewrite],
-        color: '#c084fc',
-        icon: Wand2,
-      },
-      {
-        key: 'embeddings',
-        label: 'Embeddings (RAG)',
-        hint: 'text-embedding-3-small para buscar nos documentos do Supabase.',
-        cost: costEmbeddings,
-        tokens: tokensEmbeddings,
-        models: [...modelsByComponent.embeddings],
-        color: '#38bdf8',
-        icon: Layers,
-      },
-      {
-        key: 'auxTools',
-        label: 'Tools auxiliares',
-        hint: 'LLMs internos das tools (ex.: resumo da inscrição / distribuição humana).',
-        cost: costAuxTools,
-        tokens: tokensAuxTools,
-        models: [...modelsByComponent.auxTools],
-        color: '#f472b6',
-        icon: Wrench,
-      },
-    ]
-
-    function toLocalDateKey(iso) {
-      const d = new Date(iso)
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-    }
-    function dateKeyToDate(key) {
-      const [y, m, d] = key.split('-').map(Number)
-      return new Date(y, m - 1, d)
     }
 
-    const dayMap = {}
-    const baseDate = new Date(startDate + 'T12:00:00')
-    for (let i = 0; i < totalDays; i++) {
-      const d = new Date(baseDate)
-      d.setDate(baseDate.getDate() + i)
-      const key = toLocalDateKey(d)
-      dayMap[key] = { date: d, count: 0 }
+    const iconMap = {
+      orchestrator: { icon: Bot, color: '#34d399', hint: 'LLM principal que decide tools e responde ao cliente.' },
+      rewrite: { icon: Wand2, color: '#c084fc', hint: 'Reescrita da pergunta antes do RAG.' },
+      embeddings: { icon: Layers, color: '#38bdf8', hint: 'text-embedding-3-small para buscar documentos.' },
+      auxTools: { icon: Wrench, color: '#f472b6', hint: 'LLMs internos de tools auxiliares.' },
     }
-    executions.forEach((e) => {
-      const key = toLocalDateKey(e.timestamp)
-      if (dayMap[key]) dayMap[key].count++
-    })
-    const chartData = Object.values(dayMap).map((d) => ({
-      label: getDayLabel(d.date),
-      value: d.count,
+
+    const costBreakdown = (metrics.costBreakdown || []).map((row) => ({
+      ...row,
+      tokens: 0,
+      models: [],
+      ...(iconMap[row.key] || { icon: Bot, color: '#94a3b8', hint: '' }),
     }))
-    if (chartData.length > 14) {
-      const step = Math.ceil(chartData.length / 14)
-      const reduced = []
-      for (let i = 0; i < chartData.length; i += step) {
-        const slice = chartData.slice(i, i + step)
-        reduced.push({
-          label: slice[0].label,
-          value: slice.reduce((s, d) => s + d.value, 0),
-        })
-      }
-      chartData.length = 0
-      chartData.push(...reduced)
-    }
-
-    const toolCounts = {}
-    executions.forEach((e) => {
-      (e.toolCalls || []).forEach((tc) => {
-        const name = tc.tool || 'unknown'
-        toolCounts[name] = (toolCounts[name] || 0) + 1
-      })
-    })
-    const toolLabels = {
-      buscar_conhecimento: 'Buscar conhecimento (Sumaré)',
-      buscar_precos: 'Buscar Preços',
-      buscar_informacoes: 'Buscar Informações',
-      buscar_pos: 'Buscar Pós-Graduação',
-      buscar_perguntas: 'Buscar Perguntas',
-      localizacao: 'Localização',
-      inscricao: 'Inscrição',
-      distribuir_humano: 'Distribuir humano',
-    }
-    const toolsData = Object.entries(toolCounts)
-      .map(([k, v]) => ({ label: toolLabels[k] || k, value: v }))
-      .sort((a, b) => b.value - a.value)
-
-    const actionCounts = {}
-    executions.forEach((e) => {
-      (e.toolCalls || []).forEach((tc) => {
-        const actionLabel = TOPIC_LABELS[tc.tool] || tc.tool
-        actionCounts[actionLabel] = (actionCounts[actionLabel] || 0) + 1
-      })
-    })
-
-    const topicsData = Object.entries(actionCounts)
-      .map(([k, v]) => ({ label: k, value: v }))
-      .sort((a, b) => b.value - a.value)
 
     return {
-      messagesCount: executions.length,
-      tokens,
-      cost,
-      errorsCount: errors,
-      avgTime,
-      chartData,
-      toolsData,
-      topicsData,
+      messagesCount: metrics.messagesCount || 0,
+      tokens: metrics.tokens || 0,
+      cost: metrics.cost || 0,
+      errorsCount: metrics.errorsCount || 0,
+      avgTime: metrics.avgTime || 0,
+      chartData: metrics.chartData || [],
+      toolsData: metrics.toolsData || [],
+      topicsData: metrics.topicsData || [],
       costBreakdown,
+      meta: metrics.meta || null,
     }
-  }, [executions, startDate, endDate])
+  }, [metrics])
 
   const periodLabel = startDate === endDate
     ? 'Hoje'
@@ -533,8 +374,20 @@ export default function Dashboard({ kommoScope = null }) {
             <span>·</span>
             <strong className="tnum">{stats.messagesCount}</strong>
             <span>mensagens</span>
+            {stats.meta?.fetchedTotal != null && stats.meta.fetchedTotal !== stats.messagesCount && (
+              <>
+                <span>·</span>
+                <span className="card-title-sub">de {stats.meta.fetchedTotal.toLocaleString('pt-BR')} no período</span>
+              </>
+            )}
           </div>
         </div>
+
+        {loadError && (
+          <div className="state-msg" style={{ color: 'var(--danger)', minHeight: 48 }}>
+            Erro ao carregar métricas: {loadError}
+          </div>
+        )}
 
         {loading ? (
           <div className="state-msg" style={{ minHeight: 200 }}>
