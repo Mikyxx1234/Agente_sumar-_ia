@@ -2,7 +2,7 @@
  * Tool de ação: enviar grade curricular em PDF via WhatsApp.
  */
 import { fetchDadosClienteByTelefone, getLeadIdByTelefone } from './dadosClienteStore.js'
-import { findLeadByPhone } from './kommoClient.js'
+import { findLeadByPhone, listLeadNotes } from './kommoClient.js'
 import { sendGradePdfToLead } from './evolution/evolutionSendMedia.js'
 import { extractDiscussedCourseFromHistory } from '../libShared/conversationContextHeuristics.js'
 import { extractCursoAreaFromText } from '../libShared/cursoConfirmation.js'
@@ -12,6 +12,11 @@ import {
   resolveGradeForPdf,
   listGradeGrausForCurso,
 } from '../libShared/gradeCurricularPdfService.js'
+import {
+  detectNivel,
+  isNivelCorrectionMessage,
+  nivelConflictsWithCursoName,
+} from '../libShared/gradeNivelHeuristics.js'
 import {
   messageAsksGradePdf,
   messageAsksGradeCurricular,
@@ -26,12 +31,34 @@ import {
   messageAsksLocationInfo,
 } from '../libShared/inboundMessageSanitize.js'
 
-function detectNivel({ curso, userMessage, kommoCurso, kommoModalidade }) {
-  const blob = `${curso} ${userMessage || ''} ${kommoCurso || ''}`.toLowerCase()
-  if (/\b(p[oó]s|mba|especializa|lato\s+sensu)\b/i.test(blob)) return 'pos'
-  if (/\b(gradua|bacharel|licenciatura|tecn[oó]log)\b/i.test(blob)) return 'grad'
-  if (kommoModalidade && /h[ií]brido/i.test(String(kommoModalidade))) return 'pos'
-  return null
+export { detectNivel } from '../libShared/gradeNivelHeuristics.js'
+
+function gradePdfAutoEnabled(env) {
+  const v = String(env?.GRADE_PDF_AUTO_ENABLED ?? 'true').trim().toLowerCase()
+  return v !== 'false' && v !== '0' && v !== 'off'
+}
+
+function resolveDedupeSec(env) {
+  const n = Number(env?.OUTBOUND_DEDUPE_SEC ?? env?.WHATSAPP_OUTBOUND_DEDUPE_SEC)
+  return Number.isFinite(n) && n > 0 ? n : 6 * 3600
+}
+
+async function shouldSkipDuplicateGradePdf(env, leadId, fileName) {
+  if (!leadId || !fileName) return { skip: false }
+  const notesRes = await listLeadNotes(env, leadId, { limit: 25 })
+  if (!notesRes.ok) return { skip: false }
+  const cutoff = Date.now() - resolveDedupeSec(env) * 1000
+  const needle = String(fileName).toLowerCase()
+  for (const n of notesRes.notes || []) {
+    const text = String(n?.params?.text || n?.params?.message || '').toLowerCase()
+    if (!text.includes(needle) && !text.includes('pdf grade curricular')) continue
+    if (!text.includes(needle)) continue
+    const at = Number(n?.created_at) * 1000
+    if (Number.isFinite(at) && at >= cutoff) {
+      return { skip: true, reason: 'grade_pdf_recent', at }
+    }
+  }
+  return { skip: false }
 }
 
 async function resolveLeadId(env, telefone, hint) {
@@ -66,15 +93,6 @@ function grauFromText(text) {
 
 const OTHER_GRAU = { licenciatura: 'bacharelado', bacharelado: 'licenciatura' }
 
-/**
- * Detecta o grau que o lead REALMENTE quer (bacharelado/licenciatura).
- * Ordem importa:
- *  1) CORREÇÃO — quando o lead descreve a grade RECEBIDA como errada
- *     ("essa grade é do bacharelado", "não é licenciatura", "mandou bacharelado")
- *     → quer o grau OPOSTO ao citado.
- *  2) DESEJO POSITIVO — "queria a licenciatura", "grade de ... licenciatura".
- *  3) Menção simples a um grau.
- */
 function detectGrauWanted(text) {
   const t = String(text || '').toLowerCase()
   if (!grauFromText(t)) return null
@@ -96,7 +114,6 @@ function detectGrauWanted(text) {
   return grauFromText(t)
 }
 
-/** Remove qualquer grau existente do nome do curso e aplica o desejado. */
 function applyGrauToCurso(curso, grau) {
   const base = String(curso || '')
     .replace(/\b(bacharelado|bacharel\w*|licenciatura|licenciat\w*|tecn[oó]log\w*)\b/gi, '')
@@ -104,6 +121,15 @@ function applyGrauToCurso(curso, grau) {
     .replace(/\s+/g, ' ')
     .trim()
   return grau ? `${base} ${grau}` : base
+}
+
+function resolveNivelForGrade({ args, flowCtx, curso, rowDb }) {
+  if (args?.nivel === 'grad' || args?.nivel === 'pos') return args.nivel
+  return detectNivel({
+    curso,
+    userMessage: flowCtx.userMessage,
+    kommoCurso: rowDb?.kommo_curso,
+  })
 }
 
 /**
@@ -118,6 +144,23 @@ export async function runEnviarGradePdf(env, args, flowCtx = {}) {
       ok: false,
       code: 'MISSING_TELEFONE',
       text: 'Telefone ausente.',
+      replyOverride: null,
+    }
+  }
+
+  const leadText = sanitizeLeadInboundMessage(
+    extractLeadTextAfterAgentEcho(flowCtx.userMessage) || flowCtx.userMessage || '',
+  )
+  const asksPriceOnly =
+    leadText &&
+    messageAsksCoursePrice(leadText) &&
+    !messageAsksGradeCurricular(leadText) &&
+    !messageAsksGradePdf(leadText)
+  if (asksPriceOnly) {
+    return {
+      ok: false,
+      code: 'GRADE_BLOCKED_PRICE_QUESTION',
+      text: 'Lead perguntou preço/valor — use buscar_precos neste turno.',
       replyOverride: null,
     }
   }
@@ -140,17 +183,29 @@ export async function runEnviarGradePdf(env, args, flowCtx = {}) {
   }
 
   const modalidade = args?.modalidade || rowDb?.kommo_modalidade || null
-  const nivel = args?.nivel || detectNivel({
-    curso,
-    userMessage: flowCtx.userMessage,
-    kommoCurso: rowDb?.kommo_curso,
-    kommoModalidade: rowDb?.kommo_modalidade,
-  })
+  const nivel = resolveNivelForGrade({ args, flowCtx, curso, rowDb })
 
-  // Grau-aware: cursos como Educação Física têm Bacharelado E Licenciatura, com
-  // grades DIFERENTES. Sem o grau, findGradeRow cai no primeiro match (Bacharelado).
-  // Detecta o grau desejado (inclusive correções "essa é do bacharelado") e,
-  // quando o curso tem 2 graus e não dá pra saber qual, pergunta ao lead.
+  const cursoArgName = String(args?.curso || '').trim()
+  if (nivelConflictsWithCursoName(cursoArgName || curso, nivel)) {
+    return {
+      ok: false,
+      code: 'GRADE_NIVEL_CONFLICT',
+      text: 'Curso citado conflita com nível detectado.',
+      replyOverride:
+        'Só para confirmar: você quer a grade de *graduação* ou de *pós-graduação/MBA*? Assim envio o PDF certo.',
+    }
+  }
+
+  if (isNivelCorrectionMessage(leadText) && !nivel) {
+    return {
+      ok: false,
+      code: 'GRADE_NIVEL_AMBIGUOUS',
+      text: 'Correção de nível sem grad/pós resolvido.',
+      replyOverride:
+        'Entendi! Confirma por favor: a grade que você precisa é de *graduação* (tecnólogo/bacharel/licenciatura) ou *pós-graduação*?',
+    }
+  }
+
   let grauWanted = detectGrauWanted(flowCtx.userMessage)
   if (!grauWanted) grauWanted = grauFromText(`${args?.curso || ''} ${curso}`)
   if (!grauWanted) {
@@ -191,6 +246,24 @@ export async function runEnviarGradePdf(env, args, flowCtx = {}) {
   }
 
   const leadId = await resolveLeadId(env, telefone, args?.id_lead ?? flowCtx.leadId)
+  const pdfDup = await shouldSkipDuplicateGradePdf(env, leadId, resolved.fileName)
+  if (pdfDup.skip) {
+    console.log(
+      `[gradePdf] dedupe skip lead=${leadId} file=${resolved.fileName} reason=${pdfDup.reason}`,
+    )
+    return {
+      ok: true,
+      code: 'GRADE_PDF_DEDUPED',
+      text: `PDF ${resolved.fileName} já enviado recentemente.`,
+      replyOverride:
+        `Já te enviei a grade *${resolved.pdfInput.cursoNome}* (${resolved.pdfInput.modalidade}) há pouco. ` +
+        'Quer que eu reenvie o PDF ou prefere tirar outra dúvida sobre o curso?',
+      ctxSnapshot: {
+        gradePdf: { deduped: true, fileName: resolved.fileName },
+      },
+    }
+  }
+
   const nome = firstName(flowCtx.pushName || rowDb?.kommo_nome)
   const introText = buildGradePdfIntroText({
     nome,
@@ -238,21 +311,43 @@ export async function runEnviarGradePdf(env, args, flowCtx = {}) {
 }
 
 function shouldAutoSendGradePdf(leadText) {
-  // Remove cláusulas que são eco do próprio agente (ex.: "...grade curricular
-  // em PDF...") para não confundir a oferta passada do agente com pedido do lead.
   const clean = stripAgentEchoClauses(leadText)
   if (!clean || clean.length < 4) return false
   const asksGrade = messageAsksGradeCurricular(clean) || messageAsksGradePdf(clean)
   if (!asksGrade) return false
   if (messageAsksCampusOrPhoneContact(clean) || messageAsksLocationInfo(clean)) return false
-  // O lead também perguntou preço, custo, início, etc.: deixa o LLM responder
-  // tudo (ele chama enviar_grade_pdf + responde os demais pontos). O envio
-  // automático pré-LLM só dispara quando o pedido é exclusivamente de grade.
   if (messageAsksOtherTopicBesidesGrade(clean)) return false
   if (messageAsksCoursePrice(clean) || messageAsksPaymentInfo(clean) || messageAsksCourseInquiry(clean)) {
     return false
   }
+  if (isNivelCorrectionMessage(clean)) return false
   return true
+}
+
+async function canAutoSendGradePdf(env, flowCtx, leadText) {
+  if (!gradePdfAutoEnabled(env)) return { ok: false, reason: 'auto_disabled' }
+  if (!shouldAutoSendGradePdf(leadText)) return { ok: false, reason: 'heuristic' }
+
+  const rowDb = flowCtx.telefone
+    ? await fetchDadosClienteByTelefone(env, flowCtx.telefone, 'kommo_curso,kommo_modalidade').catch(() => null)
+    : null
+
+  const curso = resolveCursoFromContext({
+    cursoArg: null,
+    userMessage: leadText,
+    historyMessages: flowCtx.historyMessages,
+    kommoCurso: rowDb?.kommo_curso,
+  })
+  if (!curso) return { ok: false, reason: 'missing_curso' }
+
+  const nivel = detectNivel({
+    curso,
+    userMessage: leadText,
+    kommoCurso: rowDb?.kommo_curso,
+  })
+  if (!nivel) return { ok: false, reason: 'ambiguous_nivel' }
+
+  return { ok: true, curso, nivel }
 }
 
 /**
@@ -264,10 +359,20 @@ export async function tryHandleGradePdfRequest(env, flowCtx) {
 
   const leadText = sanitizeLeadInboundMessage(extractLeadTextAfterAgentEcho(userMessage) || userMessage)
   if (!leadText) return null
-  if (!shouldAutoSendGradePdf(leadText)) return null
+
+  const gate = await canAutoSendGradePdf(env, flowCtx, leadText)
+  if (!gate.ok) return null
 
   const result = await runEnviarGradePdf(env, { telefone: flowCtx.telefone }, { ...flowCtx, userMessage: leadText })
-  if (!result.ok && (result.code === 'MISSING_CURSO' || result.code === 'GRADE_NOT_FOUND')) return null
+  if (
+    !result.ok &&
+    (result.code === 'MISSING_CURSO' ||
+      result.code === 'GRADE_NOT_FOUND' ||
+      result.code === 'GRADE_NIVEL_AMBIGUOUS' ||
+      result.code === 'GRADE_NIVEL_CONFLICT')
+  ) {
+    return null
+  }
   return {
     handled: true,
     result: {

@@ -961,7 +961,25 @@ export async function runAgent(env, input) {
   if (leadId) contextLines.push(`- id_lead (Kommo): ${leadId}`)
   if (input?.pushName) contextLines.push(`- Nome (pushName): ${input.pushName}`)
 
-  // Estado da máquina de inscrição: lido do Supabase e injetado no preâmbulo
+  if (leadId) {
+    try {
+      const snapRes = await fetchLeadFormSnapshot(env, leadId)
+      const snap = snapRes?.snapshot
+      if (snap?.curso_inscricao) {
+        contextLines.push(`- Curso no card Kommo (sum_Curso): ${snap.curso_inscricao}`)
+      }
+      if (snap?.modalidade) {
+        contextLines.push(`- Modalidade no card: ${snap.modalidade}`)
+      }
+      if (snap?.polo_inscricao) {
+        contextLines.push(`- Polo no card: ${snap.polo_inscricao}`)
+      }
+    } catch {
+      /* card Kommo opcional */
+    }
+  }
+
+  // Estado da máquina de inscrição
   // para o LLM saber EXATAMENTE qual tool de ação chamar (se alguma).
   // Mantemos também em `formFlowCtx.stageBefore` para telemetria de transição.
   let inscricaoStageInfo = null
@@ -1135,7 +1153,7 @@ export async function runAgent(env, input) {
           'PERGUNTA SOBRE VALORES/PREÇO: o lead quer saber quanto custa o curso em pauta. ' +
           `OBRIGATÓRIO neste turno: chame buscar_precos (e buscar_conhecimento se precisar de contexto) para o curso "${extractDiscussedCourseFromHistory(historyMessages) || extractCursoAreaFromText(userMessage) || 'mencionado no histórico'}". ` +
           'Responda com mensalidade promocional e preço cheio SOMENTE com dados do CONTEXT. ' +
-          'PROIBIDO neste turno: tool inscricao, enviar formulário, perguntar só "quer inscrição?" sem informar valores.',
+          'PROIBIDO neste turno: tool inscricao, enviar formulário, enviar_grade_pdf, perguntar só "quer inscrição?" sem informar valores.',
       }
     : null
 

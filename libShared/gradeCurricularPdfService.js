@@ -77,12 +77,19 @@ function scoreRow(row, cursoNorm, modLabel) {
 /**
  * @param {{ curso: string, modalidade?: string|null, nivel?: 'grad'|'pos'|null }} input
  */
+function inferNivelSearchOrder(cursoNorm, explicitNivel) {
+  if (explicitNivel) return [explicitNivel]
+  if (/\b(mba|pos\s*grad|especializa|lato\s+sensu)\b/.test(cursoNorm)) return ['pos']
+  if (/\b(bacharel|licenciatura|tecnolog|gradua)\b/.test(cursoNorm)) return ['grad']
+  return ['grad', 'pos']
+}
+
 export function findGradeRow(input) {
   const curso = String(input?.curso || '').trim()
   if (!curso) return null
   const cursoNorm = norm(curso)
   const modLabel = modLabelFromArg(input?.modalidade)
-  const niveis = input?.nivel ? [input.nivel] : ['pos', 'grad']
+  const niveis = inferNivelSearchOrder(cursoNorm, input?.nivel || null)
   let best = null
   let bestScore = 0
   for (const n of niveis) {
@@ -120,7 +127,7 @@ export function listGradeGrausForCurso({ curso, nivel } = {}) {
     (t) => !['bacharelado', 'bacharel', 'licenciatura', 'tecnologo', 'tecnologia'].includes(t),
   )
   if (!cursoTokens.length) return []
-  const niveis = nivel ? [nivel] : ['pos', 'grad']
+  const niveis = nivel ? [nivel] : ['grad', 'pos']
   const graus = new Set()
   for (const n of niveis) {
     for (const row of loadRows(n)) {

@@ -163,6 +163,18 @@ export async function insertChatMessage(env, {
   }
 
   const r = await sbRequest(cfg.url, cfg.key, 'POST', cfg.messagesTable, [row])
+  if (!r.ok && row.id_lead != null && String(r.raw || '').includes('PGRST204')) {
+    const { id_lead: _drop, ...rowWithoutLead } = row
+    const retry = await sbRequest(cfg.url, cfg.key, 'POST', cfg.messagesTable, [rowWithoutLead])
+    if (retry.ok) {
+      return {
+        ok: true,
+        inserted: Array.isArray(retry.data) ? retry.data.length : 1,
+        row: Array.isArray(retry.data) ? retry.data[0] : null,
+        idLeadOmitted: true,
+      }
+    }
+  }
   if (!r.ok) {
     return { ok: false, code: 'SUPABASE_INSERT_FAILED', status: r.status, error: summarizeError(r) }
   }

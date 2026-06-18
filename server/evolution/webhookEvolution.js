@@ -817,6 +817,7 @@ async function flushSessionInner(env, sessionId, opts = {}) {
             text: out.reply,
             leadId: idLead,
             executionId,
+            freshUserTurn: true,
           })
           if (r.ok) {
             console.log(`[${executionId}] ENVIOU_WHATSAPP partes=${r.sent}/${r.total} leadId=${idLead ?? 'n/a'}`)
@@ -917,7 +918,11 @@ async function flushSessionInner(env, sessionId, opts = {}) {
     const sendRace = Boolean(sendResult?.race)
     const sentReal = (sendResult?.sent || 0) > 0
     const dedupedLegit = Boolean(
-      sendResult?.ok && sendResult?.deduped && !sendRace,
+      sendResult?.ok &&
+        sendResult?.deduped &&
+        !sendRace &&
+        (sendResult?.reason === 'identical_recent_bot_message' ||
+          sendResult?.reason === 'post_form_boilerplate_recent'),
     )
     const sentOk = Boolean(sendResult?.ok && (sentReal || dedupedLegit))
     if (telefone && sentOk) {

@@ -216,7 +216,7 @@ export async function sendText(env, { to, text }) {
  * @param {string} [params.executionId] id único de execução; gerado se não informado
  * @returns { ok, executionId, total, sent, steps[], error? }
  */
-export async function sendMessageWithNote(env, { telefone, text, leadId, executionId }) {
+export async function sendMessageWithNote(env, { telefone, text, leadId, executionId, freshUserTurn = false }) {
   const cfg = getConfig(env)
   const linkSan = sanitizeCourseLinksFromReply(text)
   if (linkSan.removed > 0) {
@@ -264,7 +264,7 @@ export async function sendMessageWithNote(env, { telefone, text, leadId, executi
       holdPostFormSync = true
     }
 
-    const dedupe = await shouldSkipDuplicateOutbound(env, telefone, text, { leadId })
+    const dedupe = await shouldSkipDuplicateOutbound(env, telefone, text, { leadId, freshUserTurn })
     if (dedupe.skip) {
       // Race do lock in-memory (tryReserveOutboundSync falhou) NÃO é
       // dedupe: a mensagem precisa ir. Retornamos ok:false para o caller

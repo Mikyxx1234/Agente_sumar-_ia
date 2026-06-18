@@ -12,7 +12,30 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
-### 2026-06-16 - Alinhamento dos prompts às regras (eliminar contradições corrigidas em runtime) — IMPLEMENTADO (local, sem deploy)
+### 2026-06-18 - Saúde do agente: grade PDF, memória e dedupe
+
+- **Decisão**
+  - Corrigir pipeline de grade (nível grad/pós, auto-send restrito, dedupe PDF).
+  - Persistir histórico (`id_lead` + fallback PGRST204).
+  - Dedupe outbound não bloqueia turno novo do lead (`freshUserTurn`).
+  - Injetar `sum_Curso` do card Kommo no contexto do LLM.
+  - Migrar ingestão para `KOMMO_INBOUND_POLL_MODE=dispatcher` em produção.
+- **Contexto**
+  - Grades erradas (MBA vs grad), múltiplos PDFs/dia, histórico vazio, inbound perdido no modo `notes`.
+- **Alternativas descartadas**
+  - Desativar totalmente `GRADE_PDF_AUTO` (mantido restrito com flag `GRADE_PDF_AUTO_ENABLED`).
+- **Impacto**
+  - Menos spam de PDF; correção "não é pós" respeitada; retentativas legítimas após msg do lead.
+- **Deploy (ordem)**
+  1. SQL [`scripts/sql/chat_messages_id_lead.sql`](scripts/sql/chat_messages_id_lead.sql) no Supabase
+  2. Deploy código (Fase 1–3)
+  3. EasyPanel: `KOMMO_INBOUND_POLL_MODE=dispatcher`
+  4. Monitorar 48h: `node --env-file=.env scripts/agent-health-report.mjs`
+- **Validação pré-deploy**
+  - `node scripts/validate-grade-nivel.mjs`
+  - `node scripts/validate-agent-health-cases.mjs`
+
+---
 
 - **Decisão**
   - Reescrever os 4 prompts (em `agent_prompts`) para que já OBEDEÇAM às regras de

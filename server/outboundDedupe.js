@@ -163,13 +163,15 @@ export async function shouldSkipDuplicateOutbound(env, telefone, text, opts = {}
   const body = normalizeOutboundText(text)
   if (!body || body.length < 12) return { skip: false }
 
+  const freshUserTurn = Boolean(opts.freshUserTurn)
+
   const releaseIfSkip = (result) => {
     if (result.skip) releaseOutboundSync(telefone)
     return result
   }
 
   const { leadId } = opts
-  if (leadId != null && leadId !== '') {
+  if (leadId != null && leadId !== '' && !freshUserTurn) {
     const kommo = await shouldSkipSimilarKommoOutbound(env, leadId, body)
     if (kommo.skip) return releaseIfSkip(kommo)
   }
@@ -205,6 +207,9 @@ export async function shouldSkipDuplicateOutbound(env, telefone, text, opts = {}
     if (bot === body) {
       return releaseIfSkip({ skip: true, reason: 'identical_recent_bot_message' })
     }
+
+    if (freshUserTurn) continue
+
     if (body.length >= 40 && bot.length >= 40 && bot.slice(0, 40) === body.slice(0, 40)) {
       return releaseIfSkip({ skip: true, reason: 'prefix_match_recent_bot_message' })
     }
@@ -216,7 +221,7 @@ export async function shouldSkipDuplicateOutbound(env, telefone, text, opts = {}
     }
   }
 
-  if (botsInCooldownWindow >= 2) {
+  if (!freshUserTurn && botsInCooldownWindow >= 2) {
     return releaseIfSkip({ skip: true, reason: 'multiple_recent_bot_replies' })
   }
 
