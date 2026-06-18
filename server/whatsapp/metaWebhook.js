@@ -295,7 +295,20 @@ export function makeMetaWebhookHandler(env) {
             const value = change.value || {}
             const messages = value.messages || []
             if (!messages.length) {
-              // statuses (sent/delivered/read) — ignoramos.
+              const statuses = value.statuses || []
+              for (const st of statuses) {
+                const stStatus = String(st?.status || '')
+                const recipient = st?.recipient_id || '?'
+                if (stStatus === 'failed') {
+                  const errDetail = JSON.stringify(st?.errors || st?.error || '')
+                  console.error(
+                    `[MetaWebhook][status] failed to=${recipient} msg=${st?.id || '?'} errors=${errDetail}`,
+                  )
+                  recordAsyncError('meta_status_failed', `${recipient} ${errDetail}`.slice(0, 400))
+                } else if (stStatus === 'sent' || stStatus === 'delivered' || stStatus === 'read') {
+                  console.log(`[MetaWebhook][status] ${stStatus} to=${recipient} msg=${st?.id || '?'}`)
+                }
+              }
               continue
             }
             for (const message of messages) {
