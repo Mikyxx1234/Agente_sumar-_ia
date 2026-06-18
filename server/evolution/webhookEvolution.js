@@ -31,6 +31,24 @@ import {
   getMessages,
 } from './messageBuffer.js'
 
+/** Grade PDF já enviou intro + documento na tool — flush não deve duplicar texto. */
+function whatsappAlreadyDeliveredByTool(agentOut) {
+  const steps = agentOut?.orchestratorSteps || []
+  const introSent = steps.some((s) => s?.step === 'intro_text' && s?.ok && Number(s?.sent) > 0)
+  const docSent = steps.some((s) => s?.step === 'document' && s?.ok)
+  if (introSent && docSent) return true
+  if (agentOut?.ctxSnapshot?.actionCode === 'GRADE_PDF_SENT') {
+    return introSent || docSent
+  }
+  return false
+}
+
+function whatsappDeliveryConfirmed(sendResult, agentOut) {
+  if ((sendResult?.sent || 0) > 0) return true
+  if (sendResult?.skipped && sendResult?.reason === 'already_sent_by_tool') return true
+  return whatsappAlreadyDeliveredByTool(agentOut)
+}
+
 /** Reenfileira turnos drenados quando IA ou WhatsApp falhou — evita mensagem "sumida". */
 async function repushDrainedMessages(env, sessionId, items) {
   if (!items?.length) return
@@ -801,58 +819,67 @@ async function flushSessionInner(env, sessionId, opts = {}) {
         typingHb = null
       }
 
-      // Envio do WhatsApp + persistência da conversa em paralelo: são
-      // independentes (Evolution/Cloud API vs Supabase) e juntas
-      // adicionavam ~1-2s extras quando feitas em série.
-      const sendPromise = (async () => {
-        // Modo teste "só simular": não dispara WhatsApp (nem nota Kommo de
-        // envio). A resposta volta no retorno do flush pra UI exibir.
+      // Envio primeiro; histórico só quando WhatsApp confirmou entrega
+      // (evita "fantasma" no Supabase/Kommo quando dedupe bloqueia sent:0).
+      try {
         if (opts.suppressWhatsapp === true) {
           console.log(`[${executionId}] envio WhatsApp SUPRIMIDO (test suppressWhatsapp)`)
-          return { ok: true, sent: 0, total: 0, suppressed: true }
-        }
-        try {
-          const r = await sendMessageWithNote(env, {
+          sendResult = { ok: true, sent: 0, total: 0, suppressed: true }
+        } else if (whatsappAlreadyDeliveredByTool(out)) {
+          console.log(
+            `[${executionId}] WhatsApp já enviado pela tool (ex.: grade PDF) — skip duplicate flush send`,
+          )
+          sendResult = { ok: true, sent: 0, skipped: true, reason: 'already_sent_by_tool' }
+        } else {
+          sendResult = await sendMessageWithNote(env, {
             telefone,
             text: out.reply,
             leadId: idLead,
             executionId,
             freshUserTurn: true,
           })
-          if (r.ok) {
-            console.log(`[${executionId}] ENVIOU_WHATSAPP partes=${r.sent}/${r.total} leadId=${idLead ?? 'n/a'}`)
-            console.log(`[${executionId}] whatsapp enviado ${r.sent}/${r.total} partes`)
-          } else {
-            console.error(`[${executionId}] ERRO_ENVIO_WHATSAPP partes=${r.sent}/${r.total} erro="${r.error || r.code || 'desconhecido'}"`)
-            console.error(`[${executionId}] whatsapp falha após ${r.sent}/${r.total}:`, r.error)
+          if (sendResult?.ok && (sendResult.sent || 0) > 0) {
+            console.log(
+              `[${executionId}] ENVIOU_WHATSAPP partes=${sendResult.sent}/${sendResult.total} leadId=${idLead ?? 'n/a'}`,
+            )
+          } else if (sendResult?.deduped) {
+            console.warn(
+              `[${executionId}] WhatsApp dedupe skip reason=${sendResult.reason || 'n/a'} sent=${sendResult.sent || 0}`,
+            )
+          } else if (sendResult && !sendResult.ok) {
+            console.error(
+              `[${executionId}] ERRO_ENVIO_WHATSAPP partes=${sendResult.sent}/${sendResult.total} erro="${sendResult.error || sendResult.code || 'desconhecido'}"`,
+            )
           }
-          return r
-        } catch (err) {
-          console.error(`[${executionId}] ERRO_ENVIO_WHATSAPP exception="${err.message}"`)
-          console.error(`[${executionId}] whatsapp exception:`, err.message)
-          return null
         }
-      })()
-      const histPromise = (async () => {
+      } catch (err) {
+        console.error(`[${executionId}] ERRO_ENVIO_WHATSAPP exception="${err.message}"`)
+        sendResult = null
+      }
+
+      if (whatsappDeliveryConfirmed(sendResult, out)) {
         try {
-          const r = await saveConversation(env, {
+          histResult = await saveConversation(env, {
             telefone,
             userMessage: mensagemCompleta,
             botMessage: out.reply,
             messageType: 'conversation',
             idLead,
           })
-          if (!r.ok) {
-            const failed = (r.steps || []).filter((s) => s.ok === false)
+          if (!histResult?.ok) {
+            const failed = (histResult?.steps || []).filter((s) => s.ok === false)
             console.warn(`[${executionId}] history falhas:`, JSON.stringify(failed))
           }
-          return r
         } catch (err) {
           console.error(`[${executionId}] history exception:`, err.message)
-          return null
+          histResult = null
         }
-      })()
-      ;[sendResult, histResult] = await Promise.all([sendPromise, histPromise])
+      } else {
+        console.warn(
+          `[${executionId}] history omitido — WhatsApp não confirmou entrega (sent=${sendResult?.sent || 0}, dedupe=${sendResult?.reason || 'n/a'})`,
+        )
+        histResult = { ok: false, skipped: true, reason: 'whatsapp_not_delivered' }
+      }
     }
   } catch (err) {
     console.error(`[${executionId}] agent exception:`, err.message)
@@ -917,6 +944,7 @@ async function flushSessionInner(env, sessionId, opts = {}) {
     //    a próxima passada do scheduler reprocessa.
     const sendRace = Boolean(sendResult?.race)
     const sentReal = (sendResult?.sent || 0) > 0
+    const sentByTool = Boolean(sendResult?.skipped && sendResult?.reason === 'already_sent_by_tool')
     const dedupedLegit = Boolean(
       sendResult?.ok &&
         sendResult?.deduped &&
@@ -924,7 +952,10 @@ async function flushSessionInner(env, sessionId, opts = {}) {
         (sendResult?.reason === 'identical_recent_bot_message' ||
           sendResult?.reason === 'post_form_boilerplate_recent'),
     )
-    const sentOk = Boolean(sendResult?.ok && (sentReal || dedupedLegit))
+    const sentOk = Boolean(
+      (sendResult?.ok && (sentReal || dedupedLegit || sentByTool)) ||
+        whatsappAlreadyDeliveredByTool(out),
+    )
     if (telefone && sentOk) {
       markReplyCooldown(env, telefone)
       clearSendRetryBackoff(sessionId)
