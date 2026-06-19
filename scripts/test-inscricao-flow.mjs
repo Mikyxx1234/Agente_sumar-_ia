@@ -565,19 +565,19 @@ section('10. Plano_Inscricao_CardKommo — fluxo express via card Sumaré Comerc
 section('11. Pós-matrícula: agradecimento + mover lead para fila de instruções')
 
 {
-  // 11.1 Novo texto: agradece matrícula + promete instruções
+  // 11.1 Texto pós-comprovante: aguardar finalização + e-mail de acesso
   const replyPadrao = buildComprovantePagamentoRecebidoReply({})
   assert(
-    /agradecemos sua matrícula/i.test(replyPadrao),
-    '11.1 reply começa com "agradecemos sua matrícula"',
+    /maravilha/i.test(replyPadrao),
+    '11.1 reply começa com "Maravilha"',
   )
   assert(
-    /pagamento for reconhecido/i.test(replyPadrao),
-    '11.1b reply menciona "pagamento for reconhecido"',
+    /aguardar a matr[ií]cula ser finalizada/i.test(replyPadrao),
+    '11.1b reply menciona aguardar finalização da matrícula',
   )
   assert(
-    /instru[cç][oõ]es?|prosseguir|iniciar o curso/i.test(replyPadrao),
-    '11.1c reply menciona instruções para iniciar o curso',
+    /primeiro acesso|e-?mail/i.test(replyPadrao),
+    '11.1c reply menciona primeiro acesso por e-mail',
   )
   assert(
     !/consultor da Faculdade Sumaré entra em contato/i.test(replyPadrao),
