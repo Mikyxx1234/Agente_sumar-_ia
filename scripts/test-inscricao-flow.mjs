@@ -70,6 +70,7 @@ import {
   messageConfirmsFinalDesistencia,
   messageRevokesDesistencia,
   shouldOfferDesistenciaConfirm,
+  shouldOfferDesistenciaAtAceiteContrato,
   buildConfirmDesistenciaReply,
   buildDesistenciaAgradecimentoReply,
   assistantAskedDesistenciaConfirm,
@@ -749,6 +750,27 @@ section('12. Desistência de inscrição — confirma, agradece e move fila 143'
     INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_DESISTENCIA,
     '12.10 auto-sync detecta pergunta de desistência',
   )
+
+  const histAceite = [
+    { role: 'assistant', content: 'Sua inscrição foi registrada. Acesse o link para pagamento da matrícula.' },
+    { role: 'user', content: 'obrigado' },
+  ]
+  assert(
+    shouldOfferDesistenciaAtAceiteContrato('não vou continuar com a inscrição', histAceite),
+    '12.11 pós-link: não vou continuar',
+  )
+  assert(
+    shouldOfferDesistenciaAtAceiteContrato('quero cancelar a matrícula', histAceite),
+    '12.11b pós-link: cancelar matrícula',
+  )
+  assert(
+    !shouldOfferDesistenciaAtAceiteContrato('qual o valor da mensalidade?', histAceite),
+    '12.11c pós-link: dúvida de valor NÃO é desistência',
+  )
+  assert(
+    !shouldOfferDesistenciaAtAceiteContrato('quero me matricular', histAceite),
+    '12.11d pós-link: interesse NÃO é desistência',
+  )
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */
@@ -790,6 +812,13 @@ section('13. Gate atendimento_ia=pause — exceção para desistência concluíd
     'desistencia_concluida',
     '13.4c reason indica qual early handler vai cobrir',
   )
+
+  const r4b = decideHoldOnIaPause({
+    atendimento_ia: 'pause',
+    inscricao_form_status: 'aguardando_confirm_desistencia',
+  })
+  assertEqual(r4b.hold, false, '13.4b aguardando_confirm_desistencia = drain prossegue')
+  assertEqual(r4b.reason, 'desistencia_confirm', '13.4c reason desistencia_confirm')
 
   // 13.5 Case-insensitive: 'PAUSE' / 'Pause'.
   const r5 = decideHoldOnIaPause({ atendimento_ia: 'PAUSE', inscricao_form_status: null })

@@ -55,6 +55,7 @@ import { maybeAuditActionToolFailure, recordInscricaoFailureAuditNote } from '..
 import {
   tryHandleInscricaoDesistenciaFlow,
   tryHandleDesistenciaJaRegistrada,
+  tryHandleDesistenciaConfirmEarly,
 } from '../inscricaoDesistenciaFlow.js'
 import {
   startChannelExitConfirm,
@@ -399,6 +400,18 @@ export async function runAgent(env, input) {
       )
       return {
         ...desistenciaJaFlow.result,
+        historyLoaded: 0,
+        aiMeta: ctx.toAiMeta(),
+      }
+    }
+
+    const desistenciaConfirmEarly = await tryHandleDesistenciaConfirmEarly(env, formFlowCtx)
+    if (desistenciaConfirmEarly?.handled) {
+      console.log(
+        `[${executionId}] DESISTENCIA_CONFIRM_EARLY telefone=${telefone}`,
+      )
+      return {
+        ...desistenciaConfirmEarly.result,
         historyLoaded: 0,
         aiMeta: ctx.toAiMeta(),
       }

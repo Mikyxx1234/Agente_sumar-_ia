@@ -69,6 +69,9 @@ export function decideHoldOnIaPause(row) {
   if (row?.inscricao_form_status === 'desistencia_concluida') {
     return { hold: false, paused: true, reason: 'desistencia_concluida' }
   }
+  if (row?.inscricao_form_status === 'aguardando_confirm_desistencia') {
+    return { hold: false, paused: true, reason: 'desistencia_confirm' }
+  }
   const status = String(row?.inscricao_form_status || '').toLowerCase()
   const captacaoStarted =
     (row?.captacao_candidato_id != null && String(row.captacao_candidato_id).trim() !== '') ||

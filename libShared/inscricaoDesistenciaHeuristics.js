@@ -236,3 +236,27 @@ export function shouldOfferDesistenciaConfirm(userMessage, historyMessages) {
   if (assistantAskedDesistenciaConfirm(lastAssist)) return false
   return true
 }
+
+/**
+ * Pós-captação (aguardando_aceite_contrato): link de pagamento já enviado.
+ * Critério mais amplo — não exige pergunta recente de inscrição no histórico.
+ */
+export function shouldOfferDesistenciaAtAceiteContrato(userMessage, historyMessages = []) {
+  const t = normalizeMessageForScope(userMessage).toLowerCase()
+  if (!t || t.length < 4) return false
+
+  // Pós-link: padrões explícitos ANTES do guard de confirmação de matrícula
+  // ("quero cancelar a matrícula" contém quero+matrícula mas é desistência).
+  if (
+    /\b(n[aã]o\s+vou\s+(pagar|continuar|seguir|fazer)|cancel(ar|a|o)\s+(a\s+)?(inscri|matr)|desist)/i.test(
+      t,
+    )
+  ) {
+    return true
+  }
+  if (/\bn[aã]o\s+quero\s+mais\b/i.test(t)) return true
+
+  if (messageExpressesEnrollmentDecline(userMessage, historyMessages)) return true
+
+  return false
+}

@@ -17,6 +17,7 @@ import {
 } from '../libShared/inscricaoFormHeuristics.js'
 import {
   shouldOfferDesistenciaConfirm,
+  shouldOfferDesistenciaAtAceiteContrato,
   assistantAskedDesistenciaConfirm,
   messageConfirmsFinalDesistencia,
   messageRevokesDesistencia,
@@ -32,7 +33,7 @@ import {
   ensureDadosClienteRow,
   getLeadIdByTelefone,
 } from './dadosClienteStore.js'
-import { DADOS_CLIENTE_INSCRICAO_SELECT } from './dadosClienteInscricaoFields.js'
+import { DADOS_CLIENTE_INSCRICAO_SELECT, DADOS_CLIENTE_FORM_GUARD_SELECT } from './dadosClienteInscricaoFields.js'
 import { createLeadAuditNote, updateLeadPipelineStatus } from './kommoClient.js'
 import { setSumMotivoPerdaSemInteresse } from './sumareLeadFields.js'
 
@@ -48,7 +49,6 @@ const BLOCK_DESISTENCIA_STATUSES = new Set([
   INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM,
   INSCRICAO_FORM_STATUS_AGUARDANDO_POLO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_POLO_KOMMO,
-  INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
   INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_NOVA_INSCRICAO,
   INSCRICAO_FORM_STATUS_DESISTENCIA_CONCLUIDA,
 ])
@@ -94,6 +94,16 @@ async function setStatus(env, telefone, status, leadIdHint) {
     fields: { [FORM_STATUS_FIELD]: status },
   }).catch(() => {})
   return updateDadosCliente(env, { telefone, fields: { [FORM_STATUS_FIELD]: status } })
+}
+
+/** Após revogar desistência: volta p/ aceite do contrato se captação já existia. */
+function statusAfterDesistenciaRevoke(row) {
+  if (!row || typeof row !== 'object') return null
+  const hasCaptacao =
+    (row.captacao_candidato_id != null && String(row.captacao_candidato_id).trim() !== '') ||
+    (row.captacao_contrato_link != null && String(row.captacao_contrato_link).trim() !== '') ||
+    Boolean(row.captacao_contrato_link_at)
+  return hasCaptacao ? INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE : null
 }
 
 async function finalizeDesistencia(env, { telefone, idLead, executionId, pushName, t0, model }) {
@@ -214,6 +224,27 @@ export async function tryHandleDesistenciaJaRegistrada(env, input) {
 }
 
 /**
+ * Early handler — confirmação final de desistência com IA pausada (ex.: pós-link
+ * de pagamento). Roda antes do gate `atendimento_ia=pause`.
+ */
+export async function tryHandleDesistenciaConfirmEarly(env, input) {
+  if (!isFeatureEnabled(env)) return null
+  const { telefone, userMessage, executionId, model, leadId: leadIdHint, pushName, t0 } = input || {}
+  if (!telefone || !String(userMessage || '').trim()) return null
+  if (!messageConfirmsFinalDesistencia(userMessage)) return null
+
+  const row = await fetchDadosClienteByTelefone(env, telefone, DADOS_CLIENTE_INSCRICAO_SELECT).catch(
+    () => null,
+  )
+  const status = row?.[FORM_STATUS_FIELD] ?? null
+  if (status !== INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_DESISTENCIA) return null
+
+  const idLead = await resolveLeadId(env, telefone, leadIdHint)
+  console.log(`[inscricaoDesistencia] telefone=${telefone} CONFIRM_EARLY lead=${idLead ?? 'n/a'}`)
+  return finalizeDesistencia(env, { telefone, idLead, executionId, pushName, t0, model })
+}
+
+/**
  * @returns {Promise<null | { handled: true, result: object }>}
  */
 export async function tryHandleInscricaoDesistenciaFlow(env, input) {
@@ -223,7 +254,7 @@ export async function tryHandleInscricaoDesistenciaFlow(env, input) {
   if (!telefone || !String(userMessage || '').trim()) return null
 
   const historyMessages = filterHistoryMessagesForAgent(input.historyMessages || [])
-  const row = await fetchDadosClienteByTelefone(env, telefone, DADOS_CLIENTE_INSCRICAO_SELECT).catch(
+  const row = await fetchDadosClienteByTelefone(env, telefone, DADOS_CLIENTE_FORM_GUARD_SELECT).catch(
     () => null,
   )
   const status = row?.[FORM_STATUS_FIELD] ?? null
@@ -255,7 +286,7 @@ export async function tryHandleInscricaoDesistenciaFlow(env, input) {
 
   if (inConfirmStep) {
     if (messageRevokesDesistencia(userMessage)) {
-      await setStatus(env, telefone, null, idLead)
+      await setStatus(env, telefone, statusAfterDesistenciaRevoke(row), idLead)
       return null
     }
     if (messageConfirmsFinalDesistencia(userMessage)) {
@@ -271,7 +302,10 @@ export async function tryHandleInscricaoDesistenciaFlow(env, input) {
     // Só repete o template se a mensagem AINDA expressa declínio. Saudações,
     // novas perguntas ou mensagens encaminhadas NÃO devem reativar a oferta
     // de desistência em loop — limpa o estado e devolve ao fluxo normal (LLM).
-    if (messageExpressesEnrollmentDecline(userMessage, historyMessages)) {
+    if (
+      messageExpressesEnrollmentDecline(userMessage, historyMessages) ||
+      shouldOfferDesistenciaAtAceiteContrato(userMessage, historyMessages)
+    ) {
       return {
         handled: true,
         result: buildAgentReturn({
@@ -289,11 +323,16 @@ export async function tryHandleInscricaoDesistenciaFlow(env, input) {
         .slice(0, 80)
         .replace(/\n/g, ' ')}" — limpando estado e devolvendo ao fluxo normal`,
     )
-    await setStatus(env, telefone, null, idLead)
+    await setStatus(env, telefone, statusAfterDesistenciaRevoke(row), idLead)
     return null
   }
 
-  if (!shouldOfferDesistenciaConfirm(userMessage, historyMessages)) return null
+  const atAceiteContrato = status === INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE
+  const offerDesistencia = atAceiteContrato
+    ? shouldOfferDesistenciaAtAceiteContrato(userMessage, historyMessages)
+    : shouldOfferDesistenciaConfirm(userMessage, historyMessages)
+
+  if (!offerDesistencia) return null
 
   await setStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_DESISTENCIA, idLead)
 
@@ -304,7 +343,7 @@ export async function tryHandleInscricaoDesistenciaFlow(env, input) {
   const assistPreview = lastAssist.slice(0, 120).replace(/\n/g, ' ')
   console.log(
     `[inscricaoDesistencia] lead=${idLead ?? 'n/a'} telefone=${telefone} oferta_confirm_desistencia ` +
-      `userMsg="${userPreview}" lastAssist="${assistPreview}" historyLen=${historyMessages.length}`,
+      `aceite=${atAceiteContrato} userMsg="${userPreview}" lastAssist="${assistPreview}" historyLen=${historyMessages.length}`,
   )
 
   return {
