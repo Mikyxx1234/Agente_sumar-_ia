@@ -174,15 +174,15 @@ for (const d of details) {
   try {
     const res = await executeCaptacaoAfterFormResolved(env, {
       telefone: d.phone,
-      leadId: d.leadId,
+      idLead: d.leadId,
       executionId: generateExecutionId(),
       pushName: '',
     })
-    if (res?.handled && res?.result?.ok !== false) {
-      console.log('   OK', res.result?.ctxSnapshot?.inscricaoForm || res.result?.reply?.slice(0, 80))
+    if (res?.ok || res?.contratoWhatsappSent || res?.ctxForm === INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE) {
+      console.log('   OK', res.ctxForm || res.reply?.slice(0, 80))
       ok += 1
     } else {
-      console.log('   FALHA', res?.result?.reply || res?.result?.ctxSnapshot || res)
+      console.log('   FALHA', res?.reply || res?.ctxForm || res)
       fail += 1
     }
   } catch (err) {
