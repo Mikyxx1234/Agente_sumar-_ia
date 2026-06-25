@@ -6,6 +6,7 @@ import { listLeadCustomFields, listLeadNotes } from './kommoClient.js'
 import { kommoRawFetch } from './kommoRateLimiter.js'
 import { parseFormDataNoteFields } from '../libShared/inscricaoFormHeuristics.js'
 import { normalizeCpf } from './sumareCaptacaoClient.js'
+import { isGarbageCursoInscricao } from '../libShared/captacaoSnapshotSanitize.js'
 
 const KOMMO_FIELD_NOME = 304628
 
@@ -157,6 +158,9 @@ export async function fetchLeadFormSnapshot(env, leadId) {
   }
 
   const enriched = await enrichSnapshotFromFormNote(env, id, snapshot)
+  if (isGarbageCursoInscricao(enriched.curso_inscricao)) {
+    enriched.curso_inscricao = ''
+  }
   return { ok: true, lead, snapshot: enriched }
 }
 
@@ -248,6 +252,9 @@ export function validateFormSnapshot(env, snapshot) {
       missing.push(FIELD_LABELS[key] || key)
     }
     if (key === 'cpf' && !normalizeCpf(val)) {
+      missing.push(FIELD_LABELS[key] || key)
+    }
+    if (key === 'curso_inscricao' && isGarbageCursoInscricao(val)) {
       missing.push(FIELD_LABELS[key] || key)
     }
   }

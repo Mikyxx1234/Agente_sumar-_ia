@@ -35,8 +35,18 @@ export function telefoneToWhatsAppJid(digits) {
 export function dadosClienteTelefoneOrFilter(telefone) {
   const digits = normalizeTelefone(telefone)
   if (!digits) return null
-  const jid = telefoneToWhatsAppJid(digits)
-  return `or=(telefone.eq.${encodeURIComponent(digits)},telefone.eq.${encodeURIComponent(jid)})`
+  const local = digits.startsWith('55') && digits.length >= 12 ? digits : digits.length >= 10 && digits.length <= 11 ? `55${digits}` : digits
+  const jid = telefoneToWhatsAppJid(local)
+  const bare = normalizeTelefone(local)
+  const legacyBare = digits !== bare ? digits : null
+  const legacyJid = legacyBare ? telefoneToWhatsAppJid(legacyBare) : null
+  const parts = [
+    `telefone.eq.${encodeURIComponent(bare)}`,
+    `telefone.eq.${encodeURIComponent(jid)}`,
+  ]
+  if (legacyBare) parts.push(`telefone.eq.${encodeURIComponent(legacyBare)}`)
+  if (legacyJid && legacyJid !== jid) parts.push(`telefone.eq.${encodeURIComponent(legacyJid)}`)
+  return `or=(${parts.join(',')})`
 }
 
 export async function fetchDadosClienteByTelefone(env, telefone, select = '*') {

@@ -303,6 +303,15 @@ export function normalizeDataNasc(input) {
   if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`
   const br = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/)
   if (br) return `${br[3]}-${br[2]}-${br[1]}`
+  const digits = s.replace(/\D/g, '')
+  if (digits.length === 8) {
+    const dd = digits.slice(0, 2)
+    const mm = digits.slice(2, 4)
+    const yyyy = digits.slice(4, 8)
+    if (Number(dd) >= 1 && Number(dd) <= 31 && Number(mm) >= 1 && Number(mm) <= 12) {
+      return `${yyyy}-${mm}-${dd}`
+    }
+  }
   return ''
 }
 

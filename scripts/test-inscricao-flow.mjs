@@ -719,6 +719,28 @@ section('12. Desistência de inscrição — confirma, agradece e move fila 143'
     '12.3o shouldOffer NÃO dispara sem pergunta recente sobre inscrição/matrícula',
   )
 
+  const histSimone = [
+    { role: 'user', content: 'Psicopedagogia graduação' },
+    {
+      role: 'assistant',
+      content:
+        'A graduação em Psicopedagogia não está disponível. Temos pós-graduação. Deseja saber mais?',
+    },
+    { role: 'user', content: 'Não' },
+    {
+      role: 'assistant',
+      content: 'Para seguir com o assunto, me conte qual outra área ou curso tem interesse.',
+    },
+  ]
+  assert(
+    shouldOfferDesistenciaConfirm('Nenhum interesse obrigada', histSimone),
+    '12.3p "nenhum interesse obrigada" dispara confirmação de desistência',
+  )
+  assert(
+    messageConfirmsFinalDesistencia('Sair'),
+    '12.3q "Sair" confirma desistência após pergunta canônica',
+  )
+
   const confirmMsg = buildConfirmDesistenciaReply({ pushName: 'Gustavo' })
   assert(
     assistantAskedDesistenciaConfirm(confirmMsg),

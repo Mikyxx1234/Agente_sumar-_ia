@@ -76,6 +76,26 @@ const NEGACAO_DIRETA_INSCRICAO_RE =
   /\bn[aã]o\s+(quero|vou|pretendo|desejo|tenho\s+interesse|posso|consigo)\s+(me\s+|de\s+|em\s+|com\s+a\s+|a\s+)?(inscrever|matricular|fazer\s+a\s+(inscri[cç][aã]o|matr[ií]cula)|seguir|prosseguir|continuar|avan[cç]ar)\b/i
 
 /**
+ * Lead encerra o atendimento sem interesse (ex.: "nenhum interesse obrigada", "sair").
+ * Mais explícito que negação de matrícula — usado para disparar confirmação de desistência
+ * mesmo quando o assistente não perguntou sobre inscrição neste turno.
+ */
+export function messageExpressesExplicitNoInterest(text) {
+  const t = normalizeMessageForScope(text).toLowerCase().trim().replace(/[.!?]+$/, '')
+  if (!t) return false
+
+  if (/^(nenhum\s+interesse|sem\s+interesse)(\s+obrigad[oa]?)?$/.test(t)) return true
+  if (/\b(nenhum\s+interesse|sem\s+interesse)\b/.test(t) && t.length <= 56) {
+    const rest = t.replace(/\b(nenhum\s+interesse|sem\s+interesse|obrigad[oa]?)\b/gi, '').trim()
+    if (!rest || /^(por\s+)?(agora|hoje)?$/.test(rest)) return true
+  }
+  if (/^\s*sair\s*$/.test(t)) return true
+  if (/^\s*n[aã]o\s+quero\s+(mais|continuar|falar|conversar)\b/.test(t)) return true
+  if (/^\s*deixa(\s+pra\s+l[aá])?\s*$/.test(t)) return true
+  return false
+}
+
+/**
  * Interesse positivo EXPLÍCITO em curso/inscrição/matrícula — NUNCA pode ser
  * tratado como declínio, mesmo se outras regras casarem por acidente.
  *
@@ -112,7 +132,11 @@ function hasInteressePositivoNoNeg(t) {
  */
 export function messageExpressesEnrollmentDecline(text, historyMessages = []) {
   const t = normalizeMessageForScope(text).toLowerCase()
-  if (!t || t.length < 6) return false
+  if (!t) return false
+
+  if (messageExpressesExplicitNoInterest(text)) return true
+
+  if (t.length < 6) return false
 
   // Mensagens muito curtas (1-2 tokens) sem verbo de inscrição não podem
   // ser desistência (ex.: "predial", "pediatria", "obrigado").
@@ -142,15 +166,20 @@ export function messageExpressesEnrollmentDecline(text, historyMessages = []) {
     // ("se não der, deixa pra lá"); cai nos demais testes abaixo.
   }
 
-  // 2) "não tenho interesse" / "sem interesse" PROXIMO de inscrição/matrícula/curso.
-  // Como esses prefixos JÁ contêm a negação, "curso" pode entrar sem causar
-  // falso positivo com "quero conhecer um curso".
+  // 2) "não tenho interesse" / "sem interesse" / "nenhum interesse".
   if (
-    /\b(n[aã]o\s+tenho\s+interesse|sem\s+interesse|n[aã]o\s+me\s+interess[ao])\b[\s\S]{0,40}\b(inscri[cç][aã]o|matr[ií]cula|matricul|inscrever|seguir|curso)\b/i.test(
+    /\b(n[aã]o\s+tenho\s+interesse|sem\s+interesse|nenhum\s+interesse|n[aã]o\s+me\s+interess[ao])\b/i.test(
       t,
     )
   ) {
-    return true
+    if (
+      /\b(inscri[cç][aã]o|matr[ií]cula|matricul|inscrever|seguir|curso|atendimento|contato|conversar)\b/i.test(
+        t,
+      )
+    ) {
+      return true
+    }
+    if (t.length <= 56) return true
   }
 
   // 3) Verbo de desistência explícito.
@@ -169,8 +198,13 @@ function assistantAskedEnrollmentRecently(historyMessages = []) {
   if (!last) return false
   // Reaproveita o detector existente do scope; complementa com pergunta direta
   if (assistantAskedEnrollmentInLastReply(historyMessages)) return true
-  return /\b(deseja\s+(seguir|prosseguir|fazer)\s+(com\s+a\s+)?(inscri[cç][aã]o|matr[ií]cula)|quer\s+(seguir|fazer)\s+a\s+(inscri[cç][aã]o|matr[ií]cula)|posso\s+te\s+ajudar\s+com\s+(a\s+)?(inscri[cç][aã]o|matr[ií]cula))\b/i.test(
-    last,
+  return (
+    /\b(deseja\s+(seguir|prosseguir|fazer)\s+(com\s+a\s+)?(inscri[cç][aã]o|matr[ií]cula)|quer\s+(seguir|fazer)\s+a\s+(inscri[cç][aã]o|matr[ií]cula)|posso\s+te\s+ajudar\s+com\s+(a\s+)?(inscri[cç][aã]o|matr[ií]cula))\b/i.test(
+      last,
+    ) ||
+    /\b(qual\s+outr[ao]?\s+(área|curso)|outro\s+curso|tem\s+interesse|área\s+ou\s+curso)\b/i.test(
+      last,
+    )
   )
 }
 
@@ -179,6 +213,8 @@ export function messageConfirmsFinalDesistencia(text) {
   const t = normalizeMessageForScope(text).toLowerCase().trim().replace(/[.!?]+$/, '')
   if (!t || t.length > 80) return false
   if (/^\s*(n[aã]o|nao)\s*$/i.test(t)) return true
+  if (/^\s*sair\s*$/i.test(t)) return true
+  if (messageExpressesExplicitNoInterest(text)) return true
   if (/\b(sim|confirmo|pode\s+encerrar|quero\s+desistir|desisto|desistir)\b/i.test(t)) {
     if (/\b(n[aã]o\s+quero\s+mais|desistir|desist[eê]ncia|encerrar)\b/i.test(t)) return true
     if (/^\s*(sim|confirmo|desisto)\s*$/i.test(t)) return true
@@ -231,9 +267,12 @@ export function buildDesistenciaAgradecimentoReply(opts = {}) {
 export function shouldOfferDesistenciaConfirm(userMessage, historyMessages) {
   if (!conversationHadCourseEngagement(historyMessages)) return false
   if (!messageExpressesEnrollmentDecline(userMessage, historyMessages)) return false
-  if (!assistantAskedEnrollmentRecently(historyMessages)) return false
   const lastAssist = lastAssistantText(historyMessages)
   if (assistantAskedDesistenciaConfirm(lastAssist)) return false
+
+  if (messageExpressesExplicitNoInterest(userMessage)) return true
+
+  if (!assistantAskedEnrollmentRecently(historyMessages)) return false
   return true
 }
 

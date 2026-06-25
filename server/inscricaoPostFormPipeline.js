@@ -475,15 +475,29 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
         `[inscricaoPostForm] captação falhou lead=${idLead} code=${cap.code} missing=${missing} err=${String(cap.error || '').slice(0, 800)}`,
       )
       const firstName = pushName ? `, ${String(pushName).split(/\s+/)[0]}` : ''
-      if (missing.includes('curso') || cap.code === 'MISSING_FIELDS') {
+      const cursoRecoverable =
+        cap.code === 'CURSO_INVALIDO_SNAPSHOT' ||
+        cap.code === 'CURSO_NAO_RESOLVIDO' ||
+        cap.code === 'CURSO_AUSENTE'
+      if (cursoRecoverable) {
+        reply =
+          `Obrigado${firstName}! Recebemos seu formulário, mas o *curso informado* não pôde ser confirmado automaticamente. ` +
+          `Um consultor da Faculdade Sumaré vai te ajudar a concluir a inscrição em breve — ou responda aqui com o nome exato do curso desejado.`
+        await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO).catch(() => {})
+        ctxForm = INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO
+        captacaoFailedTerminal = false
+        captacaoFailReason = cap.code || 'curso_invalido'
+      } else if (missing.includes('curso') || cap.code === 'MISSING_FIELDS') {
         reply =
           `Obrigado${firstName}! Recebemos seu formulário. O curso informado ainda não está disponível para inscrição automática no momento. ` +
           `Um consultor da Faculdade Sumaré entrará em contato em breve.`
+        captacaoFailedTerminal = true
+        captacaoFailReason = `${cap.code || 'sem_code'}:${missing || cap.error || 'sem_detalhe'}`
       } else {
         reply = buildInscricaoFormCompleteReply({ pushName, ok: false })
+        captacaoFailedTerminal = true
+        captacaoFailReason = `${cap.code || 'sem_code'}:${missing || cap.error || 'sem_detalhe'}`
       }
-      captacaoFailedTerminal = true
-      captacaoFailReason = `${cap.code || 'sem_code'}:${missing || cap.error || 'sem_detalhe'}`
       toolCalls.push({
         tool: 'sumare_captacao_contrato',
         args: { telefone, id_lead: idLead },

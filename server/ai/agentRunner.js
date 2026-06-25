@@ -48,9 +48,16 @@ import { tryHandleCaptacaoInscricaoExistenteFlow } from '../captacaoInscricaoExi
 import { tryHandlePoloPreFormFlow, tryHandlePoloEscolhaFlow } from '../inscricaoPoloFlow.js'
 import { tryHandleInscricaoFromKommoCard } from '../inscricaoKommoPreFilledFlow.js'
 import { tryHandleMatriculaResumoConfirmacao } from '../inscricaoMatriculaConfirmFlow.js'
-import { tryHandleTransferenciaDadosPendentes } from '../inscricaoTransferenciaFlow.js'
+import {
+  tryHandleTransferenciaDadosPendentes,
+  tryHandleTransferenciaConfirmacao,
+  tryHandleTransferenciaCursoRestate,
+  extractTransferenciaContext,
+  conversationMentionsTransferencia,
+} from '../inscricaoTransferenciaFlow.js'
 import { tryHandleAcademicAffairsInquiry } from '../academicAffairsFlow.js'
 import { tryHandlePriceUntilCourseEndInquiry } from '../priceDurationFlow.js'
+import { tryHandlePaymentDiscountInquiry } from '../paymentDiscountFlow.js'
 import { maybeAuditActionToolFailure, recordInscricaoFailureAuditNote } from '../inscricaoFailureAudit.js'
 import {
   tryHandleInscricaoDesistenciaFlow,
@@ -551,6 +558,30 @@ export async function runAgent(env, input) {
         aiMeta: ctx.toAiMeta(),
       }
     }
+
+    const transferenciaConfirm = await tryHandleTransferenciaConfirmacao(env, formFlowCtx)
+    if (transferenciaConfirm?.handled) {
+      console.log(
+        `[${executionId}] TRANSFERENCIA_CONFIRMADA code=${transferenciaConfirm.result?.toolCalls?.[0]?.code ?? 'n/a'}`,
+      )
+      return {
+        ...transferenciaConfirm.result,
+        historyLoaded: historyMessages.length,
+        aiMeta: ctx.toAiMeta(),
+      }
+    }
+
+    const transferenciaRestate = await tryHandleTransferenciaCursoRestate(env, formFlowCtx)
+    if (transferenciaRestate?.handled) {
+      console.log(
+        `[${executionId}] TRANSFERENCIA_CURSO_RESTATE code=${transferenciaRestate.result?.toolCalls?.[0]?.code ?? 'n/a'}`,
+      )
+      return {
+        ...transferenciaRestate.result,
+        historyLoaded: historyMessages.length,
+        aiMeta: ctx.toAiMeta(),
+      }
+    }
   }
 
   if (telefone) {
@@ -576,6 +607,18 @@ export async function runAgent(env, input) {
     if (exitConfirm?.handled) {
       console.log(`[${executionId}] SAIDA_CANAL_CONFIRMADA telefone=${telefone}`)
       return { ...exitConfirm.result, historyLoaded: historyMessages.length, aiMeta: ctx.toAiMeta() }
+    }
+  }
+
+  if (telefone) {
+    const paymentDiscountFlow = await tryHandlePaymentDiscountInquiry(env, formFlowCtx)
+    if (paymentDiscountFlow?.handled) {
+      console.log(`[${executionId}] PAYMENT_DISCOUNT`)
+      return {
+        ...paymentDiscountFlow.result,
+        historyLoaded: historyMessages.length,
+        aiMeta: ctx.toAiMeta(),
+      }
     }
   }
 
@@ -1106,8 +1149,29 @@ export async function runAgent(env, input) {
     inscricaoStage === INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE ||
     (inscricaoStage && inscricaoFormAlreadyFilled({ inscricao_form_status: inscricaoStage }))
 
+  const transferenciaCtx = extractTransferenciaContext(historyMessages)
+  const transferenciaFlowHint =
+    (transferenciaCtx || conversationMentionsTransferencia(historyMessages)) &&
+    !messageAsksCoursePrice(userMessage)
+      ? {
+          role: 'system',
+          content:
+            'TRANSFERÊNCIA/APROVEITAMENTO DE MATÉRIAS EM ANDAMENTO' +
+            (transferenciaCtx?.origem ? ` — curso de origem: ${transferenciaCtx.origem}` : '') +
+            (transferenciaCtx?.destino ? ` — curso desejado na Sumaré: ${transferenciaCtx.destino}` : '') +
+            (transferenciaCtx?.semestre ? ` — último semestre informado: ${transferenciaCtx.semestre}` : '') +
+            '. O lead já informou ou confirmou os dados da transferência. ' +
+            'OBRIGATÓRIO: chame registrar_transferencia(telefone, curso_origem, semestre_concluido, curso_desejado) com os dados do histórico — NÃO pergunte novamente qual curso ele deseja. ' +
+            'Se faltar apenas o polo EAD, siga o fluxo normal de escolha de polo após registrar_transferencia. ' +
+            'PROIBIDO: enviar_form_sumar_inscricao direto sem registrar_transferencia; perguntar "qual curso você tem interesse" quando origem e destino já constam.',
+        }
+      : null
+
   const enrollmentConfirmHint =
-    enrollmentContinuation && !messageAsksCoursePrice(userMessage)
+    enrollmentContinuation &&
+    !messageAsksCoursePrice(userMessage) &&
+    !transferenciaCtx &&
+    !conversationMentionsTransferencia(historyMessages)
       ? inscricaoStage === INSCRICAO_FORM_STATUS_AGUARDANDO
         ? {
             role: 'system',
@@ -1359,6 +1423,7 @@ export async function runAgent(env, input) {
     ...(courseInquiryHint ? [courseInquiryHint] : []),
     ...(gradeCurricularHint ? [gradeCurricularHint] : []),
     ...(courseMoreDetailsHint ? [courseMoreDetailsHint] : []),
+    ...(transferenciaFlowHint ? [transferenciaFlowHint] : []),
     ...(enrollmentConfirmHint ? [enrollmentConfirmHint] : []),
     ...(frustrationHint ? [frustrationHint] : []),
     ...(noContextWarning ? [noContextWarning] : []),

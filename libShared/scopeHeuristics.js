@@ -7,6 +7,7 @@ import {
   userMessageContinuesCourseDiscussion,
 } from './conversationContextHeuristics.js'
 import { extractCursoAreaFromText } from './cursoConfirmation.js'
+import { messageAsksPaymentInfo } from './inboundMessageSanitize.js'
 
 export const DEFAULT_SCOPE_REFUSAL =
   'Olá! Sou o assistente da Faculdade Sumaré e posso te ajudar com cursos, valores, matrícula e informações sobre nossos programas de graduação e pós-graduação (EAD). ' +
@@ -288,6 +289,7 @@ export function shouldHandoffToHuman(userMessage, historyMessages = []) {
     return false
   }
   if (messageIsInboundMediaPlaceholder(userMessage)) return false
+  if (messageAsksPaymentInfo(userMessage)) return false
 
   if (messageStrongHumanEscalation(userMessage)) return true
 

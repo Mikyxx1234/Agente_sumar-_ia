@@ -24,6 +24,7 @@ import {
   resolvePortalUrlForCandidato,
   extractCandidatoStatusString,
 } from './sumareCaptacaoClient.js'
+import { analyzeCursoInscricaoSnapshot } from '../libShared/captacaoSnapshotSanitize.js'
 
 const DEDUPE_MS = 6 * 60 * 60 * 1000
 const _linkSentMemory = new Map()
@@ -174,10 +175,21 @@ export async function runMatriculaCaptacaoAfterForm(env, ctx) {
     if (!snapshot.tipo_inscricao || !/transfer/i.test(String(snapshot.tipo_inscricao))) {
       snapshot.tipo_inscricao = 'Transferência'
     }
-    // Curso desejado (destino) é o que o lead confirmou na transferência —
-    // prevalece sobre o curso que tenha vindo do formulário.
     if (transfRow.transferencia_curso_destino) {
       snapshot.curso_inscricao = transfRow.transferencia_curso_destino
+    }
+  }
+
+  const cursoCheck = await analyzeCursoInscricaoSnapshot(snapshot, env)
+  if (!cursoCheck.ok) {
+    console.warn(
+      `[matriculaCaptacao] lead=${leadId} curso inválido: ${cursoCheck.code} ${cursoCheck.reason}`,
+    )
+    return {
+      ok: false,
+      code: cursoCheck.code,
+      error: cursoCheck.reason,
+      missing: cursoCheck.missing,
     }
   }
 

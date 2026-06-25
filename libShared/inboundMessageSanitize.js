@@ -194,6 +194,18 @@ export function messageAsksPaymentInfo(text) {
   ) {
     return true
   }
+  // Pergunta direta sobre desconto (ex.: "Algum desconto?", "Desconto", "tem desconto?").
+  if (/^\s*desconto\s*\??\s*$/i.test(t)) return true
+  if (
+    /\b(algum|tem|existe|possui|quais?|qual|h[aá]|tem\s+como|como\s+funciona)\b[\s\S]{0,25}\bdesconto\b/i.test(
+      t,
+    )
+  ) {
+    return true
+  }
+  if (/\bdesconto\b/i.test(t) && t.length <= 48 && !/\b(reajuste|final|fim)\s+do\s+curso\b/i.test(t)) {
+    return true
+  }
   return false
 }
 
