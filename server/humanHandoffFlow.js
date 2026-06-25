@@ -20,6 +20,10 @@ import {
   SUMARE_ATENDIMENTO_URL,
   SUMARE_OUVIDORIA_URL,
 } from '../libShared/humanHandoffHeuristics.js'
+import {
+  buildAcademicAffairsRedirectReply,
+  historyHasAcademicAffairsTopic,
+} from '../libShared/academicAffairsHeuristics.js'
 import { lastAssistantText } from '../libShared/conversationContextHeuristics.js'
 import { filterHistoryMessagesForAgent } from '../libShared/historySanitize.js'
 import {
@@ -92,9 +96,12 @@ export async function startChannelExitConfirm(env, { telefone, leadId, execution
 }
 
 /** Passo 2 — links + mover fila + pausar IA. */
-async function finalizeChannelExit(env, { telefone, idLead, executionId, pushName, t0, model }) {
-  const reply = buildExitChannelLinksReply({ pushName })
-  const steps = [{ type: 'saida_canal_links_enviados' }]
+async function finalizeChannelExit(env, { telefone, idLead, executionId, pushName, t0, model, historyMessages }) {
+  const academicContext = historyHasAcademicAffairsTopic(historyMessages)
+  const reply = academicContext
+    ? buildAcademicAffairsRedirectReply({ pushName })
+    : buildExitChannelLinksReply({ pushName })
+  const steps = [{ type: academicContext ? 'saida_canal_academic_redirect' : 'saida_canal_links_enviados' }]
   const toolCalls = []
   const { pipelineId, statusId } = resolveChannelExitTarget(env)
 
@@ -105,7 +112,9 @@ async function finalizeChannelExit(env, { telefone, idLead, executionId, pushNam
     await createLeadAuditNote(
       env,
       idLead,
-      'Lead confirmou que não deseja seguir o atendimento pelo canal. ' +
+      (academicContext
+        ? 'Lead confirmou saída do canal após assunto acadêmico (ex.: diploma). Resposta canônica aluno/ex-aluno enviada. '
+        : 'Lead confirmou que não deseja seguir o atendimento pelo canal. ') +
         `Links oficiais enviados (atendimento: ${SUMARE_ATENDIMENTO_URL} | ouvidoria: ${SUMARE_OUVIDORIA_URL}). ` +
         `Movido para fila ${statusId} (pipeline ${pipelineId}).`,
     ).catch(() => {})
@@ -205,7 +214,15 @@ export async function tryHandleChannelExitConfirmStep(env, input) {
   }
 
   if (messageConfirmsChannelExit(userMessage)) {
-    return finalizeChannelExit(env, { telefone, idLead, executionId, pushName, t0, model })
+    return finalizeChannelExit(env, {
+      telefone,
+      idLead,
+      executionId,
+      pushName,
+      t0,
+      model,
+      historyMessages,
+    })
   }
 
   // Mensagem que não confirma nem recusa (nova pergunta, saudação etc.):

@@ -6,7 +6,11 @@
 import {
   SUMARE_ATENDIMENTO_URL,
   SUMARE_OUVIDORIA_URL,
+  messageConfirmsChannelExit,
+  assistantAskedExitChannelConfirm,
 } from './humanHandoffHeuristics.js'
+import { messageRequestsHuman, messageStrongHumanEscalation } from './scopeHeuristics.js'
+import { lastAssistantText } from './conversationContextHeuristics.js'
 
 function normalize(text) {
   return String(text || '')
@@ -42,8 +46,18 @@ export function messageAsksAcademicAffairsSupportInText(text) {
   if (/\b(inadimpl|mensalidade[s]?\s+atrasad|d[eé]bito\s+em\s+aberto|negativad)/i.test(t)) return true
   if (/\b(reclama[cç][aã]o|protocolo)\b/i.test(t) && /\b(acad[eê]mica|matr[ií]cula|curso|faculdade)\b/i.test(t)) return true
   if (/\bemitir\s+(o\s+)?diploma\b/i.test(t) || /\b(retirada\s+do\s+diploma)\b/i.test(t)) return true
+  if (/\bdiploma\b/i.test(t)) return true
+  if (/\bsolicita[cç][aã]o\s+de\s+diploma\b/i.test(t)) return true
 
   return false
+}
+
+/** Histórico recente menciona assunto acadêmico institucional (diploma, trancamento, etc.). */
+export function historyHasAcademicAffairsTopic(historyMessages = [], limit = 12) {
+  if (!Array.isArray(historyMessages)) return false
+  return historyMessages
+    .slice(-limit)
+    .some((m) => messageAsksAcademicAffairsSupportInText(String(m?.content || '')))
 }
 
 /** Follow-up sobre consultor ligar após pedido acadêmico (ex.: "Ele vai ligar?"). */
@@ -70,9 +84,19 @@ function recentUserMessages(historyMessages, limit = 8) {
  */
 export function messageAsksAcademicAffairsSupport(text, historyMessages = []) {
   if (messageAsksAcademicAffairsSupportInText(text)) return true
-  if (!messageAsksConsultantCallFollowUp(text)) return false
-  const recent = [...recentUserMessages(historyMessages), text]
-  return recent.some((msg) => messageAsksAcademicAffairsSupportInText(msg))
+  if (messageAsksConsultantCallFollowUp(text)) {
+    const recent = [...recentUserMessages(historyMessages), text]
+    if (recent.some((msg) => messageAsksAcademicAffairsSupportInText(msg))) return true
+  }
+  if (!historyHasAcademicAffairsTopic(historyMessages)) return false
+  if (messageStrongHumanEscalation(text) || messageRequestsHuman(text)) return true
+  if (
+    messageConfirmsChannelExit(text) &&
+    assistantAskedExitChannelConfirm(lastAssistantText(historyMessages))
+  ) {
+    return true
+  }
+  return false
 }
 
 function firstName(nome) {

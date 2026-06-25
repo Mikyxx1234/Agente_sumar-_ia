@@ -78,6 +78,12 @@ export function messageConfirmsChannelExit(text) {
   if (/\b(prefiro|quero)\b[\s\S]{0,45}\b(direto|diretamente|com\s+a\s+(faculdade|sumar[eé])|outro\s+canal|site)\b/i.test(t)) {
     return true
   }
+  if (/\bquero\s+ser\s+(direcionad|encaminhad|redirecionad)/i.test(t)) return true
+  if (/\b(prefiro|quero)\b[\s\S]{0,30}\b(direcionad|encaminhad|redirecionad)/i.test(t)) return true
+  if (/\bpode\s+me\s+(direcionar|encaminhar|redirecionar)\b/i.test(t)) return true
+  if (/\b(me\s+)?(direciona|encaminha|redireciona)\b/i.test(t) && /\b(quero|por\s+favor|pfv|pode)\b/i.test(t)) {
+    return true
+  }
   if (/\b(pode|podem)\s+(encerrar|finalizar|fechar)\b/i.test(t)) return true
   if (/\bencerrar?\s+(o\s+)?(atendimento|conversa|chat)\b/i.test(t)) return true
   if (/\bn[ãa]o\s+quero\s+mais\s+(falar|conversar|atendimento|continuar)\b/i.test(t)) return true
