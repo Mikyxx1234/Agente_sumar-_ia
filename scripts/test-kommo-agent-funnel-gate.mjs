@@ -1,5 +1,5 @@
 /**
- * Smoke: trinco fixo pipeline 13756724 + status 106140284.
+ * Smoke: trinco fixo pipeline 13756724 + status 106140284 + Api Sumaré pagamento.
  * npm run test:funnel-gate
  */
 
@@ -7,6 +7,7 @@ import {
   AGENT_FUNNEL_PIPELINE_ID,
   AGENT_FUNNEL_STATUS_ID,
   AGENT_FUNNEL_STATUS_INSCRICAO,
+  AGENT_FUNNEL_STATUS_AGUARDANDO_PAGAMENTO,
   leadMatchesAgentFunnel,
   resolveAgentFunnelFromEnv,
 } from '../server/kommoAgentFunnelGate.js'
@@ -34,10 +35,11 @@ const resolved = resolveAgentFunnelFromEnv({
 })
 expect('env errado ignorado (pipeline)', resolved.pipelineId === 13756724)
 expect(
-  'env errado ignorado (status) — Atendimento + inscrição',
-  resolved.statusIds.length === 2 &&
+  'env errado ignorado (status) — Atendimento + inscrição + pagamento Api Sumaré',
+  resolved.statusIds.length === 3 &&
     resolved.statusIds.includes(AGENT_FUNNEL_STATUS_ID) &&
-    resolved.statusIds.includes(AGENT_FUNNEL_STATUS_INSCRICAO),
+    resolved.statusIds.includes(AGENT_FUNNEL_STATUS_INSCRICAO) &&
+    resolved.statusIds.includes(AGENT_FUNNEL_STATUS_AGUARDANDO_PAGAMENTO),
 )
 
 expect(
@@ -55,6 +57,20 @@ expect(
 expect(
   'lead agente aguardando resposta bloqueado',
   !leadMatchesAgentFunnel({ pipeline_id: 13756724, status_id: 106377088 }),
+)
+expect(
+  'pagamento sem Api Sumaré bloqueado',
+  !leadMatchesAgentFunnel(
+    { pipeline_id: 13756724, status_id: AGENT_FUNNEL_STATUS_AGUARDANDO_PAGAMENTO },
+    { env: {}, origem: 'Site' },
+  ),
+)
+expect(
+  'pagamento com Api Sumaré na fila',
+  leadMatchesAgentFunnel(
+    { pipeline_id: 13756724, status_id: AGENT_FUNNEL_STATUS_AGUARDANDO_PAGAMENTO },
+    { env: {}, origem: 'Api Sumaré' },
+  ),
 )
 
 console.log(`\n${stats.passed}/${stats.total} passed`)

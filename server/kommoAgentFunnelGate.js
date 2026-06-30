@@ -1,19 +1,26 @@
 /**
  * Trinco fixo do funil da IA — Faculdade Sumaré.
  *
- * O agente automático (scheduler + flush WhatsApp) só pode atender leads em:
+ * O agente automático (scheduler + flush WhatsApp) atende leads em:
  *   pipeline_id = 13756724 (Agente-Sumaré)
  *   status_id   ∈ { 106140284 (Atendimento), 106804680 (inscrição) }
  *
- * Em "inscrição" a IA segue conversando para encaminhar os dados até o
- * candidato mandar o comprovante de pagamento — quando o comprovante chega, o
- * lead é movido para "aguardando pagamento" (106426128) e a IA pausa. Portanto
- * "aguardando pagamento" NÃO entra no funil atendido (de propósito).
+ * Exceção (API_SUMARE_ADVANCED_FUNNEL_ENABLED): leads com sum_Origem "Api Sumaré"
+ * na fila "aguardando pagamento" (106426128) também entram no funil — chegam
+ * sem atendimento prévio e precisam de bootstrap por CPF + comprovante.
+ *
+ * Em "inscrição" a IA segue até o comprovante; após comprovante o lead vai para
+ * "aguardando pagamento" e a IA pausa — exceto os casos Api Sumaré acima.
  *
  * Valores de KOMMO_AGENT_* no .env que divergirem são ignorados (com warn no boot).
  */
 
 import { findLeadByPhone, getLeadById } from './kommoClient.js'
+import { fetchLeadFormSnapshot } from './inscricaoKommoFields.js'
+import {
+  isApiSumareAdvancedFunnelEnabled,
+  isApiSumareOrigemValue,
+} from '../libShared/apiSumareOrigemHeuristics.js'
 
 /** @type {const} */
 export const AGENT_FUNNEL_PIPELINE_ID = 13756724
@@ -24,7 +31,10 @@ export const AGENT_FUNNEL_STATUS_ID = 106140284
 /** Etapa "inscrição" — IA continua atendendo até o comprovante. @type {const} */
 export const AGENT_FUNNEL_STATUS_INSCRICAO = 106804680
 
-/** Todas as etapas atendidas pela IA (NÃO inclui "aguardando pagamento"). */
+/** Etapa "aguardando pagamento" — só Api Sumaré (quando feature ligada). @type {const} */
+export const AGENT_FUNNEL_STATUS_AGUARDANDO_PAGAMENTO = 106426128
+
+/** Etapas atendidas pela IA (sem pagamento — ver resolveAgentFunnelFromEnv). */
 export const AGENT_FUNNEL_STATUS_IDS = [
   AGENT_FUNNEL_STATUS_ID,
   AGENT_FUNNEL_STATUS_INSCRICAO,
@@ -45,31 +55,67 @@ function warnEnvMismatchOnce(env) {
   warnedEnvMismatch = true
   console.warn(
     '[funnel-gate] KOMMO_AGENT_PIPELINE_ID / KOMMO_AGENT_STATUS_ID(S) no .env divergem do funil fixo — ' +
-      `usando pipeline=${AGENT_FUNNEL_PIPELINE_ID} status=[${AGENT_FUNNEL_STATUS_IDS.join(',')}] apenas.`,
+      `usando pipeline=${AGENT_FUNNEL_PIPELINE_ID} status base=[${AGENT_FUNNEL_STATUS_IDS.join(',')}] (+ Api Sumaré pagamento se habilitado).`,
   )
 }
 
 /**
- * IDs efetivos do funil (sempre os fixos acima).
+ * IDs efetivos do funil (fixos + pagamento condicional Api Sumaré).
  * @returns {{ pipelineId: number, statusIds: number[] }}
  */
 export function resolveAgentFunnelFromEnv(env) {
   warnEnvMismatchOnce(env)
+  const statusIds = [...AGENT_FUNNEL_STATUS_IDS]
+  if (isApiSumareAdvancedFunnelEnabled(env)) {
+    statusIds.push(AGENT_FUNNEL_STATUS_AGUARDANDO_PAGAMENTO)
+  }
   return {
     pipelineId: AGENT_FUNNEL_PIPELINE_ID,
-    statusIds: [...AGENT_FUNNEL_STATUS_IDS],
+    statusIds,
   }
+}
+
+const ORIGEM_FIELD_ALIASES = ['sum_origem', 'sum origem', 'origem']
+
+function pickOrigemFromCustomFields(custom) {
+  if (!Array.isArray(custom)) return ''
+  for (const f of custom) {
+    const name = String(f?.field_name || f?.name || '').trim().toLowerCase()
+    if (!ORIGEM_FIELD_ALIASES.includes(name)) continue
+    const v = f?.values?.[0]?.value
+    if (v != null && String(v).trim()) return String(v).trim()
+  }
+  return ''
+}
+
+/** Lê sum_Origem do objeto lead (lista Kommo) quando disponível. */
+export function extractOrigemFromLead(lead) {
+  if (!lead || typeof lead !== 'object') return ''
+  const fromCustom = pickOrigemFromCustomFields(lead.custom_fields_values)
+  if (fromCustom) return fromCustom
+  if (lead.origem != null && String(lead.origem).trim()) return String(lead.origem).trim()
+  return ''
 }
 
 /**
  * @param {object | null | undefined} lead
+ * @param {{ env?: object, origem?: string }} [context]
  */
-export function leadMatchesAgentFunnel(lead) {
+export function leadMatchesAgentFunnel(lead, context = {}) {
   if (!lead || typeof lead !== 'object') return false
-  return (
-    Number(lead.pipeline_id) === AGENT_FUNNEL_PIPELINE_ID &&
-    AGENT_FUNNEL_STATUS_IDS.includes(Number(lead.status_id))
-  )
+  if (Number(lead.pipeline_id) !== AGENT_FUNNEL_PIPELINE_ID) return false
+
+  const statusId = Number(lead.status_id)
+  if (AGENT_FUNNEL_STATUS_IDS.includes(statusId)) return true
+
+  if (statusId === AGENT_FUNNEL_STATUS_AGUARDANDO_PAGAMENTO) {
+    const env = context.env || process.env
+    if (!isApiSumareAdvancedFunnelEnabled(env)) return false
+    const origem = context.origem != null ? context.origem : extractOrigemFromLead(lead)
+    return isApiSumareOrigemValue(origem)
+  }
+
+  return false
 }
 
 /**
@@ -78,6 +124,29 @@ export function leadMatchesAgentFunnel(lead) {
 export function describeLeadFunnel(lead) {
   if (!lead) return 'lead=null'
   return `pipeline_id=${lead.pipeline_id} status_id=${lead.status_id}`
+}
+
+async function resolveOrigemForLead(env, lead) {
+  if (!lead?.id) return extractOrigemFromLead(lead)
+  let origem = extractOrigemFromLead(lead)
+  if (origem) return origem
+  if (Number(lead.status_id) !== AGENT_FUNNEL_STATUS_AGUARDANDO_PAGAMENTO) return ''
+  try {
+    const snap = await fetchLeadFormSnapshot(env, Number(lead.id))
+    if (snap.ok && snap.snapshot?.origem) return String(snap.snapshot.origem).trim()
+  } catch {
+    /* ignore */
+  }
+  return ''
+}
+
+async function leadInFunnel(env, lead) {
+  if (!lead) return false
+  if (Number(lead.status_id) === AGENT_FUNNEL_STATUS_AGUARDANDO_PAGAMENTO) {
+    const origem = await resolveOrigemForLead(env, lead)
+    return leadMatchesAgentFunnel(lead, { env, origem })
+  }
+  return leadMatchesAgentFunnel(lead, { env })
 }
 
 /**
@@ -101,7 +170,7 @@ export async function assertLeadInAgentFunnel(env, input = {}) {
   void pipelineId
   void statusIds
 
-  if (input.lead && leadMatchesAgentFunnel(input.lead)) {
+  if (input.lead && (await leadInFunnel(env, input.lead))) {
     return { ok: true, lead: input.lead }
   }
 
@@ -112,7 +181,7 @@ export async function assertLeadInAgentFunnel(env, input = {}) {
       const got = await getLeadById(env, leadId)
       fetched = got.ok ? got.lead : null
     }
-    if (leadMatchesAgentFunnel(fetched)) {
+    if (await leadInFunnel(env, fetched)) {
       return { ok: true, lead: fetched }
     }
     return {
@@ -131,9 +200,10 @@ export async function assertLeadInAgentFunnel(env, input = {}) {
       return { ok: false, reason: 'kommo_lookup_failed', error: lookup.error }
     }
     const candidates = Array.isArray(lookup.leads) ? lookup.leads : lookup.lead ? [lookup.lead] : []
-    const inFunnel = candidates.find((l) => leadMatchesAgentFunnel(l))
-    if (inFunnel) {
-      return { ok: true, lead: inFunnel, matched_leads: candidates.length }
+    for (const l of candidates) {
+      if (await leadInFunnel(env, l)) {
+        return { ok: true, lead: l, matched_leads: candidates.length }
+      }
     }
     const first = candidates[0]
     return {

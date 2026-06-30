@@ -45,6 +45,14 @@ import {
   INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
   INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO,
 } from '../libShared/inscricaoFormHeuristics.js'
+import {
+  isApiSumareOrigemSnapshot,
+} from '../libShared/apiSumareOrigemHeuristics.js'
+import { fetchLeadFormSnapshot } from './inscricaoKommoFields.js'
+import {
+  AGENT_FUNNEL_STATUS_INSCRICAO,
+  AGENT_FUNNEL_STATUS_AGUARDANDO_PAGAMENTO,
+} from './kommoAgentFunnelGate.js'
 
 const FIELD_GREET_AT = 'proactive_greet_at'
 const FORM_STATUS_FIELD = 'inscricao_form_status'
@@ -260,6 +268,22 @@ export async function tryProactiveGreet(env, input = {}) {
   if (!telefone) return { action: 'skip', reason: 'missing_telefone' }
 
   const leadId = await resolveLeadId(env, { leadId: input.leadId, telefone })
+
+  if (Number.isFinite(leadId) && leadId > 0) {
+    try {
+      const snap = await fetchLeadFormSnapshot(env, leadId)
+      const statusId = Number(snap.snapshot?.status_id)
+      if (
+        snap.ok &&
+        isApiSumareOrigemSnapshot(snap.snapshot) &&
+        (statusId === AGENT_FUNNEL_STATUS_INSCRICAO || statusId === AGENT_FUNNEL_STATUS_AGUARDANDO_PAGAMENTO)
+      ) {
+        return { action: 'skip', reason: 'api_sumare_advanced_queue' }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
 
   const nome = input.nome || lead?.name || ''
   const nivel = input.nivel || (lead ? extractNivelFromLead(env, lead) : '')

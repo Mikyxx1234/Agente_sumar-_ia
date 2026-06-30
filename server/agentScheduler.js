@@ -517,6 +517,8 @@ export async function runSchedulerTick(env) {
       if (!messages || messages.length === 0) {
         // Rede de segurança da saudação proativa: lead na fila ainda sem
         // atendimento → o agente puxa a conversa (idempotente).
+        // Leads Api Sumaré em inscrição/pagamento são ignorados — abertura
+        // fica a cargo dos salesbots Kommo 49977 / 49979.
         try {
           const greet = await tryProactiveGreet(env, {
             telefone: phone,

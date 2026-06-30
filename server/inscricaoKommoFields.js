@@ -47,6 +47,7 @@ const FIELD_ALIASES = {
     'status inscrição',
     'status inscricao',
   ],
+  origem: ['sum_origem', 'sum origem', 'origem', 'origem lead', 'origem do lead'],
 }
 
 function isCampoAusente(val) {
@@ -138,6 +139,7 @@ export async function fetchLeadFormSnapshot(env, leadId) {
   const turno = pickByAliases(custom, fieldsByName, FIELD_ALIASES.turno)
   const modalidade = pickByAliases(custom, fieldsByName, FIELD_ALIASES.modalidade)
   const statusInscricao = pickByAliases(custom, fieldsByName, FIELD_ALIASES.statusInscricao)
+  const origem = pickByAliases(custom, fieldsByName, FIELD_ALIASES.origem)
 
   const snapshot = {
     nome: !isCampoAusente(nomeField) ? nomeField : nomeLead,
@@ -152,6 +154,7 @@ export async function fetchLeadFormSnapshot(env, leadId) {
     turno,
     modalidade,
     status_inscricao: statusInscricao,
+    origem,
     responsible_user_id: Number(lead.responsible_user_id) || 0,
     status_id: Number(lead.status_id) || 0,
     pipeline_id: Number(lead.pipeline_id) || 0,

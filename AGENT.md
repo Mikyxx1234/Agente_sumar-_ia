@@ -2100,3 +2100,21 @@ Histórico das decisões estruturais do agente. Formato por entrada:
     4/4 caem no redirecionamento acadêmico determinístico (Portal do Aluno /
     atendimento / ouvidoria).
   - Medicina e pós seguem corretos (sem regressão).
+
+### 2026-06-16 - Api Sumaré em estágios avançados (inscrição / aguardando pagamento)
+
+- **Decisão**
+  - Expandir o funil da IA para incluir fila **aguardando pagamento** (`106426128`) **somente** quando `sum_Origem = Api Sumaré` e `API_SUMARE_ADVANCED_FUNNEL_ENABLED=true`.
+  - **Sem template nem saudação proativa da IA** nessas filas — abertura fica nos salesbots Kommo **49977** (inscrição) e **49979** (aguardando pagamento).
+  - A IA só atende **depois** da mensagem do lead no buffer (`flushSession` → `tryHandleApiSumareAdvancedEntry`): CPF no card → `gerar` → captação (inscrição) ou comprovante (pagamento).
+
+- **Contexto**
+  - Leads distribuídos pela API Sumaré chegam em inscrição/pagamento sem atendimento prévio da IA; o Kommo já dispara o salesbot ao entrar na fila.
+
+- **Alternativas descartadas**
+  - Template WhatsApp pela IA (`apiSumareEntryGreet`): redundante com salesbots 49977/49979.
+  - Incluir toda a fila aguardando pagamento no funil: reativaria IA em leads que devem permanecer pausados após comprovante.
+
+- **Impacto**
+  - Módulos: `libShared/apiSumareOrigemHeuristics.js`, `server/apiSumareAdvancedEntryFlow.js`, `kommoAgentFunnelGate.js`.
+  - `proactiveGreet` ignora leads Api Sumaré em inscrição/pagamento.

@@ -34,6 +34,8 @@ export const INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO = 'comprovante_pagamento
 export const INSCRICAO_FORM_STATUS_DISTRIBUIR_CONSULTOR = 'distribuir_consultor'
 /** Card Kommo completo, agente perguntou ao lead se mantém o polo do card antes de seguir express. */
 export const INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_POLO_KOMMO = 'aguardando_confirm_polo_kommo'
+/** Lead Api Sumaré em estágio avançado — aguardando CPF para bootstrap da inscrição. */
+export const INSCRICAO_FORM_STATUS_API_SUMARE_AGUARDANDO_CPF = 'api_sumare_aguardando_cpf'
 /** Lead declarou que não quer inscrição — aguardando confirmação explícita de desistência. */
 export const INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_DESISTENCIA = 'aguardando_confirm_desistencia'
 /** Desistência confirmada — lead movido para fila de perda e IA pausada. */

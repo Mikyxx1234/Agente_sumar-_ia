@@ -47,6 +47,7 @@ import { applyMetaFlowFormToKommo } from '../metaFlowFormSync.js'
 import { tryHandleCaptacaoInscricaoExistenteFlow } from '../captacaoInscricaoExistenteFlow.js'
 import { tryHandlePoloPreFormFlow, tryHandlePoloEscolhaFlow } from '../inscricaoPoloFlow.js'
 import { tryHandleInscricaoFromKommoCard } from '../inscricaoKommoPreFilledFlow.js'
+import { tryHandleApiSumareAdvancedEntry } from '../apiSumareAdvancedEntryFlow.js'
 import { tryHandleMatriculaResumoConfirmacao } from '../inscricaoMatriculaConfirmFlow.js'
 import {
   tryHandleTransferenciaDadosPendentes,
@@ -720,6 +721,24 @@ export async function runAgent(env, input) {
   // level e handoff — saudação não precisa de nenhuma dessas etapas e
   // economiza I/O. Histórico já está carregado então o contexto continua
   // funcionando (saudação contextual mantida).
+  //
+  // Api Sumaré (estágio avançado) roda ANTES da saudação genérica: lead
+  // com CPF no card precisa bootstrap de inscrição/comprovante.
+  if (telefone) {
+    const apiSumareEntry = await tryHandleApiSumareAdvancedEntry(env, formFlowCtx)
+    if (apiSumareEntry?.handled) {
+      console.log(
+        `[${executionId}] API_SUMARE_ENTRY stage=${apiSumareEntry.result?.ctxSnapshot?.inscricaoForm ?? 'n/a'} ` +
+          `candidato=${apiSumareEntry.result?.ctxSnapshot?.candidatoId ?? 'n/a'}`,
+      )
+      return {
+        ...apiSumareEntry.result,
+        historyLoaded: historyMessages.length,
+        aiMeta: ctx.toAiMeta(),
+      }
+    }
+  }
+
   if (isGreetingOnly(userMessage)) {
     const useContextual = shouldUseContextualGreetingReply(userMessage, historyMessages)
     const greetingReply = useContextual
