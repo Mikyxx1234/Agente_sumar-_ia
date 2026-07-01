@@ -974,8 +974,8 @@ async function flushSessionInner(env, sessionId, opts = {}) {
     } else if (
       itens.length > 0 &&
       !out?.iaPaused &&
-      !out.inscricaoFormHandled &&
-      !out.distribuirHumanoHandled
+      !out?.inscricaoFormHandled &&
+      !out?.distribuirHumanoHandled
     ) {
       if (!out?.ok) {
         const bo = recordSendFailureBackoff(env, sessionId, itens)

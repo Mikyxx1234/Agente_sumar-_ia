@@ -30,6 +30,7 @@ const SUM_MOTIVO_PERDA_ALIASES = [
 ]
 
 const MOTIVO_PERDA_SEM_INTERESSE = 'Sem Interesse'
+const MOTIVO_PERDA_SEM_RESPOSTA = 'Sem resposta'
 
 const FIELD_CACHE_TTL_MS = 5 * 60 * 1000
 const LEAD_UPDATE_DEDUPE_TTL_MS = 6 * 60 * 60 * 1000
@@ -102,22 +103,25 @@ async function resolveSumMotivoPerdaFieldDef(env) {
 }
 
 /**
- * Grava `sum_Motivo da perda` = "Sem Interesse" (enum) no lead Kommo.
+ * Grava `sum_Motivo da perda` (enum) no lead Kommo.
  */
-export async function setSumMotivoPerdaSemInteresse(env, { leadId, telefone }) {
+export async function setSumMotivoPerdaByLabel(env, { leadId, telefone, motivoLabel }) {
+  const label = String(motivoLabel || '').trim()
+  if (!label) return { ok: false, code: 'MOTIVO_LABEL_EMPTY' }
+
   const idLead = await resolveLeadIdInternal(env, { leadId, telefone })
   if (!idLead) return { ok: false, code: 'LEAD_NOT_FOUND' }
 
   const fieldDef = await resolveSumMotivoPerdaFieldDef(env)
   if (!fieldDef?.id) return { ok: false, code: 'FIELD_SUM_MOTIVO_PERDA_NOT_FOUND' }
 
-  const enumId = findEnumIdByLabel(fieldDef, MOTIVO_PERDA_SEM_INTERESSE)
+  const enumId = findEnumIdByLabel(fieldDef, label)
   if (!enumId) {
     return {
       ok: false,
-      code: 'ENUM_SEM_INTERESSE_NOT_FOUND',
+      code: 'ENUM_MOTIVO_NOT_FOUND',
       fieldId: fieldDef.id,
-      error: `Opção "${MOTIVO_PERDA_SEM_INTERESSE}" não encontrada no campo`,
+      error: `Opção "${label}" não encontrada no campo`,
     }
   }
 
@@ -127,8 +131,26 @@ export async function setSumMotivoPerdaSemInteresse(env, { leadId, telefone }) {
     leadId: idLead,
     fieldId: fieldDef.id,
     enumId,
-    motivo: MOTIVO_PERDA_SEM_INTERESSE,
+    motivo: label,
   }
+}
+
+/** Grava `sum_Motivo da perda` = "Sem Interesse" (enum) no lead Kommo. */
+export async function setSumMotivoPerdaSemInteresse(env, { leadId, telefone }) {
+  return setSumMotivoPerdaByLabel(env, {
+    leadId,
+    telefone,
+    motivoLabel: MOTIVO_PERDA_SEM_INTERESSE,
+  })
+}
+
+/** Grava `sum_Motivo da perda` = "Sem resposta" (enum) no lead Kommo. */
+export async function setSumMotivoPerdaSemResposta(env, { leadId, telefone }) {
+  return setSumMotivoPerdaByLabel(env, {
+    leadId,
+    telefone,
+    motivoLabel: MOTIVO_PERDA_SEM_RESPOSTA,
+  })
 }
 
 function normalizeFieldLabel(s) {

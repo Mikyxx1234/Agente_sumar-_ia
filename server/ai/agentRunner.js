@@ -65,6 +65,7 @@ import {
   tryHandleDesistenciaJaRegistrada,
   tryHandleDesistenciaConfirmEarly,
 } from '../inscricaoDesistenciaFlow.js'
+import { tryHandleFimAtendimentoFlow } from '../fimAtendimentoFlow.js'
 import {
   startChannelExitConfirm,
   tryHandleChannelExitConfirmStep,
@@ -648,6 +649,16 @@ export async function runAgent(env, input) {
   }
 
   if (telefone) {
+    const fimAtendimentoFlow = await tryHandleFimAtendimentoFlow(env, formFlowCtx)
+    if (fimAtendimentoFlow?.handled) {
+      console.log(`[${executionId}] FIM_ATENDIMENTO telefone=${telefone}`)
+      return {
+        ...fimAtendimentoFlow.result,
+        historyLoaded: historyMessages.length,
+        aiMeta: ctx.toAiMeta(),
+      }
+    }
+
     const desistenciaFlow = await tryHandleInscricaoDesistenciaFlow(env, formFlowCtx)
     if (desistenciaFlow?.handled) {
       console.log(
