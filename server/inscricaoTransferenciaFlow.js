@@ -12,6 +12,12 @@ import { maybeAuditActionToolFailure } from './inscricaoFailureAudit.js'
 const TRANSFERENCIA_PEDIDO_RX =
   /transfer[eê]ncia|aproveitamento\s+de\s+(mat[eé]rias|disciplinas)/i
 
+const TRANSFERENCIA_USER_SIGNAL_RX =
+  /outra\s+faculdade|transfer[eê]ncia|aproveitamento|parou\s+no|tranquei|parei\s+no|terminei\s+no|cursava|cursando\s+.+\s+em\s+outr|comecei\s+.+\s+em\s+outra/i
+
+const INVALID_CURSO_LABEL_RX =
+  /como\s+fa[çc]o|boa\s+noite|matricular|gostaria\s+me|mensalidade|taxa\s+de\s+matr[ií]cula|dura[cç][aã]o\s+de/i
+
 const SEMESTRE_PEDIDO_RX =
   /(?:me confirme|último semestre|semestre conclu[ií]do|semestre cursado)/i
 
@@ -64,8 +70,105 @@ function cleanCursoLabel(raw) {
     .trim()
 }
 
+function normalizeCursoKey(s) {
+  return String(s || '')
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+}
+
+export function isValidTransferenciaCursoLabel(label) {
+  const s = cleanCursoLabel(label)
+  if (!s || s.length < 3 || s.length > 80) return false
+  if (INVALID_CURSO_LABEL_RX.test(s)) return false
+  if (/^\d+$/.test(s)) return false
+  return true
+}
+
+/** Lead confirma que o curso de origem é o mesmo do destino ("só pedagogia mesmo"). */
+export function messageRestatesSameCourseAsDestino(userMessage, destinoHint) {
+  const t = normalizeMessageForScope(userMessage).toLowerCase().trim().replace(/[.!?]+$/, '')
+  if (!t || t.length > 80) return false
+  if (/o\s+mesmo\s+curso|mesmo\s+curso/i.test(t)) return true
+  if (/^(s[oó]|somente|apenas)\s/i.test(t) && /\bmesmo\b/i.test(t)) return true
+  const area = extractCursoAreaFromText(userMessage)
+  if (area && isValidTransferenciaCursoLabel(area)) {
+    if (/^(s[oó]|somente|apenas)\s/i.test(t)) return true
+    if (destinoHint && normalizeCursoKey(area).includes(normalizeCursoKey(destinoHint).slice(0, 5))) {
+      return true
+    }
+  }
+  return false
+}
+
+export function assistantAskedTransferenciaCursoOrigem(assistantText) {
+  const t = String(assistantText || '')
+  if (!t) return false
+  return (
+    /nome\s+(?:exato\s+)?do\s+curso/i.test(t) &&
+    /(?:cursava|cursou|faculdade|anterior|transfer|aproveit|continuidade)/i.test(t)
+  )
+}
+
 function normalizeRole(role) {
   return role === 'assistente' ? 'assistant' : role
+}
+
+function findTransferenciaWindowStart(historyMessages = []) {
+  for (let i = 0; i < historyMessages.length; i++) {
+    const m = historyMessages[i]
+    if (normalizeRole(m?.role) !== 'user') continue
+    if (TRANSFERENCIA_USER_SIGNAL_RX.test(String(m.content || ''))) return i
+  }
+  for (let i = 0; i < historyMessages.length; i++) {
+    const m = historyMessages[i]
+    if (normalizeRole(m?.role) === 'assistant' && TRANSFERENCIA_PEDIDO_RX.test(String(m.content || ''))) {
+      return Math.max(0, i - 1)
+    }
+  }
+  return historyMessages.length
+}
+
+function extractDestinoFromMatriculaAssistant(text) {
+  const patterns = [
+    /ingressar\s+no\s+curso\s+de\s+["'""]?([^"'"".]+?)["'""]?(?:\s+com|\s*$)/i,
+    /curso\s+de\s+["'"]([^"']+)["'"]\s+com\s+dura/i,
+    /(?:você irá ingressar|vai cursar)\s+no\s+curso\s+de\s+["'""]?([^"'"".]+?)["'""]?/i,
+  ]
+  for (const rx of patterns) {
+    const m = String(text || '').match(rx)
+    if (m?.[1] && isValidTransferenciaCursoLabel(m[1])) return cleanCursoLabel(m[1])
+  }
+  return null
+}
+
+function extractOrigemFromTransferUserText(text) {
+  const raw = String(text || '').trim()
+  if (!raw) return null
+  if (/matricular|como\s+fa[çc]o|gostaria\s+me/i.test(raw) && !TRANSFERENCIA_USER_SIGNAL_RX.test(raw)) {
+    return null
+  }
+
+  let m = raw.match(
+    /(?:comecei|cursei|cursava|cursando|estava\s+cursando|estudei)\s+(?:a\s+)?(?:o\s+)?(?:curso\s+de\s+)?(.+?)\s+em\s+outra/i,
+  )
+  if (m?.[1] && isValidTransferenciaCursoLabel(m[1])) return cleanCursoLabel(m[1])
+
+  m = raw.match(/(?:licenciatura|bacharelado|tecn[oó]logo)\s+em\s+(.+?)(?:\s*\.|,|$)/i)
+  if (m?.[1] && isValidTransferenciaCursoLabel(m[1])) return cleanCursoLabel(m[1])
+
+  const sameCourse = raw.match(/^(?:s[oó]|somente|apenas)\s+(?:a|o)?\s*(.+?)(?:\s+mesmo)?$/i)
+  if (sameCourse?.[1] && isValidTransferenciaCursoLabel(sameCourse[1])) {
+    return cleanCursoLabel(sameCourse[1])
+  }
+
+  const area = extractCursoAreaFromText(raw)
+  if (area && isValidTransferenciaCursoLabel(area) && TRANSFERENCIA_USER_SIGNAL_RX.test(raw)) {
+    return cleanCursoLabel(area)
+  }
+  return null
 }
 
 export function conversationMentionsTransferencia(historyMessages = []) {
@@ -73,7 +176,11 @@ export function conversationMentionsTransferencia(historyMessages = []) {
     .map((m) => String(m.content || ''))
     .join('\n')
     .toLowerCase()
-  return TRANSFERENCIA_PEDIDO_RX.test(blob) || /ingressar\s+no\s+.+\s+aproveit/i.test(blob)
+  return (
+    TRANSFERENCIA_PEDIDO_RX.test(blob) ||
+    /ingressar\s+no\s+.+\s+aproveit/i.test(blob) ||
+    TRANSFERENCIA_USER_SIGNAL_RX.test(blob)
+  )
 }
 
 export function assistantAskedTransferenciaDadosPendentes(assistantText) {
@@ -165,16 +272,23 @@ export function extractOrigemSemestreFromUserText(text) {
   const raw = String(text || '').trim()
   if (!raw) return null
 
-  let origem = null
-  const origemPatterns = [
-    /(?:^|[.;]\s*)(?:licenciatura|bacharelado|tecn[oó]logo)\s+em\s+(.+?)(?:\s*\.|\s*,|\s*último|$)/i,
-    /(?:cursava|cursando|estudei|fiz|curso)\s+(?:licenciatura|bacharelado|tecn[oó]logo)?\s*(?:em\s+)?(.+?)(?:\s*\.|\s*,|\s*último|$)/i,
-  ]
-  for (const rx of origemPatterns) {
-    const m = raw.match(rx)
-    if (m?.[1]) {
-      origem = cleanCursoLabel(m[1])
-      break
+  if (/matricular|como\s+fa[çc]o|gostaria\s+me/i.test(raw) && !TRANSFERENCIA_USER_SIGNAL_RX.test(raw)) {
+    const semestreOnly = parseSemestreFromUserMessage(raw)
+    return semestreOnly ? { origem: null, semestre: semestreOnly } : null
+  }
+
+  let origem = extractOrigemFromTransferUserText(raw)
+  if (!origem) {
+    const origemPatterns = [
+      /(?:^|[.;]\s*)(?:licenciatura|bacharelado|tecn[oó]logo)\s+em\s+(.+?)(?:\s*\.|\s*,|\s*último|$)/i,
+      /(?:cursava|cursando|estudei|fiz)\s+(?:licenciatura|bacharelado|tecn[oó]logo)?\s*(?:em\s+)?(.+?)(?:\s*\.|\s*,|\s*último|$)/i,
+    ]
+    for (const rx of origemPatterns) {
+      const m = raw.match(rx)
+      if (m?.[1] && isValidTransferenciaCursoLabel(m[1])) {
+        origem = cleanCursoLabel(m[1])
+        break
+      }
     }
   }
 
@@ -230,10 +344,25 @@ export function extractTransferenciaContext(historyMessages = []) {
   let destino = null
   let semestre = null
 
-  for (const m of [...historyMessages].reverse()) {
+  const startIdx = findTransferenciaWindowStart(historyMessages)
+  const windowMsgs =
+    startIdx < historyMessages.length ? historyMessages.slice(startIdx) : historyMessages
+
+  for (const m of historyMessages) {
+    if (normalizeRole(m?.role) !== 'assistant') continue
+    const d =
+      extractDestinoFromMatriculaAssistant(m.content) ||
+      extractTransferenciaDestinoFromAssistant(m.content)
+    if (d && isValidTransferenciaCursoLabel(d)) {
+      destino = d
+      break
+    }
+  }
+
+  for (const m of [...windowMsgs].reverse()) {
     if (normalizeRole(m?.role) !== 'assistant') continue
     const conf = extractTransferenciaConfirmacaoFromAssistant(m.content)
-    if (conf?.origem && conf?.destino) {
+    if (conf?.origem && conf?.destino && isValidTransferenciaCursoLabel(conf.origem)) {
       origem = conf.origem
       destino = conf.destino
       break
@@ -241,29 +370,61 @@ export function extractTransferenciaContext(historyMessages = []) {
   }
 
   if (!destino) {
-    for (const m of [...historyMessages].reverse()) {
+    for (const m of [...windowMsgs].reverse()) {
       if (normalizeRole(m?.role) !== 'assistant') continue
       const d = extractTransferenciaDestinoFromAssistant(m.content)
-      if (d) {
+      if (d && isValidTransferenciaCursoLabel(d)) {
         destino = d
         break
       }
     }
   }
 
-  for (const m of [...historyMessages].reverse()) {
+  for (const m of [...windowMsgs].reverse()) {
     if (normalizeRole(m?.role) !== 'user') continue
     const parsed = parseTransferenciaIntentFromText(m.content)
-    if (parsed?.origem && !origem) origem = parsed.origem
-    if (parsed?.destino && !destino) destino = parsed.destino
+    if (parsed?.origem && isValidTransferenciaCursoLabel(parsed.origem) && !origem) {
+      origem = parsed.origem
+    }
+    if (parsed?.destino && isValidTransferenciaCursoLabel(parsed.destino) && !destino) {
+      destino = parsed.destino
+    }
+    const oOrig = extractOrigemFromTransferUserText(m.content)
+    if (oOrig && !origem) origem = oOrig
     const os = extractOrigemSemestreFromUserText(m.content)
-    if (os?.origem && !origem) origem = os.origem
+    if (os?.origem && isValidTransferenciaCursoLabel(os.origem) && !origem) origem = os.origem
     if (os?.semestre && !semestre) semestre = os.semestre
     const sem = parseSemestreFromUserMessage(m.content)
     if (sem && !semestre) semestre = sem
+    if (messageRestatesSameCourseAsDestino(m.content, destino) && destino && !origem) {
+      origem = destino
+    }
+    const area = extractCursoAreaFromText(m.content)
+    if (
+      area &&
+      isValidTransferenciaCursoLabel(area) &&
+      destino &&
+      normalizeCursoKey(area) === normalizeCursoKey(destino) &&
+      !origem
+    ) {
+      origem = destino
+    }
   }
 
-  if (!origem || !destino) return null
+  if (destino && semestre && !origem && conversationMentionsTransferencia(historyMessages)) {
+    origem = destino
+  }
+
+  if (
+    origem &&
+    destino &&
+    normalizeCursoKey(origem) === normalizeCursoKey(destino)
+  ) {
+    origem = destino
+  }
+
+  if (!destino || !isValidTransferenciaCursoLabel(destino)) return null
+  if (!origem || !isValidTransferenciaCursoLabel(origem)) origem = destino
   return { origem, destino, semestre }
 }
 
@@ -302,7 +463,12 @@ export async function tryHandleTransferenciaDadosPendentes(env, ctx = {}) {
   if (!telefone || !userMessage) return null
 
   const lastAssist = lastAssistantText(historyMessages)
-  if (!assistantAskedTransferenciaDadosPendentes(lastAssist)) return null
+  if (
+    !assistantAskedTransferenciaDadosPendentes(lastAssist) &&
+    !assistantAskedTransferenciaCursoOrigem(lastAssist)
+  ) {
+    return null
+  }
 
   const context = extractTransferenciaContext([
     ...historyMessages,
@@ -366,21 +532,34 @@ export async function tryHandleTransferenciaCursoRestate(env, ctx = {}) {
   if (!telefone || !userMessage) return null
   if (!conversationMentionsTransferencia(historyMessages)) return null
 
+  const lastAssist = lastAssistantText(historyMessages)
+  const inTransferStep =
+    assistantAskedTransferenciaDadosPendentes(lastAssist) ||
+    assistantAskedTransferenciaCursoOrigem(lastAssist)
+  if (!inTransferStep && !messageRestatesSameCourseAsDestino(userMessage, null)) return null
+
+  const context = extractTransferenciaContext(historyMessages)
   const destinoMsg =
     extractCursoAreaFromText(userMessage) ||
     cleanCursoLabel(
       String(userMessage || '')
         .replace(/^(bacharelado|licenciatura|tecn[oó]logo)\s+(em\s+)?/i, '')
+        .replace(/^(s[oó]|somente|apenas)\s+(?:a|o)?\s*/i, '')
+        .replace(/\s+mesmo$/i, '')
         .trim(),
     )
-  if (!destinoMsg || destinoMsg.length < 4) return null
 
-  const context = extractTransferenciaContext(historyMessages)
-  if (!context?.origem || !context?.semestre) return null
+  if (!context?.semestre) return null
+  if (!context?.origem && !destinoMsg && !messageRestatesSameCourseAsDestino(userMessage, context?.destino)) {
+    return null
+  }
 
-  const destino = context.destino || destinoMsg
+  const destino = context?.destino || destinoMsg
+  const origem = context?.origem || destino
+  if (!destino || !origem || !isValidTransferenciaCursoLabel(destino)) return null
+
   console.log(
-    `[${executionId}] TRANSFERENCIA_CURSO_RESTATE origem="${context.origem}" destino="${destino}" semestre=${context.semestre}`,
+    `[${executionId}] TRANSFERENCIA_CURSO_RESTATE origem="${origem}" destino="${destino}" semestre=${context.semestre}`,
   )
 
   return runTransferenciaComplete(
@@ -388,7 +567,7 @@ export async function tryHandleTransferenciaCursoRestate(env, ctx = {}) {
     ctx,
     {
       telefone,
-      curso_origem: context.origem,
+      curso_origem: origem,
       semestre_concluido: context.semestre,
       curso_desejado: destino,
     },

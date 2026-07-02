@@ -248,11 +248,19 @@ export async function resolveTransferenciaCursoCodigo(env, input) {
   const raw = String(input || '').trim()
   if (!raw) return null
   const cursos = await fetchCursosV2(env)
-  // Já é um código (ex.: SISINF_EAD)
-  if (/^[A-Z0-9]+_EAD$/i.test(raw)) {
+  // Já é um código (ex.: SISINF_EAD, PED_SEMI)
+  if (/^[A-Z0-9]+_(?:EAD|SEMI)$/i.test(raw)) {
     const up = raw.toUpperCase()
     const hit = cursos.find((c) => c.curso.toUpperCase() === up)
-    return hit ? { codigo: hit.curso, descricao: hit.descricao } : { codigo: up, descricao: up }
+    if (hit) return { codigo: hit.curso, descricao: hit.descricao }
+    const ofertaCodigo = await resolveCursoOfertaFromDb(up, env)
+    if (ofertaCodigo?.codigo) {
+      return {
+        codigo: ofertaCodigo.codigo,
+        descricao: ofertaCodigo.descricao || ofertaCodigo.nome || up,
+      }
+    }
+    return { codigo: up, descricao: up }
   }
   const aliasCode = resolveTransferenciaAlias(raw)
   if (aliasCode) {
@@ -279,7 +287,24 @@ export async function resolveTransferenciaCursoCodigo(env, input) {
       }
     }
   }
-  return m ? { codigo: m.curso, descricao: m.descricao } : null
+  if (m) return { codigo: m.curso, descricao: m.descricao }
+
+  const oferta = await resolveCursoOfertaFromDb(raw, env)
+  if (oferta?.codigo) {
+    return {
+      codigo: oferta.codigo,
+      descricao: oferta.descricao || oferta.nome || raw,
+    }
+  }
+  const syncCode = resolveCursoCodigo(raw, env)
+  if (syncCode) {
+    const ofertaSync = await resolveCursoOfertaFromDb(syncCode, env)
+    return {
+      codigo: syncCode,
+      descricao: ofertaSync?.descricao || ofertaSync?.nome || raw,
+    }
+  }
+  return null
 }
 
 /** Parâmetros que a API exige na query mesmo vazios (espelha workflow n8n). */

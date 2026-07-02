@@ -15,6 +15,7 @@ import {
   messageLooksLikePosMatriculaFollowUp,
 } from '../libShared/inscricaoFormHeuristics.js'
 import { messageIsInboundMediaPlaceholder } from '../libShared/scopeHeuristics.js'
+import { conversationMentionsTransferencia } from './inscricaoTransferenciaFlow.js'
 import {
   fetchDadosClienteByTelefone,
   updateDadosCliente,
@@ -125,6 +126,16 @@ export async function tryHandleMatriculaAceitePagamentoFlow(env, input) {
   }
 
   if (status !== INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE) return null
+
+  const historyMessages = input.historyMessages || []
+  if (
+    conversationMentionsTransferencia(historyMessages) &&
+    !messageAsksContratoLinkResend(userMessage) &&
+    !messageLooksLikePaymentProof(userMessage) &&
+    !messageIsInboundMediaPlaceholder(userMessage)
+  ) {
+    return null
+  }
 
   const idLead =
     (Number.isFinite(Number(leadIdHint)) && Number(leadIdHint) > 0 ? Number(leadIdHint) : null) ||

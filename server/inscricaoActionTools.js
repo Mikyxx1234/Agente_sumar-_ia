@@ -43,7 +43,7 @@ import {
   fetchDadosClienteByTelefone,
   getLeadIdByTelefone,
 } from './dadosClienteStore.js'
-import { findLeadByPhone } from './kommoClient.js'
+import { findLeadByPhone, createLeadAuditNote } from './kommoClient.js'
 import { resolveTransferenciaCursoCodigo, suggestSimilarTransferenciaCursos } from './sumareCaptacaoClient.js'
 import { deliverInscricaoForm } from './inscricaoFormFlow.js'
 import { executeCaptacaoAfterFormResolved } from './inscricaoPostFormPipeline.js'
@@ -331,6 +331,79 @@ export async function runEnviarFormSumarInscricao(env, args = {}, ctx = {}) {
 }
 
 /**
+ * Formulário/captação já existem — reprocessa API Captação como Transferencia_Ext.
+ */
+async function runTransferenciaRecaptacaoPosForm(
+  env,
+  ctx,
+  { origemDesc, destinoDesc, semestre, origemCodigo, destinoCodigo },
+) {
+  const telefone = String(ctx.telefone || '').trim()
+  const leadId = await resolveLeadId(env, telefone, ctx.leadId)
+  const executionId = ctx.executionId || `transferencia-${Date.now()}`
+  const pushName = ctx.pushName
+
+  const cap = await executeCaptacaoAfterFormResolved(env, {
+    telefone,
+    idLead: leadId,
+    executionId,
+    pushName,
+    confirmedNovaInscricao: true,
+  })
+
+  const nameBit = pushName ? `, ${String(pushName).split(/\s+/)[0]}` : ''
+  const semestreBit = semestre ? ` (último semestre concluído: ${semestre})` : ''
+  const origemBit = origemDesc || 'seu curso anterior'
+  const destinoBit = destinoDesc || 'o curso desejado'
+
+  let replyOverride =
+    `Perfeito${nameBit}! Registramos sua *transferência externa* de ${origemBit}${semestreBit} ` +
+    `para ${destinoBit} na Faculdade Sumaré. Nossa equipe acadêmica vai analisar o aproveitamento de disciplinas.\n\n`
+
+  if (cap.ok && cap.reply) {
+    replyOverride += cap.reply
+  } else if (cap.code === 'NEEDS_CONFIRM_NOVA_INSCRICAO' && cap.reply) {
+    replyOverride += cap.reply
+  } else {
+    replyOverride +=
+      'Em instantes enviamos por aqui o link atualizado para conclusão da matrícula. Qualquer dúvida, estamos à disposição.'
+  }
+
+  if (leadId) {
+    await createLeadAuditNote(
+      env,
+      leadId,
+      `Transferência externa registrada: ${origemCodigo || origemBit} → ${destinoCodigo || destinoBit}, ` +
+        `semestre ${semestre || 'n/a'}. Captação reprocessada como Transferencia_Ext.`,
+    ).catch(() => {})
+  }
+
+  return {
+    ok: Boolean(cap.ok),
+    code: cap.ok ? 'TRANSFERENCIA_RECAPTACAO_OK' : cap.code || 'TRANSFERENCIA_RECAPTACAO_FAIL',
+    text: 'Transferência registrada; captação reprocessada.',
+    replyOverride,
+    ctxSnapshot: {
+      inscricaoActionTool: 'registrar_transferencia',
+      inscricaoForm: cap.ctxForm || INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
+      transferenciaRecaptacao: true,
+      transferenciaOrigem: origemCodigo,
+      transferenciaDestino: destinoCodigo,
+      transferenciaSemestre: semestre,
+    },
+    steps: [
+      {
+        type: 'tool_action',
+        tool: 'registrar_transferencia',
+        ok: Boolean(cap.ok),
+        code: 'TRANSFERENCIA_RECAPTACAO',
+      },
+      ...(cap.steps || []),
+    ],
+  }
+}
+
+/**
  * Tool: `registrar_transferencia`.
  * Ingresso por transferência externa / aproveitamento de matérias: grava os 3
  * campos extras (curso de origem, semestre concluído, curso desejado) e segue
@@ -414,6 +487,17 @@ export async function runRegistrarTransferencia(env, args = {}, ctx = {}) {
       transferencia_curso_destino: destino.codigo,
     },
   }).catch(() => {})
+
+  const guardRow = await fetchDadosClienteByTelefone(env, telefone, DADOS_CLIENTE_FORM_GUARD_SELECT)
+  if (shouldBlockFormularioSumResend(guardRow)) {
+    return runTransferenciaRecaptacaoPosForm(env, ctx, {
+      origemDesc: origem.descricao,
+      destinoDesc: destino.descricao,
+      semestre: semestre || semestreRaw,
+      origemCodigo: origem.codigo,
+      destinoCodigo: destino.codigo,
+    })
+  }
 
   // Mesmo fluxo do vestibular: pede polo (se preciso), gate de matrícula e Form Sumar.
   // O pós-formulário lê as colunas de transferência e gera com Transferencia_Ext.
