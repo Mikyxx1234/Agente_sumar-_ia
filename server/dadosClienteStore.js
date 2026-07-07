@@ -93,7 +93,15 @@ export function decideHoldOnIaPause(row) {
   if (status === 'aguardando_form_sumar' && !captacaoStarted) {
     return { hold: false, paused: true, reason: 'spurious_form_pause', clearPause: true }
   }
-  if (status === 'aguardando_aceite_contrato' || captacaoStarted) {
+  // Fila inscrição pós-link: tryHandleMatriculaAceitePagamentoFlow responde reenvio de
+  // link, comprovante e dúvidas — o scheduler DEVE drenar o buffer (hold=false).
+  if (status === 'aguardando_aceite_contrato') {
+    return { hold: false, paused: true, reason: 'matricula_aceite_pagamento' }
+  }
+  if (status === 'comprovante_pagamento_recebido') {
+    return { hold: false, paused: true, reason: 'comprovante_pos_matricula' }
+  }
+  if (captacaoStarted) {
     return { hold: true, paused: true, reason: 'aguardando_aceite_ou_captacao' }
   }
   return { hold: true, paused: true, reason: null }

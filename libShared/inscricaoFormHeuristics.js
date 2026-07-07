@@ -672,7 +672,7 @@ export function messageLooksLikePosMatriculaFollowUp(text) {
   const t = normalizeMessageForScope(text).toLowerCase()
   if (!t || t.length < 3) return false
   return (
-    /\b(s[oó]\s+esperar|aguardar|e\s+agora|como\s+(vai\s+)?seguir|pr[oó]ximo\s+passo)\b/i.test(t) ||
+    /\b(s[oó]\s+esperar|aguardar|e\s+agora|como\s+(vai\s+)?seguir|pr[oó]xim(os|as?)?\s+passos?)\b/i.test(t) ||
     /\b(come[çc]ar|iniciar|in[ií]cio)\b[\s\S]{0,35}\b(mat[eé]ria|curso|aula)\b/i.test(t) ||
     /\b(quando|j[aá])\b[\s\S]{0,45}\b(come[çc]o|matr[ií]cula|acesso|e-mail|email)\b/i.test(t) ||
     /\b(primeiro\s+acesso|dados\s+de\s+acesso|finaliz\w*\s+matr[ií]cula)\b/i.test(t)

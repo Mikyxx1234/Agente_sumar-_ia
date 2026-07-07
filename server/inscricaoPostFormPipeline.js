@@ -537,12 +537,9 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
   }
 
   if (ctxForm === INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE) {
-    // Após enviar o link, IA generativa fica em pausa. tryHandleMatriculaAceitePagamentoFlow
-    // roda ANTES do gate ia_paused (agentRunner), garantindo:
-    //   - reenvio canônico do link se o lead pedir
-    //   - recebimento e validação do comprovante de pagamento
-    // Qualquer outra mensagem é ignorada — candidato lê o contrato, aceita e paga
-    // pelo portal Sumaré; só volta IA quando consultor liberar.
+    // Após enviar o link, IA generativa fica em pausa operacional, mas o scheduler
+    // continua drenando o buffer (decideHoldOnIaPause hold=false). tryHandleMatriculaAceitePagamentoFlow
+    // responde reenvio de link, comprovante e dúvidas sobre próximos passos.
     await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE).catch(() => {})
     const pauseRes = await pauseAtendimentoIa(env, telefone)
     steps.unshift({ type: 'ia_paused', ok: pauseRes.ok, reason: 'aguardando_aceite_contrato' })

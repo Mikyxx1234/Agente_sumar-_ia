@@ -88,7 +88,7 @@ import {
   messageSignalsFormSubmissionAck,
   historyIndicatesFormSumarCompleted,
 } from '../../libShared/inscricaoFormHeuristics.js'
-import { fetchDadosClienteByTelefone } from '../dadosClienteStore.js'
+import { decideHoldOnIaPause, fetchDadosClienteByTelefone } from '../dadosClienteStore.js'
 import { tryHandleGradePdfRequest } from '../gradeCurricularActionTools.js'
 import { DADOS_CLIENTE_INSCRICAO_SELECT } from '../dadosClienteInscricaoFields.js'
 import { leadHasPostFormRegistradoNoteSinceLastFormSend } from '../postFormSendGuard.js'
@@ -123,7 +123,6 @@ import {
 import { messageAsksPriceUntilCourseEnd } from '../../libShared/priceDurationHeuristics.js'
 import { formatPoloListaNumerada } from '../../libShared/sumarePoloCatalog.js'
 import { userAsksCourseMoreDetails } from '../../libShared/courseMoreInfo.js'
-import { isAtendimentoIaPaused } from '../dadosClienteStore.js'
 import { validateReplyBeforeSend } from '../replyGuard.js'
 import { buildLgpdSystemHint } from '../../libShared/lgpdCompliance.js'
 import { autoSyncInscricaoStateFromReply } from '../inscricaoStateAutoSync.js'
@@ -445,21 +444,34 @@ export async function runAgent(env, input) {
   // apenas como rede de segurança para callers alternativos (playground/
   // server.js POST /api/agent/run) que invocam runAgent direto. Quando o
   // caller já checou (skipPauseCheck:true), evitamos round-trip a Supabase.
-  if (telefone && !input?.skipPauseCheck && (await isAtendimentoIaPaused(env, telefone))) {
-    console.log(`[${executionId}] IA pausada (atendimento_ia=pause) telefone=${telefone}`)
-    return {
-      ok: true,
-      reply: null,
-      iaPaused: true,
-      skipped: true,
-      toolCalls: [],
-      orchestratorSteps: [{ type: 'ia_paused', durationMs: Date.now() - t0 }],
-      ctxSnapshot: { iaPaused: true },
-      usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-      durationMs: Date.now() - t0,
-      executionId,
-      model,
-      aiMeta: ctx.toAiMeta(),
+  if (telefone && !input?.skipPauseCheck) {
+    const pauseRow = await fetchDadosClienteByTelefone(
+      env,
+      telefone,
+      'atendimento_ia,inscricao_form_status,inscricao_form_recebido_at,captacao_candidato_id,captacao_contrato_link,captacao_contrato_link_at',
+    )
+    const pauseDecision = decideHoldOnIaPause(pauseRow)
+    if (pauseDecision.hold) {
+      console.log(`[${executionId}] IA pausada (atendimento_ia=pause) telefone=${telefone}`)
+      return {
+        ok: true,
+        reply: null,
+        iaPaused: true,
+        skipped: true,
+        toolCalls: [],
+        orchestratorSteps: [{ type: 'ia_paused', durationMs: Date.now() - t0 }],
+        ctxSnapshot: { iaPaused: true },
+        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        durationMs: Date.now() - t0,
+        executionId,
+        model,
+        aiMeta: ctx.toAiMeta(),
+      }
+    }
+    if (pauseDecision.paused && pauseDecision.reason) {
+      console.log(
+        `[${executionId}] ia_paused early_handler=${pauseDecision.reason} telefone=${telefone} — orquestrador liberado`,
+      )
     }
   }
 

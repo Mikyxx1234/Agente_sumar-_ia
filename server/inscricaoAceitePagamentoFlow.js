@@ -219,6 +219,27 @@ export async function tryHandleMatriculaAceitePagamentoFlow(env, input) {
         }),
       }
     }
+    if (
+      messageLooksLikePosMatriculaFollowUp(userMessage) ||
+      /\bpr[oó]xim(os|as?)?\s+passos?\b/i.test(sanitized) ||
+      /\b(o\s+que|como)\s+(fa[çc]o|prosseguir|continuar)\b/i.test(sanitized)
+    ) {
+      const portalPhase = /meiopagamento/i.test(contractUrl) ? 'pagamento' : 'contrato'
+      const reply = contractUrl
+        ? buildContratoLinkResendReply({ pushName, contractUrl, portalPhase })
+        : buildPagamentoSemComprovanteReply({ pushName, contractUrl })
+      return {
+        handled: true,
+        result: buildAgentReturn({
+          executionId,
+          model,
+          t0,
+          reply,
+          steps: [{ type: 'aceite_contrato_proximos_passos' }],
+          ctxSnapshot: { inscricaoForm: status, contractUrl: contractUrl || null },
+        }),
+      }
+    }
     return null
   }
 
