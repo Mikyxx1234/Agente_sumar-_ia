@@ -225,6 +225,39 @@ export function messageConfirmsFinalDesistencia(text) {
   return false
 }
 
+/**
+ * Lead com desistência já registrada voltou a demonstrar interesse em curso/inscrição.
+ * Reativa o atendimento em vez de repetir "desistência já foi registrada".
+ */
+export function messageExpressesRenewedInscricaoInterest(text) {
+  if (messageRevokesDesistencia(text)) return true
+  const t = normalizeMessageForScope(text).toLowerCase().trim()
+  if (!t || t.length < 4) return false
+
+  if (hasInteressePositivoNoNeg(t)) return true
+
+  if (
+    /\b(quero\s+saber|gostaria\s+de\s+saber|me\s+interesso|tenho\s+interesse|preciso\s+de\s+informa)/i.test(
+      t,
+    ) &&
+    /\b(curso|ead|gradua|p[oó]s|farm[aá]cia|valores?|pre[cç]o|mensalidade|complementar)\b/i.test(t)
+  ) {
+    return true
+  }
+
+  if (/\b(cursos?\s+ead|ead\b|todos?\s+(os\s+)?cursos?)\b/i.test(t)) return true
+  if (/\b(valores?|pre[cç]os?|mensalidades?)\b/i.test(t) && t.length <= 48) return true
+
+  if (
+    /\b(fa[cç]o|estudo|formad[oa]|sou\s+de)\b/i.test(t) &&
+    /\b(complementar|quero|gostaria|curso|ead|p[oó]s)\b/i.test(t)
+  ) {
+    return true
+  }
+
+  return false
+}
+
 /** Lead voltou atrás — quer seguir com inscrição ou outro curso. */
 export function messageRevokesDesistencia(text) {
   const t = normalizeMessageForScope(text).toLowerCase()

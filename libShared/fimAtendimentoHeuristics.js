@@ -15,7 +15,10 @@ const POLITE_CLOSE_RE =
   /^\s*(muito\s+obrigad[oa]?|obrigad[oa]?|valeu|agrade[çc]o|brigad[ãa]o|obg)\s*[.!?]*\s*$/i
 
 const SOFT_DECLINE_RE =
-  /^\s*(n[aã]o,?\s+tranquil[oa]?|n[aã]o\s+tranquil[oa]?|sem\s+problema|de\s+boa|tudo\s+bem|t[aá]\s+bom|ok)\s*[.!?]*\s*$/i
+  /^\s*(n[aã]o,?\s+tranquil[oa]?|n[aã]o\s+tranquil[oa]?|sem\s+problema|de\s+boa|tudo\s+bem|t[aá]\s+bom)\s*[.!?]*\s*$/i
+
+/** "Ok" isolado costuma ser reconhecimento, não recusa de atendimento. */
+const ACK_ONLY_OK_RE = /^\s*ok\s*[.!?]*\s*$/i
 
 const EXPLICIT_END_RE =
   /\b(encerrar|finalizar|fechar)\s+(o\s+)?(atendimento|conversa|chat)\b/i
@@ -63,6 +66,14 @@ export function messageExpressesEndOfServiceRequest(text, historyMessages = []) 
   if (messageExpressesExplicitNoInterest(text)) return true
   if (EXPLICIT_END_RE.test(t)) return true
   if (/\bn[aã]o\s+preciso\s+de\s+mais\s+nada\b/i.test(t)) return true
+
+  if (ACK_ONLY_OK_RE.test(t)) {
+    return (
+      assistantRecentlyPushedEnrollment(historyMessages) &&
+      userRecentlyDeclinedOrClosed(historyMessages)
+    )
+  }
+
   if (SOFT_DECLINE_RE.test(t)) return true
 
   if (POLITE_CLOSE_RE.test(t)) {

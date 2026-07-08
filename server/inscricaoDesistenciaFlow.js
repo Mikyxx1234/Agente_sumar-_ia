@@ -24,6 +24,7 @@ import {
   messageExpressesEnrollmentDecline,
   buildConfirmDesistenciaReply,
   buildDesistenciaAgradecimentoReply,
+  messageExpressesRenewedInscricaoInterest,
 } from '../libShared/inscricaoDesistenciaHeuristics.js'
 import { lastAssistantText } from '../libShared/conversationContextHeuristics.js'
 import { filterHistoryMessagesForAgent } from '../libShared/historySanitize.js'
@@ -94,6 +95,32 @@ async function setStatus(env, telefone, status, leadIdHint) {
     fields: { [FORM_STATUS_FIELD]: status },
   }).catch(() => {})
   return updateDadosCliente(env, { telefone, fields: { [FORM_STATUS_FIELD]: status } })
+}
+
+async function revokeDesistenciaForRenewedInterest(env, { telefone, userMessage, leadIdHint }) {
+  if (!messageExpressesRenewedInscricaoInterest(userMessage)) return false
+
+  await ensureDadosClienteRow(env, {
+    telefone,
+    idLead: leadIdHint,
+    fields: {
+      [FORM_STATUS_FIELD]: null,
+      atendimento_ia: null,
+    },
+  }).catch(() => {})
+  await updateDadosCliente(env, {
+    telefone,
+    fields: {
+      [FORM_STATUS_FIELD]: null,
+      atendimento_ia: null,
+    },
+  }).catch(() => {})
+
+  console.log(
+    `[inscricaoDesistencia] REVOKE interesse_renovado telefone=${telefone} lead=${leadIdHint ?? 'n/a'} ` +
+      `msg="${String(userMessage || '').slice(0, 100).replace(/\n/g, ' ')}"`,
+  )
+  return true
 }
 
 /** Após revogar desistência: volta p/ aceite do contrato se captação já existia. */
@@ -208,6 +235,11 @@ export async function tryHandleDesistenciaJaRegistrada(env, input) {
   const status = row?.[FORM_STATUS_FIELD] ?? null
   if (status !== INSCRICAO_FORM_STATUS_DESISTENCIA_CONCLUIDA) return null
 
+  const leadIdHint = input.leadId
+  if (await revokeDesistenciaForRenewedInterest(env, { telefone, userMessage, leadIdHint })) {
+    return null
+  }
+
   return {
     handled: true,
     result: buildAgentReturn({
@@ -260,6 +292,9 @@ export async function tryHandleInscricaoDesistenciaFlow(env, input) {
   const status = row?.[FORM_STATUS_FIELD] ?? null
 
   if (status === INSCRICAO_FORM_STATUS_DESISTENCIA_CONCLUIDA) {
+    if (await revokeDesistenciaForRenewedInterest(env, { telefone, userMessage, leadIdHint })) {
+      return null
+    }
     return {
       handled: true,
       result: buildAgentReturn({

@@ -1024,6 +1024,35 @@ section('17 — anti-alucinação polo/matrícula (regressão)')
   assert(gate.proceed === true, '17.7 gate libera quando msg é polo')
 }
 
+section('18 — desistência falsa / reativação de interesse')
+{
+  const { messageExpressesEndOfServiceRequest } = await import('../libShared/fimAtendimentoHeuristics.js')
+  const {
+    messageExpressesRenewedInscricaoInterest,
+  } = await import('../libShared/inscricaoDesistenciaHeuristics.js')
+
+  const histCurso = [
+    { role: 'assistant', content: 'Temos vários cursos EAD na Sumaré. Quer que eu te ajude com a matrícula?' },
+  ]
+
+  assert(
+    !messageExpressesEndOfServiceRequest('Ok', histCurso),
+    '18.1 "Ok" isolado não encerra atendimento',
+  )
+  assert(
+    messageExpressesRenewedInscricaoInterest('Quero saber os cursos ead'),
+    '18.2 pergunta EAD reativa interesse',
+  )
+  assert(
+    messageExpressesRenewedInscricaoInterest('Faço farmácia queria algo para complementar'),
+    '18.3 complementar farmácia reativa interesse',
+  )
+  assert(
+    !messageExpressesRenewedInscricaoInterest('obrigada'),
+    '18.4 agradecimento curto não reativa',
+  )
+}
+
 /* ────────────────────────────────────────────────────────────────────────── */
 /* Resumo                                                                     */
 /* ────────────────────────────────────────────────────────────────────────── */
