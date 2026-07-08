@@ -37,6 +37,7 @@ import {
   buildPoloConfirmacaoInvalidaReply,
   matchPoloFromUserMessage,
   resolvePoloFromKommoSnapshot,
+  extractPoloFromConversationHistory,
 } from '../libShared/sumarePoloCatalog.js'
 import {
   ensureDadosClienteRow,
@@ -50,6 +51,7 @@ import { executeCaptacaoAfterFormResolved } from './inscricaoPostFormPipeline.js
 import { fetchLeadFormSnapshot } from './inscricaoKommoFields.js'
 import { DADOS_CLIENTE_FORM_GUARD_SELECT } from './dadosClienteInscricaoFields.js'
 import { gateMatriculaConfirmacaoBeforeForm } from './inscricaoMatriculaConfirmFlow.js'
+import { syncSumPoloOnLeadQuiet } from './sumareLeadFields.js'
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
 
@@ -76,7 +78,7 @@ async function resolveLeadId(env, telefone, hint) {
  * Resolve polo já gravado em Supabase ou no card Kommo (não força fallback).
  * @returns {{ poloNome: string, unidade: string, source: string } | null}
  */
-async function resolveExistingPolo(env, { telefone, leadId }) {
+async function resolveExistingPolo(env, { telefone, leadId, historyMessages = [] }) {
   const row = await fetchDadosClienteByTelefone(
     env,
     telefone,
@@ -84,7 +86,22 @@ async function resolveExistingPolo(env, { telefone, leadId }) {
   )
   const poloNome = String(row?.polo_inscricao_escolhido || '').trim()
   const unidade = String(row?.captacao_unidade || '').trim()
-  if (poloNome && unidade) return { poloNome, unidade, source: 'supabase' }
+  if (poloNome) {
+    const matched = matchPoloFromUserMessage(poloNome)
+    return {
+      poloNome: matched?.nome || poloNome,
+      unidade: unidade || (matched ? resolvePoloUnidadeCode(matched.id, env) : ''),
+      source: 'supabase',
+    }
+  }
+  const fromHistory = extractPoloFromConversationHistory(historyMessages)
+  if (fromHistory) {
+    return {
+      poloNome: fromHistory.nome,
+      unidade: resolvePoloUnidadeCode(fromHistory.id, env),
+      source: 'history',
+    }
+  }
   if (leadId != null) {
     const snap = await fetchLeadFormSnapshot(env, leadId).catch(() => ({ ok: false }))
     if (snap.ok && snap.snapshot) {
@@ -98,7 +115,7 @@ async function resolveExistingPolo(env, { telefone, leadId }) {
 }
 
 async function gravarPoloEStatusAguardando(env, { telefone, leadId, polo, unidade }) {
-  return ensureDadosClienteRow(env, {
+  const row = await ensureDadosClienteRow(env, {
     telefone,
     idLead: leadId,
     fields: {
@@ -107,6 +124,8 @@ async function gravarPoloEStatusAguardando(env, { telefone, leadId, polo, unidad
       [FORM_STATUS_FIELD]: INSCRICAO_FORM_STATUS_AGUARDANDO,
     },
   })
+  await syncSumPoloOnLeadQuiet(env, { leadId, telefone, poloNome: polo.nome })
+  return row
 }
 
 async function gravarStatus(env, { telefone, leadId, status }) {
@@ -181,7 +200,11 @@ export async function runEnviarFormSumarInscricao(env, args = {}, ctx = {}) {
     polo = entry
     unidade = resolvePoloUnidadeCode(polo.id, env)
   } else {
-    const existing = await resolveExistingPolo(env, { telefone, leadId })
+    const existing = await resolveExistingPolo(env, {
+      telefone,
+      leadId,
+      historyMessages: ctx.historyMessages || [],
+    })
     if (existing) {
       const matched = matchPoloFromUserMessage(existing.poloNome)
       polo = matched || { id: 'supabase', nome: existing.poloNome, endereco: '' }
@@ -218,6 +241,7 @@ export async function runEnviarFormSumarInscricao(env, args = {}, ctx = {}) {
       captacao_unidade: unidade,
     },
   }).catch(() => {})
+  await syncSumPoloOnLeadQuiet(env, { leadId, telefone, poloNome: polo.nome })
 
   const matriculaGate = await gateMatriculaConfirmacaoBeforeForm(env, {
     telefone,
@@ -569,6 +593,7 @@ export async function runRegistrarPoloInscricao(env, args = {}, ctx = {}) {
       captacao_unidade: unidade,
     },
   }).catch(() => {})
+  await syncSumPoloOnLeadQuiet(env, { leadId, telefone, poloNome: polo.nome })
 
   // Transferência: o polo chega em um turno separado do registrar_transferencia,
   // então o curso desejado (destino) não está na conversa deste turno — e o lead

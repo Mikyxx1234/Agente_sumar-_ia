@@ -967,6 +967,63 @@ section('16 — confirmação de matrícula antes do formulário')
   }
 }
 
+section('17 — anti-alucinação polo/matrícula (regressão)')
+{
+  const {
+    conversationAlreadyAuthorizedMatricula,
+    messageConfirmsProceedToInscricaoForm,
+    MATRICULA_GATE_SKIP_RESUMO_STATUSES,
+    INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM,
+    INSCRICAO_FORM_STATUS_AGUARDANDO,
+  } = await import('../libShared/inscricaoFormHeuristics.js')
+  const {
+    userMessageLooksLikePoloChoice,
+    extractPoloFromConversationHistory,
+    buildPoloEscolhaPreFormMessage,
+  } = await import('../libShared/sumarePoloCatalog.js')
+  const { gateMatriculaConfirmacaoBeforeForm } = await import('../server/inscricaoMatriculaConfirmFlow.js')
+
+  const resumoAssist =
+    'Perfeito! Então, ficou assim:\n- Você irá ingressar no curso de "ADS"\nVocê autoriza a conclusão da matrícula?'
+  const histAuth = [
+    { role: 'assistant', content: resumoAssist },
+    { role: 'user', content: 'Sim' },
+  ]
+  assert(conversationAlreadyAuthorizedMatricula(histAuth), '17.1 histórico com sim após resumo')
+  assert(!messageConfirmsProceedToInscricaoForm('1', histAuth), '17.2 "1" não é confirmação de matrícula')
+  assert(userMessageLooksLikePoloChoice('1'), '17.3 "1" é escolha de polo')
+  assert(
+    MATRICULA_GATE_SKIP_RESUMO_STATUSES.has(INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM),
+    '17.4 polo pre-form no skip set',
+  )
+  assert(
+    MATRICULA_GATE_SKIP_RESUMO_STATUSES.has(INSCRICAO_FORM_STATUS_AGUARDANDO),
+    '17.5 form aguardando no skip set',
+  )
+
+  const poloHist = [
+    { role: 'assistant', content: buildPoloEscolhaPreFormMessage({ pushName: 'Ana' }) },
+    { role: 'user', content: 'Tatuapé' },
+  ]
+  const extracted = extractPoloFromConversationHistory(poloHist)
+  assert(extracted?.id === 'tatuape', '17.6 extrai polo do histórico')
+
+  const gate = await gateMatriculaConfirmacaoBeforeForm(
+    { SUPABASE_URL: '', SUPABASE_KEY: '' },
+    {
+      telefone: '5511999999999',
+      userMessage: '1',
+      historyMessages: poloHist,
+      leadId: 1,
+      executionId: 'test',
+      model: 'test',
+      pushName: 'Ana',
+      t0: Date.now(),
+    },
+  )
+  assert(gate.proceed === true, '17.7 gate libera quando msg é polo')
+}
+
 /* ────────────────────────────────────────────────────────────────────────── */
 /* Resumo                                                                     */
 /* ────────────────────────────────────────────────────────────────────────── */

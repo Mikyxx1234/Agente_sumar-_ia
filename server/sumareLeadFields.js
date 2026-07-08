@@ -1,5 +1,5 @@
 /**
- * Escreve campos da aba "Sumaré" do lead no Kommo (sum_Curso, etc.).
+ * Escreve campos da aba "Sumaré" do lead no Kommo (sum_Curso, sum_Polo, etc.).
  *
  * Descoberta dinâmica do field_id por nome (cache 5 min). Pode ser
  * sobrescrita por env (KOMMO_FIELD_SUM_CURSO_ID).
@@ -21,6 +21,17 @@ const SUM_CURSO_ALIASES = [
   'curso sumaré',
 ]
 
+const SUM_POLO_ALIASES = [
+  'sum_polo',
+  'sum_Polo',
+  'sumpolo',
+  'sum polo',
+  'polo inscrição',
+  'polo da inscrição',
+  'polo_inscricao',
+  'polo da inscricao',
+]
+
 const SUM_MOTIVO_PERDA_ALIASES = [
   'sum_motivo da perda',
   'sum_motivo da perdida',
@@ -39,6 +50,8 @@ const LEAD_UPDATE_DEDUPE_TTL_MS = 6 * 60 * 60 * 1000
 const fieldCache = new Map()
 /** @type {Map<string, { curso: string, ts: number }>} */
 const recentUpdates = new Map()
+/** @type {Map<string, { polo: string, ts: number }>} */
+const recentPoloUpdates = new Map()
 
 function getFieldFromCache(kind) {
   const entry = fieldCache.get(kind)
@@ -73,6 +86,14 @@ async function resolveSumCursoFieldId(env) {
   if (cached) return cached
   const id = await resolveFieldIdByAliases(env, SUM_CURSO_ALIASES, 'KOMMO_FIELD_SUM_CURSO_ID')
   if (id) setFieldCache('sum_curso', id)
+  return id
+}
+
+async function resolveSumPoloFieldId(env) {
+  const cached = getFieldFromCache('sum_polo')
+  if (cached) return cached
+  const id = await resolveFieldIdByAliases(env, SUM_POLO_ALIASES, 'KOMMO_FIELD_SUM_POLO_ID')
+  if (id) setFieldCache('sum_polo', id)
   return id
 }
 
@@ -217,7 +238,7 @@ async function patchLeadCustomField(env, leadId, fieldId, value) {
   }
 }
 
-async function getCurrentSumCurso(env, leadId, fieldId) {
+async function getCurrentLeadCustomTextField(env, leadId, fieldId) {
   const base = (env.KOMMO_BASE_URL || '').replace(/\/$/, '')
   const token = env.KOMMO_ACCESS_TOKEN || ''
   if (!base || !token) return ''
@@ -232,6 +253,10 @@ async function getCurrentSumCurso(env, leadId, fieldId) {
   } catch {
     return ''
   }
+}
+
+async function getCurrentSumCurso(env, leadId, fieldId) {
+  return getCurrentLeadCustomTextField(env, leadId, fieldId)
 }
 
 async function resolveLeadIdInternal(env, { leadId, telefone }) {
@@ -280,4 +305,58 @@ export async function setSumCursoOnLead(env, { leadId, telefone, cursoNome }) {
     recentUpdates.set(dedupeKey, { curso, ts: Date.now() })
   }
   return { ...result, fieldId, leadId: idLead, curso, previous: current || null }
+}
+
+/**
+ * Grava o polo no campo sum_Polo do lead.
+ *
+ * @param {Record<string,string>} env
+ * @param {{ leadId?: number, telefone?: string, poloNome: string }} input
+ */
+export async function setSumPoloOnLead(env, { leadId, telefone, poloNome }) {
+  const polo = String(poloNome || '').trim()
+  if (!polo || polo.length < 2) return { ok: false, code: 'POLO_INVALIDO' }
+
+  const idLead = await resolveLeadIdInternal(env, { leadId, telefone })
+  if (!idLead) return { ok: false, code: 'LEAD_NOT_FOUND' }
+
+  const dedupeKey = `${idLead}`
+  const recent = recentPoloUpdates.get(dedupeKey)
+  if (recent && recent.polo.toLowerCase() === polo.toLowerCase() && Date.now() - recent.ts < LEAD_UPDATE_DEDUPE_TTL_MS) {
+    return { ok: true, skipped: true, reason: 'recente', polo, leadId: idLead }
+  }
+
+  const fieldId = await resolveSumPoloFieldId(env)
+  if (!fieldId) return { ok: false, code: 'FIELD_SUM_POLO_NOT_FOUND' }
+
+  const current = await getCurrentLeadCustomTextField(env, idLead, fieldId)
+  if (current && current.toLowerCase() === polo.toLowerCase()) {
+    recentPoloUpdates.set(dedupeKey, { polo, ts: Date.now() })
+    return { ok: true, skipped: true, reason: 'sem_mudanca', polo, leadId: idLead }
+  }
+
+  const result = await patchLeadCustomField(env, idLead, fieldId, polo)
+  if (result.ok) {
+    recentPoloUpdates.set(dedupeKey, { polo, ts: Date.now() })
+  }
+  return { ...result, fieldId, leadId: idLead, polo, previous: current || null }
+}
+
+/**
+ * Grava sum_Polo no Kommo sem interromper o fluxo de inscrição em caso de falha.
+ *
+ * @param {Record<string,string>} env
+ * @param {{ leadId?: number|null, telefone?: string, poloNome: string }} input
+ */
+export async function syncSumPoloOnLeadQuiet(env, { leadId, telefone, poloNome }) {
+  try {
+    const r = await setSumPoloOnLead(env, { leadId, telefone, poloNome })
+    if (!r.ok && !r.skipped) {
+      console.warn('[sumareLeadFields] setSumPoloOnLead:', r.code || r.status, r.body || r.error || '')
+    }
+    return r
+  } catch (err) {
+    console.warn('[sumareLeadFields] setSumPoloOnLead failed:', err.message)
+    return { ok: false, error: err.message }
+  }
 }

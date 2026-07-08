@@ -107,8 +107,39 @@ export function matchPoloFromUserMessage(text) {
   return null
 }
 
+/** Mensagem do lead é escolha de polo (número 1–5 ou nome), não confirmação de matrícula. */
+export function userMessageLooksLikePoloChoice(text) {
+  return Boolean(matchPoloFromUserMessage(text))
+}
+
 /**
- * Tenta resolver polo já preenchido no card Kommo (polo_inscricao / unidade).
+ * Extrai o último polo escolhido pelo lead no histórico (após pergunta de polo ou menção explícita).
+ * @param {Array<{role?: string, content?: string}>} historyMessages
+ * @returns {SumarePoloEntry|null}
+ */
+export function extractPoloFromConversationHistory(historyMessages = []) {
+  let askedPolo = false
+  let lastPolo = null
+  for (const m of historyMessages || []) {
+    const content = String(m?.content || '').trim()
+    if (!content) continue
+    const role = String(m?.role || '').toLowerCase()
+    if (role === 'assistant' || role === 'assistente') {
+      if (assistantAskedPoloPreFormChoice(content)) askedPolo = true
+      continue
+    }
+    if (role !== 'user' && role !== 'lead') continue
+    const polo = matchPoloFromUserMessage(content)
+    if (!polo) continue
+    if (askedPolo || /\b(polo|unidade|barra|tatuap|santana|miguel|pinheiros|santo\s+amaro)\b/i.test(content)) {
+      lastPolo = polo
+    }
+  }
+  return lastPolo
+}
+
+/**
+ * Tenta resolver polo já gravado em Supabase ou no card Kommo (não força fallback).
  */
 export function resolvePoloFromKommoSnapshot(snapshot, env = process.env) {
   if (!snapshot || typeof snapshot !== 'object') return null

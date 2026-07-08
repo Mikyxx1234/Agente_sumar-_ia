@@ -8,7 +8,10 @@ import {
   INSCRICAO_FORM_STATUS_AGUARDANDO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_POLO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM,
+  INSCRICAO_FORM_STATUS_MATRICULA_AUTORIZADA,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_AUTORIZACAO,
   buildInscricaoFormSentReply,
+  conversationAlreadyAuthorizedMatricula,
   inscricaoFormAlreadyFilled,
 } from '../libShared/inscricaoFormHeuristics.js'
 import {
@@ -19,6 +22,7 @@ import {
   buildPoloOutroLocalidadeReply,
   messageMentionsUnlistedPoloLocation,
   assistantAskedPoloPreFormChoice,
+  extractPoloFromConversationHistory,
 } from '../libShared/sumarePoloCatalog.js'
 import { lastAssistantText } from '../libShared/inscricaoFormHeuristics.js'
 import { filterHistoryMessagesForAgent } from '../libShared/historySanitize.js'
@@ -35,6 +39,7 @@ import { deliverInscricaoForm } from './inscricaoFormFlow.js'
 import { gateMatriculaConfirmacaoBeforeForm } from './inscricaoMatriculaConfirmFlow.js'
 import { listLeadNotes } from './kommoClient.js'
 import { resolveTransferenciaCursoCodigo } from './sumareCaptacaoClient.js'
+import { syncSumPoloOnLeadQuiet } from './sumareLeadFields.js'
 
 /**
  * Transferência: o curso que o lead vai cursar na Sumaré (destino) fica em
@@ -126,6 +131,60 @@ export async function tryHandlePoloPreFormFlow(env, input) {
     )
     return null
   }
+
+  const persistedPoloNome = String(row?.polo_inscricao_escolhido || '').trim()
+  const persistedUnidade = String(row?.captacao_unidade || '').trim()
+  const historyPolo = extractPoloFromConversationHistory(historyMessages)
+  const idLeadEarly = await resolveLeadId(env, telefone, leadIdHint)
+
+  // Polo já informado (Supabase ou histórico) — não reperguntar; segue para o formulário.
+  if (
+    !matchPoloFromUserMessage(userMessage) &&
+    (persistedPoloNome || historyPolo) &&
+    status !== INSCRICAO_FORM_STATUS_AGUARDANDO
+  ) {
+    const polo = historyPolo || matchPoloFromUserMessage(persistedPoloNome)
+    if (polo) {
+      const unidade = persistedUnidade || resolvePoloUnidadeCode(polo.id, env)
+      await ensureDadosClienteRow(env, {
+        telefone,
+        idLead: idLeadEarly,
+        fields: {
+          polo_inscricao_escolhido: polo.nome,
+          captacao_unidade: unidade,
+          inscricao_form_status: INSCRICAO_FORM_STATUS_MATRICULA_AUTORIZADA,
+        },
+      }).catch(() => {})
+      await syncSumPoloOnLeadQuiet(env, { leadId: idLeadEarly, telefone, poloNome: polo.nome })
+      const delivery = await deliverInscricaoForm(env, {
+        telefone,
+        leadId: idLeadEarly,
+        executionId,
+        forceResend: false,
+      })
+      const sendOk = Boolean(delivery.result?.ok)
+      if (sendOk) {
+        return {
+          handled: true,
+          result: buildAgentReturn({
+            executionId,
+            model,
+            t0,
+            ok: true,
+            reply: buildInscricaoFormSentReply({ pushName }),
+            steps: [{ type: 'polo_pre_form_persistido', polo: polo.id, ok: true }],
+            ctxSnapshot: {
+              inscricaoForm: INSCRICAO_FORM_STATUS_AGUARDANDO,
+              poloId: polo.id,
+              poloNome: polo.nome,
+              unidade,
+            },
+          }),
+        }
+      }
+    }
+  }
+
   let inPoloChoiceStep =
     status === INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM || assistantAskedPoloPreFormChoice(lastAssist)
 
@@ -184,6 +243,7 @@ export async function tryHandlePoloPreFormFlow(env, input) {
       captacao_unidade: unidade,
     },
   }).catch(() => {})
+  await syncSumPoloOnLeadQuiet(env, { leadId: idLead, telefone, poloNome: polo.nome })
 
   const cursoHint = await resolveTransferenciaCursoHint(env, telefone)
   const matriculaGate = await gateMatriculaConfirmacaoBeforeForm(env, {
@@ -198,9 +258,19 @@ export async function tryHandlePoloPreFormFlow(env, input) {
     t0,
   })
   if (!matriculaGate.proceed) {
-    if (matriculaGate.handled) {
-      console.log(
-        `[inscricaoPolo] pre_form polo=${polo.id} lead=${idLead ?? 'n/a'} MATRICULA_RESUMO antes do form`,
+    const alreadyAuthorized =
+      conversationAlreadyAuthorizedMatricula(historyMessages) ||
+      status === INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM ||
+      status === INSCRICAO_FORM_STATUS_AGUARDANDO_AUTORIZACAO
+    if (alreadyAuthorized) {
+      await updateDadosCliente(env, {
+        telefone,
+        fields: { [FORM_STATUS_FIELD]: INSCRICAO_FORM_STATUS_MATRICULA_AUTORIZADA },
+      }).catch(() => {})
+    } else if (matriculaGate.handled) {
+      console.warn(
+        `[inscricaoPolo] pre_form polo=${polo.id} lead=${idLead ?? 'n/a'} bloqueado por resumo — ` +
+          `histórico sem autorização explícita`,
       )
       return {
         handled: true,
@@ -214,8 +284,9 @@ export async function tryHandlePoloPreFormFlow(env, input) {
           },
         },
       }
+    } else {
+      return null
     }
-    return null
   }
 
   await updateDadosCliente(env, {
@@ -313,6 +384,7 @@ export async function tryHandlePoloEscolhaFlow(env, input) {
       captacao_unidade: unidade,
     },
   }).catch(() => {})
+  await syncSumPoloOnLeadQuiet(env, { leadId: idLead, telefone, poloNome: polo.nome })
 
   const snapRes = idLead ? await fetchLeadFormSnapshot(env, idLead) : { ok: false }
   const snapshot = snapRes.ok ? { ...snapRes.snapshot } : {}

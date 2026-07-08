@@ -80,6 +80,7 @@ import {
   INSCRICAO_FORM_STATUS_AGUARDANDO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM,
   matriculaPosFormAlreadyProcessed,
   inscricaoFormAlreadyFilled,
   messageConfirmsProceedToInscricaoForm,
@@ -87,6 +88,7 @@ import {
   assistantInEnrollmentStep,
   messageSignalsFormSubmissionAck,
   historyIndicatesFormSumarCompleted,
+  conversationAlreadyAuthorizedMatricula,
 } from '../../libShared/inscricaoFormHeuristics.js'
 import { decideHoldOnIaPause, fetchDadosClienteByTelefone } from '../dadosClienteStore.js'
 import { tryHandleGradePdfRequest } from '../gradeCurricularActionTools.js'
@@ -121,7 +123,7 @@ import {
   messageAsksAcademicAffairsSupport,
 } from '../../libShared/academicAffairsHeuristics.js'
 import { messageAsksPriceUntilCourseEnd } from '../../libShared/priceDurationHeuristics.js'
-import { formatPoloListaNumerada } from '../../libShared/sumarePoloCatalog.js'
+import { formatPoloListaNumerada, userMessageLooksLikePoloChoice } from '../../libShared/sumarePoloCatalog.js'
 import { userAsksCourseMoreDetails } from '../../libShared/courseMoreInfo.js'
 import { validateReplyBeforeSend } from '../replyGuard.js'
 import { buildLgpdSystemHint } from '../../libShared/lgpdCompliance.js'
@@ -599,6 +601,36 @@ export async function runAgent(env, input) {
   }
 
   if (telefone) {
+    let earlyInscricaoStage = null
+    try {
+      const earlyRow = await fetchDadosClienteByTelefone(env, telefone, 'inscricao_form_status')
+      earlyInscricaoStage = earlyRow?.inscricao_form_status ?? null
+    } catch {
+      /* ignore */
+    }
+    const poloTurnPriority =
+      userMessageLooksLikePoloChoice(userMessage) ||
+      earlyInscricaoStage === INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM
+    if (poloTurnPriority) {
+      const poloEarly = await tryHandlePoloPreFormFlow(env, formFlowCtx)
+      if (poloEarly?.handled) {
+        console.log(
+          `[${executionId}] POLO_PRE_FORM_EARLY polo=${poloEarly.result?.ctxSnapshot?.poloId ?? 'n/a'} stage=${earlyInscricaoStage ?? 'n/a'}`,
+        )
+        return {
+          ...poloEarly.result,
+          historyLoaded: historyMessages.length,
+          aiMeta: ctx.toAiMeta(),
+        }
+      }
+    }
+  }
+
+  if (
+    telefone &&
+    !userMessageLooksLikePoloChoice(userMessage) &&
+    !conversationAlreadyAuthorizedMatricula(historyMessages)
+  ) {
     const resumoFlow = await tryHandleMatriculaResumoConfirmacao(env, formFlowCtx)
     if (resumoFlow?.handled) {
       console.log(
@@ -1213,7 +1245,10 @@ export async function runAgent(env, input) {
     enrollmentContinuation &&
     !messageAsksCoursePrice(userMessage) &&
     !transferenciaCtx &&
-    !conversationMentionsTransferencia(historyMessages)
+    !conversationMentionsTransferencia(historyMessages) &&
+    !conversationAlreadyAuthorizedMatricula(historyMessages) &&
+    inscricaoStage !== INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM &&
+    !userMessageLooksLikePoloChoice(userMessage)
       ? inscricaoStage === INSCRICAO_FORM_STATUS_AGUARDANDO
         ? {
             role: 'system',
@@ -1263,7 +1298,39 @@ export async function runAgent(env, input) {
               : '') +
           'Se nenhuma tool se aplica, apenas conduza a conversa (explique cursos, peça polo, peça confirmação) — SEM narrar ações que não aconteceram.',
       }
-    : null
+      : null
+
+  const poloStageGuardHint =
+    inscricaoStage === INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM
+      ? {
+          role: 'system',
+          content:
+            'ESTADO aguardando_escolha_polo_pre_form: o lead JÁ autorizou a matrícula. ' +
+            'OBRIGATÓRIO: chame registrar_polo_inscricao quando responder 1–5 ou nome do polo. ' +
+            'PROIBIDO: reenviar resumo de matrícula, pedir autorização de novo, ou perguntar "você autoriza a conclusão da matrícula?".',
+        }
+      : inscricaoStageInfo?.poloNome
+        ? {
+            role: 'system',
+            content:
+              `POLO JÁ DEFINIDO (${inscricaoStageInfo.poloNome}): PROIBIDO perguntar polo novamente. ` +
+              'Siga o estágio atual da inscrição sem repetir etapas já concluídas.',
+          }
+        : null
+
+  const matriculaAuthGuardHint =
+    conversationAlreadyAuthorizedMatricula(historyMessages) &&
+    inscricaoStage !== INSCRICAO_FORM_STATUS_AGUARDANDO &&
+    inscricaoStage !== INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE &&
+    !inscricaoFormAlreadyFilled({ inscricao_form_status: inscricaoStage })
+      ? {
+          role: 'system',
+          content:
+            'MATRÍCULA JÁ AUTORIZADA no histórico (lead respondeu "sim" após o resumo). ' +
+            'PROIBIDO reenviar resumo de valores ou pedir autorização de matrícula novamente. ' +
+            'Siga para polo (se faltar) ou formulário conforme o estado atual.',
+        }
+      : null
 
   const priceQueryHint = messageAsksCoursePrice(userMessage)
     ? {
@@ -1450,6 +1517,8 @@ export async function runAgent(env, input) {
     ...(contextPreamble ? [{ role: 'system', content: contextPreamble }] : []),
     lgpdHint,
     ...(inscricaoToolsHint ? [inscricaoToolsHint] : []),
+    ...(poloStageGuardHint ? [poloStageGuardHint] : []),
+    ...(matriculaAuthGuardHint ? [matriculaAuthGuardHint] : []),
     ...(commercialHint ? [commercialHint] : []),
     ...(courseInterestHint ? [courseInterestHint] : []),
     ...(activeFlowHint ? [activeFlowHint] : []),

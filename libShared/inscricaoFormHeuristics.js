@@ -8,6 +8,10 @@ import {
 } from './inboundMessageSanitize.js'
 import { conversationHasActiveTopic } from './conversationContextHeuristics.js'
 import { extractCursoAreaFromText, messageIsBareCourseSelection } from './cursoConfirmation.js'
+import {
+  assistantAskedPoloPreFormChoice,
+  userMessageLooksLikePoloChoice,
+} from './sumarePoloCatalog.js'
 
 export const INSCRICAO_FORM_STATUS_AGUARDANDO = 'aguardando_form_sumar'
 /** Formulário recebido — salesbot de distribuição em andamento. */
@@ -220,8 +224,50 @@ export function assistantInEnrollmentStep(lastAssist) {
 export function isShortEnrollmentConfirmation(text) {
   const t = normalizeMessageForScope(text).toLowerCase().trim().replace(/[.!?]+$/, '')
   if (!t || t.length > 24) return false
-  return /^\s*(sim|s|ok|okay|pode|bora|vamos|quero|isso|claro|beleza|pode\s+ser|t[aá]|ta)\s*$/i.test(t)
+  return /^\s*(sim|s|ok|okay|pode|bora|vamos|quero|isso|claro|beleza|pode\s+ser|t[aá]|ta|autorizo)\s*$/i.test(t)
 }
+
+/**
+ * Histórico já contém resumo de matrícula + confirmação do lead ("sim"/"autorizo").
+ * Evita reenviar resumo ou pedir autorização de novo após falha de status no Supabase.
+ */
+export function conversationAlreadyAuthorizedMatricula(historyMessages = []) {
+  let awaitingAuth = false
+  for (const m of historyMessages || []) {
+    const content = String(m?.content || '').trim()
+    if (!content) continue
+    const role = String(m?.role || '').toLowerCase()
+    if (role === 'assistant' || role === 'assistente') {
+      if (assistantAskedMatriculaAuthorization(content)) awaitingAuth = true
+      if (assistantAskedPoloPreFormChoice(content)) awaitingAuth = false
+      continue
+    }
+    if (role === 'user' || role === 'lead') {
+      if (!awaitingAuth) continue
+      if (
+        isShortEnrollmentConfirmation(content) ||
+        /^\s*(sim|autorizo|autorizada|confirmo|confirmado)\b/i.test(normalizeMessageForScope(content))
+      ) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+/** Status em que o gate de resumo/autorização NÃO deve reabrir nem reenviar resumo. */
+export const MATRICULA_GATE_SKIP_RESUMO_STATUSES = new Set([
+  INSCRICAO_FORM_STATUS_MATRICULA_AUTORIZADA,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM,
+  INSCRICAO_FORM_STATUS_AGUARDANDO,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_POLO,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
+  INSCRICAO_FORM_STATUS_CONCLUIDO,
+  INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO,
+  INSCRICAO_FORM_STATUS_DISTRIBUIR_CONSULTOR,
+  INSCRICAO_FORM_STATUS_DESISTENCIA_CONCLUIDA,
+])
 
 /** Confirmação curta quando o assistente já está no passo de inscrição / ingresso. */
 function userConfirmsEnrollmentAfterAssistant(text, historyMessages) {
@@ -274,6 +320,11 @@ export function messageConfirmsProceedToInscricaoForm(text, historyMessages = []
   const cleaned = sanitizeLeadInboundMessage(text)
   const t = normalizeMessageForScope(cleaned).toLowerCase()
   if (!t) return false
+
+  // Resposta de polo (1–5 ou nome) nunca é confirmação de matrícula.
+  if (userMessageLooksLikePoloChoice(cleaned)) return false
+  const lastAssist = lastAssistantText(historyMessages)
+  if (assistantAskedPoloPreFormChoice(lastAssist)) return false
 
   if (inboundLooksLikeAgentEchoOnly(text)) return false
   if (messageAsksCoursePrice(cleaned)) return false

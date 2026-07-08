@@ -23,13 +23,18 @@
 
 import {
   INSCRICAO_FORM_STATUS_AGUARDANDO_AUTORIZACAO,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM,
   INSCRICAO_FORM_STATUS_MATRICULA_AUTORIZADA,
+  INSCRICAO_FORM_STATUS_AGUARDANDO,
+  MATRICULA_GATE_SKIP_RESUMO_STATUSES,
+  conversationAlreadyAuthorizedMatricula,
   messageConfirmsProceedToInscricaoForm,
   messageAsksForFormResend,
   assistantAskedMatriculaAuthorization,
   lastAssistantText,
 } from '../libShared/inscricaoFormHeuristics.js'
 import { messageAsksCoursePrice } from '../libShared/inboundMessageSanitize.js'
+import { userMessageLooksLikePoloChoice } from '../libShared/sumarePoloCatalog.js'
 import { detectCursoConfirmadoPeloLead } from '../libShared/cursoConfirmation.js'
 import { extractDiscussedCourseFromHistory } from '../libShared/conversationContextHeuristics.js'
 import {
@@ -274,7 +279,18 @@ export async function gateMatriculaConfirmacaoBeforeForm(env, ctx) {
   const status = await getFormStatus(env, telefone)
   const wantsForm = messageConfirmsProceedToInscricaoForm(userMessage, historyMessages)
 
-  if (status === INSCRICAO_FORM_STATUS_MATRICULA_AUTORIZADA) {
+  if (userMessageLooksLikePoloChoice(userMessage)) {
+    return { proceed: true }
+  }
+
+  if (MATRICULA_GATE_SKIP_RESUMO_STATUSES.has(status)) {
+    return { proceed: true }
+  }
+
+  if (conversationAlreadyAuthorizedMatricula(historyMessages)) {
+    if (status === INSCRICAO_FORM_STATUS_AGUARDANDO_AUTORIZACAO) {
+      await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_MATRICULA_AUTORIZADA, leadId)
+    }
     return { proceed: true }
   }
 
@@ -318,6 +334,8 @@ export async function tryHandleMatriculaResumoConfirmacao(env, ctx) {
   if (!telefone || !String(userMessage || '').trim()) return null
   if (messageAsksForFormResend(userMessage)) return null
   if (messageAsksCoursePrice(userMessage)) return null
+  if (userMessageLooksLikePoloChoice(userMessage)) return null
+  if (conversationAlreadyAuthorizedMatricula(historyMessages)) return null
 
   const status = await getFormStatus(env, telefone)
   const wantsForm = messageConfirmsProceedToInscricaoForm(userMessage, historyMessages)
