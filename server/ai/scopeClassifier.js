@@ -16,6 +16,7 @@ import {
   messageIsInboundMediaPlaceholder,
 } from '../../libShared/scopeHeuristics.js'
 import { messageAsksUnsupportedCourseLevel } from '../../libShared/courseLevelHeuristics.js'
+import { messageAsksRegionalFacultyLocation } from '../../libShared/inboundMessageSanitize.js'
 import { extractCursoAreaFromText, messageIsBareCourseSelection } from '../../libShared/cursoConfirmation.js'
 
 const URL_CHAT = 'https://api.openai.com/v1/chat/completions'
@@ -166,6 +167,24 @@ export async function classifyMessageScope(env, input = {}) {
   }
 
   const historyMessages = input.historyMessages || []
+
+  if (messageAsksRegionalFacultyLocation(userMessage, historyMessages)) {
+    return {
+      blocked: false,
+      reply: null,
+      classification: {
+        dentro_escopo: true,
+        categoria: 'institucional',
+        nivel: 'indefinido',
+        motivo: 'localização/polos EAD ou Central Pinheiros',
+      },
+      source: 'heuristic',
+      reason: 'polo_location_in_scope',
+      model,
+      usage: null,
+      elapsedMs: Date.now() - t0,
+    }
+  }
 
   const cursoNome = extractCursoAreaFromText(userMessage)
   if (cursoNome || messageIsBareCourseSelection(userMessage, historyMessages)) {

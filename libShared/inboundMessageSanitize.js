@@ -272,6 +272,58 @@ export function messageAsksLocationInfo(text) {
   return messageAsksPoloAttendimentoList(text) || messageAsksSemipresencialCentral(text)
 }
 
+function recentUserMentionedRegionalLocation(historyMessages = []) {
+  for (let i = (historyMessages || []).length - 1; i >= 0; i--) {
+    const m = historyMessages[i]
+    const role = String(m?.role || '').toLowerCase()
+    if (role !== 'user' && role !== 'lead') continue
+    const t = normalizeMessageForScope(m?.content).toLowerCase()
+    if (!t) continue
+    if (
+      /\b(vila\s+\w+|zona\s+(leste|oeste|norte|sul)|unidade\s+(na|no|em)|campus\s+(na|no|em)|polo|pr[oó]xim|perto\s+(de|da|do)?)\b/i.test(
+        t,
+      )
+    ) {
+      return true
+    }
+    return false
+  }
+  return false
+}
+
+/**
+ * Lead pergunta sobre unidade/polo em bairro ou região (ex.: Vila Prudente, zona leste)
+ * ou continua conversa de localização após resposta incompleta.
+ */
+export function messageAsksRegionalFacultyLocation(text, historyMessages = []) {
+  if (messageAsksLocationInfo(text)) return true
+
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (!t || t.length < 4) return false
+
+  if (
+    /\b(vila\s+prudente|vila\s+\w+|zona\s+(leste|oeste|norte|sul)|regi[aã]o|bairro|pr[oó]ximo|pr[oó]xima|perto\s+(de|da|do)?|unidade\s+(na|no|em)|campus\s+(na|no|em)|faculdade\s+(na|no|em|pr[oó]xim))\b/i.test(
+      t,
+    )
+  ) {
+    return true
+  }
+
+  if (
+    /\b(busca|procurando|procurar|quero\s+uma\s+faculdade|em\s+busca)\b[\s\S]{0,60}\b(zona|regi[aã]o|bairro|pr[oó]xim|vila)\b/i.test(
+      t,
+    )
+  ) {
+    return true
+  }
+
+  if (recentUserMentionedRegionalLocation(historyMessages)) {
+    if (/\b(zona|regi[aã]o|vila|faculdade|polo|unidade|campus|pinheiros|ead)\b/i.test(t)) return true
+  }
+
+  return false
+}
+
 /**
  * Lead pergunta sobre modalidade (EAD/online/distância), MEC ou preferência por estudo a distância.
  */

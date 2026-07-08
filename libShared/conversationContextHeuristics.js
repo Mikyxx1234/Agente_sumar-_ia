@@ -116,7 +116,7 @@ export function conversationHasActiveTopic(historyMessages) {
   if (extractCursoAreaFromText(blob)) return true
 
   return (
-    /\b(fisioterapia|enfermagem|administra|pedagogia|direito|psicologia|engenharia|recursos\s+humanos|\brh\b|marketing|contabil|gest[aã]o|matr[ií]cula|inscri[cç][aã]o|formul[aá]rio|enem|vestibular|ingresso|mensalidade|gradua|ead)\b/i.test(
+    /\b(fisioterapia|enfermagem|administra|pedagogia|direito|psicologia|engenharia|recursos\s+humanos|\brh\b|marketing|contabil|gest[aã]o|matr[ií]cula|inscri[cç][aã]o|formul[aá]rio|enem|vestibular|ingresso|mensalidade|gradua|ead|polo|polos|unidade|campus|pinheiros|faculdade|vila|zona|prudente|semipresencial|presencial)\b/i.test(
       blob,
     ) || /\bcurso\s+de\s+/i.test(blob)
   )

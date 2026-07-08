@@ -231,6 +231,20 @@ export function buildPoloOutroLocalidadeReply() {
   )
 }
 
+/** Informação institucional: polos EAD + Central semipresencial/presencial em Pinheiros. */
+export function buildPoloEadAndCentralInfoReply(opts = {}) {
+  const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
+  return (
+    `Entendo${nameBit}! Sobre as unidades da Faculdade Sumaré:\n\n` +
+    `*Cursos EAD (100% online):* por este WhatsApp você pode se inscrever nos *5 polos de apoio presencial*:\n\n` +
+    `${formatPoloListaNumerada()}\n\n` +
+    `O polo é onde você faz provas e tem apoio presencial quando precisar — as aulas são online.\n\n` +
+    `*Cursos presenciais ou semipresenciais:* as aulas presenciais acontecem na *Central em Pinheiros* ` +
+    `(Rua Alegrete, 89, Sumaré, São Paulo/SP).\n\n` +
+    `Se quiser, posso te ajudar com cursos EAD disponíveis ou opções semipresenciais em Pinheiros.`
+  )
+}
+
 export function buildPoloConfirmacaoInvalidaReply() {
   return (
     'Não consegui identificar o polo. Por favor, responda com o número de 1 a 5 ou o nome do polo:\n\n' +

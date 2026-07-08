@@ -66,6 +66,7 @@ import {
   tryHandleDesistenciaConfirmEarly,
 } from '../inscricaoDesistenciaFlow.js'
 import { tryHandleFimAtendimentoFlow } from '../fimAtendimentoFlow.js'
+import { tryHandlePoloLocationInfoFlow } from '../poloLocationInfoFlow.js'
 import {
   startChannelExitConfirm,
   tryHandleChannelExitConfirmStep,
@@ -116,6 +117,7 @@ import {
   messageAsksGradePdf,
   messageAsksCampusOrPhoneContact,
   messageAsksLocationInfo,
+  messageAsksRegionalFacultyLocation,
   messageAsksOuvidoria,
   sanitizeLeadInboundMessage,
 } from '../../libShared/inboundMessageSanitize.js'
@@ -987,10 +989,23 @@ export async function runAgent(env, input) {
     return { ...result, historyLoaded: historyMessages.length, aiMeta: ctx.toAiMeta() }
   }
 
+  if (telefone) {
+    const poloLocationFlow = await tryHandlePoloLocationInfoFlow(env, formFlowCtx)
+    if (poloLocationFlow?.handled) {
+      console.log(`[${executionId}] POLO_LOCATION_INFO telefone=${telefone}`)
+      return {
+        ...poloLocationFlow.result,
+        historyLoaded: historyMessages.length,
+        aiMeta: ctx.toAiMeta(),
+      }
+    }
+  }
+
   let skipScopeCheck =
     (historyMessages.length === 0 && isAmbiguousShortReply(userMessage)) ||
     Boolean(extractCursoAreaFromText(userMessage)) ||
-    messageIsBareCourseSelection(userMessage, historyMessages)
+    messageIsBareCourseSelection(userMessage, historyMessages) ||
+    messageAsksRegionalFacultyLocation(userMessage, historyMessages)
   let scopeClassification = null
   if (!skipScopeCheck) {
     const scope = await classifyMessageScope(env, { userMessage, historyMessages })
@@ -1365,17 +1380,20 @@ export async function runAgent(env, input) {
       }
     : null
 
-  const poloListHint = messageAsksPoloAttendimentoList(userMessage)
-    ? {
+  const poloListHint =
+    messageAsksPoloAttendimentoList(userMessage) || messageAsksRegionalFacultyLocation(userMessage, historyMessages)
+      ? {
         role: 'system',
         content:
           'PERGUNTA SOBRE POLOS DE ATENDIMENTO EAD: o lead quer saber quais polos/unidades atendemos ou qual é o mais próximo. ' +
           'OBRIGATÓRIO neste turno: responda "Por este número de contato atendemos os seguintes polos:" e liste os 5 polos EAD com endereços:\n' +
           `${formatPoloListaNumerada()}\n` +
-          'Todos os cursos são EAD; o polo é o ponto de apoio presencial. Não encaminhe consultor só por esta pergunta. ' +
+          'Todos os cursos são EAD; o polo é o ponto de apoio presencial. ' +
+          'Se o lead perguntar por curso presencial ou semipresencial, informe que as aulas presenciais são na Central em Pinheiros (Rua Alegrete, 89). ' +
+          'Não encaminhe consultor só por esta pergunta. ' +
           'PROIBIDO responder com recusa LGPD — endereços dos polos institucionais são informação pública permitida.',
       }
-    : null
+      : null
 
   const locationInfoHint =
     messageAsksSemipresencialCentral(userMessage) || messageAsksCampusOrPhoneContact(userMessage)

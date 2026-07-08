@@ -1053,6 +1053,32 @@ section('18 — desistência falsa / reativação de interesse')
   )
 }
 
+section('19 — polos / localização regional')
+{
+  const { messageAsksRegionalFacultyLocation } = await import('../libShared/inboundMessageSanitize.js')
+  const { buildPoloEadAndCentralInfoReply } = await import('../libShared/sumarePoloCatalog.js')
+
+  assert(
+    messageAsksRegionalFacultyLocation('Gostaria de saber se a faculdade unidade na vila prudente ou próximo'),
+    '19.1 vila prudente detectada',
+  )
+  assert(
+    messageAsksRegionalFacultyLocation('estou em busca de uma faculdade na zona leste'),
+    '19.2 zona leste detectada',
+  )
+  const hist = [
+    { role: 'user', content: 'tem unidade na vila prudente?' },
+    { role: 'assistant', content: 'Central em Pinheiros...' },
+  ]
+  assert(
+    messageAsksRegionalFacultyLocation('Muito obrigada, estou em busca de uma faculdade na zona leste', hist),
+    '19.3 continuação regional no histórico',
+  )
+  const reply = buildPoloEadAndCentralInfoReply({ pushName: 'Arlete' })
+  assert(/5 polos|Barra Funda|São Miguel/i.test(reply), '19.4 lista polos EAD')
+  assert(/Pinheiros|Alegrete/i.test(reply), '19.5 menciona Central Pinheiros')
+}
+
 /* ────────────────────────────────────────────────────────────────────────── */
 /* Resumo                                                                     */
 /* ────────────────────────────────────────────────────────────────────────── */
