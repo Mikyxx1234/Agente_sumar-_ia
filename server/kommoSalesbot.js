@@ -11,10 +11,12 @@
 import { createLeadNote } from './kommoClient.js'
 import { kommoRawFetch } from './kommoRateLimiter.js'
 import { getMessageBufferRedis } from './evolution/messageBuffer.js'
+import { API_SUMARE_SALESBOT_PAGAMENTO_ID } from '../libShared/apiSumareOrigemHeuristics.js'
 
 const DEFAULT_BOT_CONSULTOR = 49777
 const DEFAULT_BOT_DISTRIBUICAO_FORM = 49777
 const DEFAULT_BOT_MATRICULA_POS_FORM = 49813
+const DEFAULT_BOT_AGUARD_PGT_API = API_SUMARE_SALESBOT_PAGAMENTO_ID
 
 /** Evita disparar o mesmo salesbot no mesmo lead em loop (scheduler ~10s). */
 const _salesbotRunCache = new Map()
@@ -25,6 +27,7 @@ function salesbotDedupeMs(env, kind) {
   const global = Number(env.KOMMO_SALESBOT_MIN_INTERVAL_SEC)
   if (Number.isFinite(global) && global > 0) return global * 1000
   if (kind === 'formulario_sum') return 6 * 60 * 60 * 1000
+  if (kind === 'aguard_pgt_api_sumare') return 24 * 60 * 60 * 1000
   if (kind === 'matricula_pos_form') return 24 * 60 * 60 * 1000
   if (kind === 'distribuicao_pos_form') return 30 * 60 * 1000
   return 60 * 60 * 1000
@@ -49,6 +52,17 @@ export function normalizeSalesbotMotivo(motivo) {
     ].includes(m)
   ) {
     return 'distribuicao_pos_form'
+  }
+  if (
+    [
+      'aguard_pgt_api_sumare',
+      'aguard_pgt_api',
+      'aguard_pgt_sumare_api',
+      'bv_aguard_pgt_sumare_api',
+      '49979',
+    ].includes(m)
+  ) {
+    return 'aguard_pgt_api_sumare'
   }
   if (
     [
@@ -96,6 +110,14 @@ export function resolveSalesbotBotId(env, motivo) {
         env.KOMMO_SALESBOT_INSCRICAO_START_ID,
     )
     return Number.isFinite(id) && id > 0 ? id : 0
+  }
+  if (kind === 'aguard_pgt_api_sumare') {
+    const id = Number(
+      env.KOMMO_SALESBOT_AGUARD_PGT_API_ID ||
+        env.KOMMO_SALESBOT_PAGAMENTO_API_ID ||
+        env.KOMMO_SALESBOT_API_PAGAMENTO_ID,
+    )
+    return Number.isFinite(id) && id > 0 ? id : DEFAULT_BOT_AGUARD_PGT_API
   }
   const id = Number(
     env.KOMMO_SALESBOT_DISTRIBUIR_ID ||
