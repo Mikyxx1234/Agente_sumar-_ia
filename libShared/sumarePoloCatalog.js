@@ -216,7 +216,10 @@ export function messageMentionsUnlistedPoloLocation(text) {
   if (/\b(outr[oa]s?\s+(cidade|polo|unidade|campus|local|regi[aã]o)|outro\s+polo|outra\s+cidade)\b/i.test(t)) {
     return true
   }
-  if (/\b(s[oó]\s+atend|n[aã]o\s+tem|n[aã]o\s+oferece|fora\s+dessa|interior|outro\s+estado)\b/i.test(t)) {
+  if (
+    /\b(s[oó]\s+atend|n[aã]o\s+oferece|fora\s+dessa|interior|outro\s+estado)\b/i.test(t) ||
+    /\bn[aã]o\s+tem\s+(polo|unidade|campus|essa|op[cç][aã]o|atendimento)\b/i.test(t)
+  ) {
     return true
   }
   return false

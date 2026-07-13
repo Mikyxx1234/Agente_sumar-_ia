@@ -38,5 +38,23 @@ expect(
   replyLeaksSensitiveCandidateData('A conta bancária do aluno termina em 1234', { userMessage: '' }).leak === true,
 )
 
+const pubReply =
+  'O curso de Publicidade e Propaganda prepara você para atuar no dinâmico mercado da comunicação, ' +
+  'desenvolvendo habilidades em criação de campanhas e agências de publicidade.'
+
+expect(
+  'Publicidade e Propaganda + agências de publicidade não bloqueia',
+  replyLeaksSensitiveCandidateData(pubReply, {
+    userMessage: 'Mais informações sobre publicidade e propaganda',
+  }).leak === false,
+)
+
+const { validateReplyBeforeSend } = await import('../server/replyGuard.js')
+const guardVerdict = validateReplyBeforeSend({
+  reply: pubReply,
+  userMessage: 'Mais informações sobre publicidade e propaganda',
+})
+expect('guard validateReply LGPD não bloqueia curso Publicidade', guardVerdict.violation === false)
+
 console.log(`\n${stats.passed}/${stats.total} passed`)
 if (stats.failed > 0) process.exit(1)

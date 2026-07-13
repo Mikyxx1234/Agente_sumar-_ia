@@ -67,6 +67,7 @@ import {
 } from '../inscricaoDesistenciaFlow.js'
 import { tryHandleFimAtendimentoFlow } from '../fimAtendimentoFlow.js'
 import { tryHandlePoloLocationInfoFlow } from '../poloLocationInfoFlow.js'
+import { tryHandleDeferredPaymentEnrollmentFlow } from '../deferredPaymentEnrollmentFlow.js'
 import {
   startChannelExitConfirm,
   tryHandleChannelExitConfirmStep,
@@ -596,6 +597,18 @@ export async function runAgent(env, input) {
       )
       return {
         ...transferenciaRestate.result,
+        historyLoaded: historyMessages.length,
+        aiMeta: ctx.toAiMeta(),
+      }
+    }
+  }
+
+  if (telefone) {
+    const deferredPaymentFlow = await tryHandleDeferredPaymentEnrollmentFlow(env, formFlowCtx)
+    if (deferredPaymentFlow?.handled) {
+      console.log(`[${executionId}] DEFERRED_PAYMENT_ENROLLMENT`)
+      return {
+        ...deferredPaymentFlow.result,
         historyLoaded: historyMessages.length,
         aiMeta: ctx.toAiMeta(),
       }

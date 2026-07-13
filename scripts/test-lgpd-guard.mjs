@@ -53,6 +53,7 @@ const raBad = replyLeaksSensitiveCandidateData('O RA dela é 2024012345', {
   userMessage: 'oi',
 })
 assert.equal(raBad.leak, true)
+assert.equal(raBad.code, 'lgpd_ra_third_party')
 
 const guard = validateReplyLgpd({
   reply: 'O e-mail dela é maria@gmail.com',

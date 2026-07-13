@@ -1079,6 +1079,27 @@ section('19 — polos / localização regional')
   assert(/Pinheiros|Alegrete/i.test(reply), '19.5 menciona Central Pinheiros')
 }
 
+section('20 — matrícula hoje / pagamento depois')
+{
+  const { messageAsksDeferredPaymentEnrollment, buildDeferredPaymentEnrollmentReply } = await import(
+    '../libShared/deferredPaymentEnrollmentHeuristics.js'
+  )
+  const { messageMentionsUnlistedPoloLocation } = await import('../libShared/sumarePoloCatalog.js')
+
+  const celioMsg =
+    'Como tinha dito só vou ter um valor dia 30 deste mês daqui a 17 dias..há possibilidade de fazer todo o processo hj pra garantir a vaga..e pagar este valor promocional dia 30..e a liberação do curso não tem problema se iniciar tbm no dia Q pagar..se puder fazemos o processo hj mesmo..mas se não houver possibilidade daqui a 17 dias te chamo e se houver vaga fechamos'
+
+  assert(messageAsksDeferredPaymentEnrollment(celioMsg), '20.1 pagamento posterior detectado')
+  assert(
+    !messageMentionsUnlistedPoloLocation(celioMsg),
+    '20.2 não confunde com polo fora da lista',
+  )
+  const reply = buildDeferredPaymentEnrollmentReply({ pushName: 'Célio' })
+  assert(/decis[oõ]es internas/i.test(reply), '20.3 menciona alteração de valores')
+  assert(/entrar em contato/i.test(reply), '20.4 orienta retorno no pagamento')
+  assert(/faremos o poss[ií]vel/i.test(reply), '20.5 tenta garantir valor')
+}
+
 /* ────────────────────────────────────────────────────────────────────────── */
 /* Resumo                                                                     */
 /* ────────────────────────────────────────────────────────────────────────── */

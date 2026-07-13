@@ -24,6 +24,7 @@ import {
   assistantAskedPoloPreFormChoice,
   extractPoloFromConversationHistory,
 } from '../libShared/sumarePoloCatalog.js'
+import { messageAsksDeferredPaymentEnrollment } from '../libShared/deferredPaymentEnrollmentHeuristics.js'
 import { lastAssistantText } from '../libShared/inscricaoFormHeuristics.js'
 import { filterHistoryMessagesForAgent } from '../libShared/historySanitize.js'
 import { fetchLeadFormSnapshot } from './inscricaoKommoFields.js'
@@ -116,6 +117,8 @@ async function recentKommoNoteAskedPoloPreForm(env, leadId) {
 export async function tryHandlePoloPreFormFlow(env, input) {
   const { telefone, userMessage, executionId, model, leadId: leadIdHint, pushName, t0 } = input
   if (!telefone || !String(userMessage || '').trim()) return null
+
+  if (messageAsksDeferredPaymentEnrollment(userMessage)) return null
 
   const historyMessages = filterHistoryMessagesForAgent(input.historyMessages || [])
   const lastAssist = lastAssistantText(historyMessages)

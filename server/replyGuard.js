@@ -24,6 +24,8 @@ import {
   DEFAULT_LGPD_SENSITIVE_REFUSAL,
   lgpdGuardEnabled,
   replyLeaksSensitiveCandidateData,
+  userMessageIsInstitutionalCourseInquiry,
+  HARD_LGPD_LEAK_CODES,
 } from '../libShared/lgpdCompliance.js'
 import { sanitizeCourseLinksFromReply } from '../libShared/courseLinkOutboundGuard.js'
 
@@ -185,6 +187,12 @@ export function validateReplyLgpd({ reply, userMessage = '', env = process.env }
   if (!text || text.length < 4) return { violation: false }
   const check = replyLeaksSensitiveCandidateData(text, { userMessage })
   if (!check.leak) return { violation: false }
+  if (
+    userMessageIsInstitutionalCourseInquiry(userMessage) &&
+    !HARD_LGPD_LEAK_CODES.has(check.code)
+  ) {
+    return { violation: false }
+  }
   return {
     violation: true,
     code: check.code,

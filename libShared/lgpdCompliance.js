@@ -26,7 +26,10 @@ const ADDRESS_LEAK_RX =
   /\b(endereço|endereco|rua|avenida|av\.|cep)\s*(do|da|de|:)?\s*[:\s]*.{8,}/i
 /** Dados bancários do candidato — NÃO incluir "banco" solto (falso positivo em "Banco de Dados"). */
 const BANK_LEAK_RX =
-  /\b(cartão|cartao|conta bancária|conta bancaria|pix|agência|agencia)\s*(do|da|de|:)?\s*[:\s]*.{4,}/i
+  /\b(cartão|cartao|conta bancária|conta bancaria|pix)\s*(do|da|de|:)?\s*[:\s]*.{4,}/i
+/** Agência bancária do titular — não confundir com "agência de publicidade/marketing". */
+const AGENCIA_BANCARIA_LEAK_RX =
+  /\bag[eê]ncia\s+banc[aá]ria\s*(do|da|de|:)?\s*[:\s]*.{2,}/i
 const BANK_INSTITUTION_LEAK_RX =
   /\bbanco\b(?!\s+de\s+dados\b)\s*(do|da|de)\s*(?:\w+\s+){0,3}(conta|corrente|poupan[cç]a|ag[eê]ncia|pix)\b/i
 /** Curso tecnólogo — remover antes do guard financeiro para não confundir com "banco do lead". */
@@ -73,13 +76,11 @@ export function messageRequestsOwnRa(userMessage) {
 
 /**
  * Detecta vazamento de dados sensíveis de candidatos na resposta ao lead.
- * RA pode aparecer quando o lead pediu o próprio RA.
+ * RA do titular pode ser informado quando disponível.
  */
 export function replyLeaksSensitiveCandidateData(reply, { userMessage = '' } = {}) {
   const text = String(reply || '')
   if (!text || text.length < 4) return { leak: false }
-
-  const raAllowed = messageRequestsOwnRa(userMessage)
 
   if (CPF_FORMATTED_RX.test(text) || CPF_CONTEXT_RX.test(text)) {
     return { leak: true, code: 'lgpd_cpf_leak' }
@@ -100,10 +101,18 @@ export function replyLeaksSensitiveCandidateData(reply, { userMessage = '' } = {
   if (BANK_LEAK_RX.test(textForBankCheck) || BANK_INSTITUTION_LEAK_RX.test(textForBankCheck)) {
     return { leak: true, code: 'lgpd_financial_leak' }
   }
+  if (AGENCIA_BANCARIA_LEAK_RX.test(textForBankCheck)) {
+    return { leak: true, code: 'lgpd_financial_leak' }
+  }
 
-  // RA só é permitido se o lead pediu o próprio RA; bloqueia RA espontâneo ou de terceiros.
-  if (!raAllowed && /\b(registro acad[eê]mico|RA)\b[\s\S]{0,40}\d{4,}/i.test(text)) {
-    return { leak: true, code: 'lgpd_ra_unrequested' }
+  // RA do titular pode ser informado; bloqueia apenas RA claramente de terceiros.
+  if (
+    /\b(ra|registro acad[eê]mico)\b[\s\S]{0,40}\b(de|do|da|dela|dele)\b[\s\S]{0,30}\b(dela|dele|terceir|outr[oa]|colega|amig[oa])\b/i.test(
+      text,
+    ) ||
+    /\b(ra|registro acad[eê]mico)\b\s+(dela|dele)\b/i.test(text)
+  ) {
+    return { leak: true, code: 'lgpd_ra_third_party' }
   }
 
   return { leak: false }
@@ -112,6 +121,39 @@ export function replyLeaksSensitiveCandidateData(reply, { userMessage = '' } = {
 export function lgpdGuardEnabled(env) {
   return String(env?.LGPD_REPLY_GUARD_ENABLED ?? 'true').trim().toLowerCase() !== 'false'
 }
+
+/** Pergunta institucional (curso, preço, matrícula) — não acionar recusa LGPD por falso positivo. */
+export function userMessageIsInstitutionalCourseInquiry(userMessage) {
+  if (messageRequestsThirdPartySensitiveData(userMessage)) return false
+  const t = String(userMessage || '')
+    .toLowerCase()
+    .trim()
+  if (!t) return false
+  if (
+    /\b(cpf|telefone|celular|whatsapp|e-?mail|email|nome\s+completo|endere[cç]o|rg)\b[\s\S]{0,40}\b(do|da|de|dados)\b/i.test(
+      t,
+    )
+  ) {
+    return false
+  }
+  if (/\b(dados|informa[cç][õo]es)\s+(pessoais|cadastrais|sens[ií]veis)\b/i.test(t)) return false
+  return (
+    /\b(curso|cursos|gradua[cç][aã]o|ead|mensalidade|valor|pre[cç]o|matr[ií]cula|inscri[cç][aã]o|propaganda|publicidade|informa[cç][õo]es|detalhes|modalidade|dura[cç][aã]o)\b/i.test(
+      t,
+    ) || messageRequestsOwnRa(userMessage)
+  )
+}
+
+const HARD_LGPD_LEAK_CODES = new Set([
+  'lgpd_cpf_leak',
+  'lgpd_rg_leak',
+  'lgpd_email_leak',
+  'lgpd_phone_leak',
+  'lgpd_address_leak',
+  'lgpd_ra_third_party',
+])
+
+export { HARD_LGPD_LEAK_CODES }
 
 export function buildLgpdSystemHint(userMessage) {
   if (messageRequestsThirdPartySensitiveData(userMessage)) {
