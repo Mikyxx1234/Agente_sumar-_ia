@@ -47,7 +47,12 @@ import {
 } from '../libShared/inboundMessageSanitize.js'
 import { detectStateFromReply, AUTO_SYNC_TERMINAL_OR_ADVANCED } from '../server/inscricaoStateAutoSync.js'
 import { buildPoloEscolhaPreFormMessage } from '../libShared/sumarePoloCatalog.js'
-import { resolvePortalUrlForCandidato, normalizeCpf } from '../server/sumareCaptacaoClient.js'
+import {
+  resolvePortalUrlForCandidato,
+  normalizeCpf,
+  normalizeDataNasc,
+  kommoDataNascLooksInvalid,
+} from '../server/sumareCaptacaoClient.js'
 import {
   evaluateKommoExpressReadiness,
 } from '../server/kommoCardMirror.js'
@@ -1079,7 +1084,18 @@ section('19 — polos / localização regional')
   assert(/Pinheiros|Alegrete/i.test(reply), '19.5 menciona Central Pinheiros')
 }
 
-section('20 — matrícula hoje / pagamento depois')
+section('20 — data nascimento inválida no Kommo')
+{
+  const phone = '5519997613069'
+  assert(kommoDataNascLooksInvalid('19997613069', phone), '20.1 telefone no campo nascimento')
+  assert(kommoDataNascLooksInvalid('5519997613069', phone), '20.2 telefone com DDI')
+  assert(!kommoDataNascLooksInvalid('15/03/1990', phone), '20.3 data BR válida')
+  assert(!kommoDataNascLooksInvalid('1990-03-15', phone), '20.4 data ISO válida')
+  assert(normalizeDataNasc('15/03/1990') === '1990-03-15', '20.5 normalize BR')
+  assert(!normalizeDataNasc('19997613069'), '20.6 normalize rejeita telefone')
+}
+
+section('21 — matrícula hoje / pagamento depois')
 {
   const { messageAsksDeferredPaymentEnrollment, buildDeferredPaymentEnrollmentReply } = await import(
     '../libShared/deferredPaymentEnrollmentHeuristics.js'
@@ -1089,15 +1105,15 @@ section('20 — matrícula hoje / pagamento depois')
   const celioMsg =
     'Como tinha dito só vou ter um valor dia 30 deste mês daqui a 17 dias..há possibilidade de fazer todo o processo hj pra garantir a vaga..e pagar este valor promocional dia 30..e a liberação do curso não tem problema se iniciar tbm no dia Q pagar..se puder fazemos o processo hj mesmo..mas se não houver possibilidade daqui a 17 dias te chamo e se houver vaga fechamos'
 
-  assert(messageAsksDeferredPaymentEnrollment(celioMsg), '20.1 pagamento posterior detectado')
+  assert(messageAsksDeferredPaymentEnrollment(celioMsg), '21.1 pagamento posterior detectado')
   assert(
     !messageMentionsUnlistedPoloLocation(celioMsg),
-    '20.2 não confunde com polo fora da lista',
+    '21.2 não confunde com polo fora da lista',
   )
   const reply = buildDeferredPaymentEnrollmentReply({ pushName: 'Célio' })
-  assert(/decis[oõ]es internas/i.test(reply), '20.3 menciona alteração de valores')
-  assert(/entrar em contato/i.test(reply), '20.4 orienta retorno no pagamento')
-  assert(/faremos o poss[ií]vel/i.test(reply), '20.5 tenta garantir valor')
+  assert(/decis[oõ]es internas/i.test(reply), '21.3 menciona alteração de valores')
+  assert(/entrar em contato/i.test(reply), '21.4 orienta retorno no pagamento')
+  assert(/faremos o poss[ií]vel/i.test(reply), '21.5 tenta garantir valor')
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */

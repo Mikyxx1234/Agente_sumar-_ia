@@ -5,7 +5,7 @@
 import { listLeadCustomFields, listLeadNotes } from './kommoClient.js'
 import { kommoRawFetch } from './kommoRateLimiter.js'
 import { parseFormDataNoteFields } from '../libShared/inscricaoFormHeuristics.js'
-import { normalizeCpf } from './sumareCaptacaoClient.js'
+import { normalizeCpf, kommoDataNascLooksInvalid } from './sumareCaptacaoClient.js'
 import { isGarbageCursoInscricao } from '../libShared/captacaoSnapshotSanitize.js'
 
 const KOMMO_FIELD_NOME = 304628
@@ -160,7 +160,8 @@ export async function fetchLeadFormSnapshot(env, leadId) {
     pipeline_id: Number(lead.pipeline_id) || 0,
   }
 
-  const enriched = await enrichSnapshotFromFormNote(env, id, snapshot)
+  const phoneDigits = extractContactPhoneDigits(contact)
+  const enriched = await enrichSnapshotFromFormNote(env, id, snapshot, phoneDigits)
   if (isGarbageCursoInscricao(enriched.curso_inscricao)) {
     enriched.curso_inscricao = ''
   }
@@ -178,16 +179,34 @@ function noteText(n) {
  * os campos personalizados — ex.: o e-mail vai só na nota). Só preenche o que
  * está ausente; nunca sobrescreve um valor já presente no campo do Kommo.
  */
-function snapshotFieldNeedsNoteEnrichment(key, val) {
+function snapshotFieldNeedsNoteEnrichment(key, val, phoneDigits) {
   if (isCampoAusente(val)) return true
   // CPF presente mas inválido (10 dígitos no Kommo) → busca na nota do formulário.
   if (key === 'cpf' && !normalizeCpf(val)) return true
+  // Data de nascimento com telefone ou lixo → busca na nota do formulário.
+  if (key === 'data_nasc' && kommoDataNascLooksInvalid(val, phoneDigits)) return true
   return false
 }
 
-async function enrichSnapshotFromFormNote(env, leadId, snapshot) {
+function extractContactPhoneDigits(contact) {
+  const fields = contact?.custom_fields_values
+  if (!Array.isArray(fields)) return ''
+  for (const f of fields) {
+    const code = String(f?.field_code || f?.code || '').toUpperCase()
+    if (code !== 'PHONE' && !/telefone|celular|phone/i.test(String(f?.field_name || ''))) continue
+    const v = f?.values?.[0]?.value
+    if (v != null && String(v).replace(/\D/g, '').length >= 10) {
+      return String(v).replace(/\D/g, '')
+    }
+  }
+  return ''
+}
+
+async function enrichSnapshotFromFormNote(env, leadId, snapshot, phoneDigits = '') {
   const keys = ['nome', 'email', 'cpf', 'data_nasc', 'sexo']
-  const missing = keys.filter((k) => snapshotFieldNeedsNoteEnrichment(k, snapshot?.[k]))
+  const missing = keys.filter((k) =>
+    snapshotFieldNeedsNoteEnrichment(k, snapshot?.[k], phoneDigits),
+  )
   if (missing.length === 0) return snapshot
   let notes = []
   try {
@@ -201,7 +220,9 @@ async function enrichSnapshotFromFormNote(env, leadId, snapshot) {
     if (!fields || Object.keys(fields).length === 0) continue
     const merged = { ...snapshot }
     for (const k of keys) {
-      if (snapshotFieldNeedsNoteEnrichment(k, merged[k]) && fields[k]) merged[k] = fields[k]
+      if (snapshotFieldNeedsNoteEnrichment(k, merged[k], phoneDigits) && fields[k]) {
+        merged[k] = fields[k]
+      }
     }
     return merged
   }

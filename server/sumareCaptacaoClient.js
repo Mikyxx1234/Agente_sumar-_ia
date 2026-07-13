@@ -340,6 +340,27 @@ export function normalizeDataNasc(input) {
   return ''
 }
 
+/**
+ * Detecta valor inválido em sum_Data Nascimento no Kommo (ex.: telefone gravado por engano).
+ */
+export function kommoDataNascLooksInvalid(raw, phoneDigits) {
+  const s = String(raw || '').trim()
+  if (!s) return true
+  const digits = s.replace(/\D/g, '')
+  if (!digits || digits.length < 8) return true
+  const phone = String(phoneDigits || '').replace(/\D/g, '')
+  if (phone && (digits === phone || digits === phone.slice(-11) || digits === phone.slice(-10))) {
+    return true
+  }
+  if (
+    /^\d{10,13}$/.test(digits) &&
+    !/^(19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])$/.test(digits)
+  ) {
+    return true
+  }
+  return !normalizeDataNasc(raw)
+}
+
 export function normalizeSexo(input) {
   const s = String(input || '').trim().toUpperCase()
   if (s.startsWith('M')) return 'M'
