@@ -41,6 +41,24 @@ export function buildExitChannelLinksReply(opts = {}) {
   )
 }
 
+/**
+ * Redirecionamento canônico quando o agente NÃO consegue concluir algo por
+ * este canal (falha técnica, cadastro não localizado, curso não confirmado
+ * etc.). Substitui qualquer promessa de "consultor entrará em contato" —
+ * o lead é orientado a falar direto com a Faculdade Sumaré pelo atendimento
+ * oficial (ou ouvidoria), nunca uma promessa de retorno ativo por aqui.
+ */
+export function buildFacultyContactRedirectReply(opts = {}) {
+  return (
+    `Peço desculpas${firstNameBit(opts.pushName)}, não consegui concluir isso por aqui. ` +
+    `Para seguir, fale diretamente com a Faculdade Sumaré pelo canal oficial de atendimento/consultoria:\n\n` +
+    `*Atendimento Sumaré:* ${SUMARE_ATENDIMENTO_URL}\n\n` +
+    `Se preferir, também pode contar com a *Ouvidoria* (reclamações, sugestões e elogios):\n\n` +
+    `*Ouvidoria Sumaré:* ${SUMARE_OUVIDORIA_URL}\n\n` +
+    `Estamos à disposição!`
+  )
+}
+
 /** Reapresenta os links se o lead voltar a falar depois do encerramento. */
 export function buildExitChannelAlreadyDoneReply(opts = {}) {
   return (

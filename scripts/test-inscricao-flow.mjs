@@ -29,6 +29,7 @@ import {
   runRegistrarPoloInscricao,
   runConfirmarRecebimentoFormulario,
 } from '../server/inscricaoActionTools.js'
+import { tryProcessInscricaoPostFormPipeline } from '../server/inscricaoPostFormPipeline.js'
 import {
   FORM_SUMAR_FLOW_COMPLETED_MARKER,
   messageIsFlowResponsesReceived,
@@ -85,6 +86,12 @@ import {
   INSCRICAO_FORM_STATUS_AGUARDANDO_CONFIRM_DESISTENCIA,
   INSCRICAO_FORM_STATUS_DESISTENCIA_CONCLUIDA,
 } from '../libShared/inscricaoFormHeuristics.js'
+import {
+  buildFacultyContactRedirectReply,
+  SUMARE_ATENDIMENTO_URL,
+  SUMARE_OUVIDORIA_URL,
+} from '../libShared/humanHandoffHeuristics.js'
+import { buildHumanHandoffReply } from '../libShared/scopeHeuristics.js'
 
 let passed = 0
 let failed = 0
@@ -142,7 +149,7 @@ function restoreFetch() {
 }
 
 /** Stub Supabase REST padrão: retorna `dadosClienteRow` para SELECT e `representation` no PATCH/POST. */
-function defaultSupabaseStub({ dadosClienteRow = null, salesbotOk = true } = {}) {
+function defaultSupabaseStub({ dadosClienteRow = null, salesbotOk = true, notes = [] } = {}) {
   return (call) => {
     const u = call.url
     if (u.includes('/rest/v1/dados_cliente_sum') && call.method === 'GET') {
@@ -158,8 +165,11 @@ function defaultSupabaseStub({ dadosClienteRow = null, salesbotOk = true } = {})
         : { status: 500, body: { error: 'mock failure' } }
     }
     if (u.includes('/api/v4/leads')) {
-      if (u.includes('/notes') || u.includes('/events')) {
-        return { status: 200, body: { _embedded: { notes: [], events: [] } } }
+      if (u.includes('/notes')) {
+        return { status: 200, body: { _embedded: { notes } } }
+      }
+      if (u.includes('/events')) {
+        return { status: 200, body: { _embedded: { events: [] } } }
       }
       if (/\/api\/v4\/leads\/\d+/.test(u)) {
         return { status: 200, body: { id: 23845769, custom_fields_values: [] } }
@@ -167,6 +177,14 @@ function defaultSupabaseStub({ dadosClienteRow = null, salesbotOk = true } = {})
       return { status: 200, body: { _embedded: { leads: [{ id: 23845769 }] } } }
     }
     return { status: 200, body: {} }
+  }
+}
+
+/** Nota Kommo simulando conclusão do WhatsApp Flow do Form Sumar. */
+function flowResponsesReceivedNote(ageMs = 0) {
+  return {
+    params: { text: 'Flow responses received' },
+    created_at: new Date(Date.now() - ageMs).toISOString(),
   }
 }
 
@@ -290,6 +308,8 @@ installFetchStub(
       polo_inscricao_escolhido: 'Tatuapé',
       captacao_unidade: 'ED_SP_P3',
     },
+    // Form REALMENTE chegou no Kommo (Flow concluído) — não deve reenviar.
+    notes: [flowResponsesReceivedNote()],
   }),
 )
 try {
@@ -297,6 +317,34 @@ try {
   // SUMARE_CAPTACAO_ENABLED=false → cai no fallback (salesbot 49813 ou reply genérico)
   assert(['INSCRICAO_REGISTRADA_OK', 'CAPTACAO_FAILED'].includes(r.code), `5.code esperado em [INSCRICAO_REGISTRADA_OK, CAPTACAO_FAILED] (atual=${r.code})`)
   assert(typeof r.replyOverride === 'string' && r.replyOverride.length > 0, '5.replyOverride não vazio')
+} finally {
+  restoreFetch()
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* Cobertura 5b — Lead afirma ter enviado, mas Kommo NÃO confirma → reenvio   */
+/* ────────────────────────────────────────────────────────────────────────── */
+section('5b. Lead diz "pronto" mas formulário NÃO chegou no Kommo → reenvio')
+
+installFetchStub(
+  defaultSupabaseStub({
+    dadosClienteRow: {
+      id: 1,
+      id_lead: 23845769,
+      inscricao_form_status: 'aguardando_form_sumar',
+      polo_inscricao_escolhido: 'Tatuapé',
+      captacao_unidade: 'ED_SP_P3',
+    },
+    notes: [], // nenhuma nota de Flow/formulário no Kommo
+  }),
+)
+try {
+  const r = await runConfirmarRecebimentoFormulario(env, { telefone: ctx.telefone }, ctx)
+  assertEqual(r.code, 'FORM_NOT_RECEIVED_RESENT', '5b.code=FORM_NOT_RECEIVED_RESENT')
+  assertEqual(r.ok, true, '5b.ok=true (reenvio bem-sucedido)')
+  assert(/n[aã]o recebemos/i.test(r.replyOverride || ''), '5b.replyOverride avisa que não recebeu')
+  assert(/reenvi/i.test(r.replyOverride || ''), '5b.replyOverride menciona reenvio')
+  assertEqual(r.ctxSnapshot?.formNotReceivedResent, true, '5b.ctxSnapshot marca formNotReceivedResent')
 } finally {
   restoreFetch()
 }
@@ -1114,6 +1162,168 @@ section('21 — matrícula hoje / pagamento depois')
   assert(/decis[oõ]es internas/i.test(reply), '21.3 menciona alteração de valores')
   assert(/entrar em contato/i.test(reply), '21.4 orienta retorno no pagamento')
   assert(/faremos o poss[ií]vel/i.test(reply), '21.5 tenta garantir valor')
+}
+
+section('22 — tryProcessInscricaoPostFormPipeline: verificação antes de reenviar')
+
+{
+  const basePipelineCtx = {
+    telefone: '5511977776666',
+    leadId: 55512345,
+    pushName: 'Lead Pipeline',
+    executionId: 'EX-TEST-PIPE',
+    model: 'gpt-4.1-mini',
+    t0: Date.now(),
+  }
+
+  // 22.1 Claim explícito ("pronto") + NADA detectado no Kommo → avisa e reenvia,
+  // NÃO chama captação (sem código de captação/matrícula no retorno).
+  installFetchStub(
+    defaultSupabaseStub({
+      dadosClienteRow: {
+        id: 10,
+        id_lead: 55512345,
+        inscricao_form_status: 'aguardando_form_sumar',
+      },
+      notes: [],
+    }),
+  )
+  try {
+    const r = await tryProcessInscricaoPostFormPipeline(env, {
+      ...basePipelineCtx,
+      userMessage: 'pronto, já enviei',
+    })
+    assert(r?.handled === true, '22.1 pipeline handled=true (claim sem confirmação)')
+    assertEqual(r?.result?.ctxSnapshot?.formNotReceivedResent, true, '22.1b ctxSnapshot.formNotReceivedResent=true')
+    assert(/n[aã]o recebemos/i.test(r?.result?.reply || ''), '22.1c reply avisa que não recebemos')
+    assert(/reenvi/i.test(r?.result?.reply || ''), '22.1d reply menciona reenvio')
+  } finally {
+    restoreFetch()
+  }
+
+  // 22.2 Mesmo claim, mas o Kommo CONFIRMA o Flow concluído → segue captação
+  // normalmente (NÃO trata como "não recebido").
+  installFetchStub(
+    defaultSupabaseStub({
+      dadosClienteRow: {
+        id: 10,
+        id_lead: 55512345,
+        inscricao_form_status: 'aguardando_form_sumar',
+        polo_inscricao_escolhido: 'Pinheiros',
+        captacao_unidade: 'ED_SP_P5',
+      },
+      notes: [flowResponsesReceivedNote()],
+    }),
+  )
+  try {
+    const r = await tryProcessInscricaoPostFormPipeline(env, {
+      ...basePipelineCtx,
+      userMessage: 'pronto, já enviei',
+    })
+    assert(r?.handled === true, '22.2 pipeline handled=true (form confirmado no Kommo)')
+    assert(
+      r?.result?.ctxSnapshot?.formNotReceivedResent !== true,
+      '22.2b NÃO marca formNotReceivedResent quando Kommo confirma',
+    )
+  } finally {
+    restoreFetch()
+  }
+
+  // 22.3 "Flow responses received" como a própria mensagem do turno → NUNCA
+  // tratado como "não recebido", mesmo sem nenhuma nota ainda no Kommo
+  // (snapshot ainda frágil). Segue captação/pós-form normalmente.
+  installFetchStub(
+    defaultSupabaseStub({
+      dadosClienteRow: {
+        id: 10,
+        id_lead: 55512345,
+        inscricao_form_status: 'aguardando_form_sumar',
+        polo_inscricao_escolhido: 'Pinheiros',
+        captacao_unidade: 'ED_SP_P5',
+      },
+      notes: [],
+    }),
+  )
+  try {
+    const r = await tryProcessInscricaoPostFormPipeline(env, {
+      ...basePipelineCtx,
+      userMessage: 'Flow responses received',
+    })
+    assert(r?.handled === true, '22.3 pipeline handled=true (flow received bypassa verificação)')
+    assert(
+      r?.result?.ctxSnapshot?.formNotReceivedResent !== true,
+      '22.3b flow received NUNCA gera reenvio falso',
+    )
+  } finally {
+    restoreFetch()
+  }
+
+  // 22.4 schedulerTick nunca reenvia por claim vazio — só avança com
+  // kommoFormDone. Aqui não há detecção no Kommo, então o tick NÃO deve
+  // marcar formNotReceivedResent (mesmo com status aguardando_distribuicao).
+  installFetchStub(
+    defaultSupabaseStub({
+      dadosClienteRow: {
+        id: 10,
+        id_lead: 55512345,
+        inscricao_form_status: 'aguardando_distribuicao_form',
+      },
+      notes: [],
+    }),
+  )
+  try {
+    const r = await tryProcessInscricaoPostFormPipeline(env, {
+      ...basePipelineCtx,
+      userMessage: '',
+      schedulerTick: true,
+    })
+    assert(
+      r?.result?.ctxSnapshot?.formNotReceivedResent !== true,
+      '22.4 scheduler tick nunca reenvia por achismo',
+    )
+  } finally {
+    restoreFetch()
+  }
+}
+
+section('23 — Não encaminhar para consultor: redirecionamento pro atendimento oficial')
+
+{
+  const reply = buildFacultyContactRedirectReply({ pushName: 'Marcela' })
+  assert(reply.includes(SUMARE_ATENDIMENTO_URL), '23.1 menciona URL do atendimento oficial')
+  assert(reply.includes(SUMARE_OUVIDORIA_URL), '23.1b menciona URL da ouvidoria')
+  assert(/, Marcela/.test(reply), '23.1c inclui primeiro nome quando pushName fornecido')
+  assert(
+    !/consultor entrar[aá]/i.test(reply),
+    '23.2 NÃO contém "consultor entrará"',
+  )
+  assert(
+    !/fala com voc[eê] por aqui/i.test(reply),
+    '23.2b NÃO promete que alguém "fala com você por aqui"',
+  )
+  assert(
+    !/entrar[aá] em contato/i.test(reply),
+    '23.2c NÃO promete contato ativo ("entrará em contato")',
+  )
+
+  // Sem pushName — não deve quebrar nem gerar "undefined"/vírgula dupla.
+  const replySemNome = buildFacultyContactRedirectReply({})
+  assert(replySemNome.includes(SUMARE_ATENDIMENTO_URL), '23.3 funciona sem pushName')
+  assert(!/undefined|,\s*,/.test(replySemNome), '23.3b sem "undefined" ou vírgula dupla sem pushName')
+
+  // buildHumanHandoffReply (legado) também não promete consultor ativo.
+  const handoffReply = buildHumanHandoffReply({ pushName: 'Renato', ok: true })
+  assert(
+    !/consultor entrar[aá]|j[aá] encaminhei.*consultor|fala com voc[eê] por aqui/i.test(handoffReply),
+    '23.4 buildHumanHandoffReply não promete consultor ativo (ok=true)',
+  )
+  assert(handoffReply.includes(SUMARE_ATENDIMENTO_URL), '23.4b buildHumanHandoffReply aponta atendimento oficial')
+
+  const handoffReplyFail = buildHumanHandoffReply({ pushName: 'Renato', ok: false })
+  assert(
+    !/consultor entrar[aá]/i.test(handoffReplyFail),
+    '23.5 buildHumanHandoffReply não promete consultor ativo (ok=false)',
+  )
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */

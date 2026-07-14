@@ -15,6 +15,7 @@ import {
   messageLooksLikePosMatriculaFollowUp,
 } from '../libShared/inscricaoFormHeuristics.js'
 import { messageIsInboundMediaPlaceholder } from '../libShared/scopeHeuristics.js'
+import { buildFacultyContactRedirectReply } from '../libShared/humanHandoffHeuristics.js'
 import { conversationMentionsTransferencia } from './inscricaoTransferenciaFlow.js'
 import {
   fetchDadosClienteByTelefone,
@@ -179,7 +180,7 @@ export async function tryHandleMatriculaAceitePagamentoFlow(env, input) {
             t0,
             reply:
               `Seu cadastro já consta como ${apiStatus.status || 'matriculado'} no sistema da Faculdade Sumaré. ` +
-              `Em breve um consultor entra em contato por aqui para finalizar a matrícula.`,
+              buildFacultyContactRedirectReply({ pushName }),
             steps: [{ type: 'contrato_link_skip_already_enrolled', api_status: apiStatus.status }],
             ctxSnapshot: { inscricaoForm: status, apiStatus: apiStatus.status || null },
           }),

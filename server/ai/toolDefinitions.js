@@ -296,7 +296,7 @@ export const TOOL_DEFINITIONS = [
             type: 'string',
             enum: ['consultor', 'matricula'],
             description:
-              'consultor = encaminhar dúvida/caso para humano (salesbot 49777). ' +
+              'consultor = dúvida/caso que a base não cobre ou pedido explícito de humano (NÃO aciona salesbot; inicia o fluxo de saída do canal). ' +
               'matricula = enviar template Form Sumar (NÃO dispara salesbot direto). Default: consultor.',
           },
         },

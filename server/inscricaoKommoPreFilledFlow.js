@@ -54,6 +54,7 @@ import {
   evaluateKommoExpressReadiness,
 } from './kommoCardMirror.js'
 import { executeCaptacaoAfterFormResolved } from './inscricaoPostFormPipeline.js'
+import { buildFacultyContactRedirectReply } from '../libShared/humanHandoffHeuristics.js'
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
 
@@ -134,13 +135,7 @@ function buildExpressAckSemLinkReply(opts = {}) {
 }
 
 function buildDistribuirConsultorReply(opts = {}) {
-  const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
-  const curso = opts.cursoNome ? ` para *${opts.cursoNome}*` : ''
-  return (
-    `Obrigado${nameBit}! Recebi seu pedido de matrícula${curso}, mas neste momento ` +
-    `não consigo concluir automaticamente — um consultor da Faculdade Sumaré vai ` +
-    `entrar em contato em instantes para finalizar com você.`
-  )
+  return buildFacultyContactRedirectReply({ pushName: opts.pushName })
 }
 
 async function setStatus(env, telefone, status, leadIdHint) {

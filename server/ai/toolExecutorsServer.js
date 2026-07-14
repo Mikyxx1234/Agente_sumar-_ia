@@ -28,6 +28,7 @@ import {
 } from '../inscricaoActionTools.js'
 import { runEnviarGradePdf } from '../gradeCurricularActionTools.js'
 import { startChannelExitConfirm } from '../humanHandoffFlow.js'
+import { buildFacultyContactRedirectReply } from '../../libShared/humanHandoffHeuristics.js'
 
 async function getEmbedding(env, text, ctx, toolName) {
   const apiKey = env.OPENAI_API_KEY || env.VITE_OPENAI_API_KEY
@@ -133,7 +134,7 @@ async function vectorSearch(env, ctx, toolName, rpcName, query, matchCount = 10)
     .join('\n\n---\n\n')
 }
 
-function formatInscricaoResult(data) {
+function formatInscricaoResult(data, pushName) {
   if (!data.ok) {
     if (data.code === 'CURSO_INVALIDO') {
       return [
@@ -144,44 +145,44 @@ function formatInscricaoResult(data) {
     if (data.code === 'MISSING_CRM_FIELDS' && data.message) return data.message
     if (data.code === 'KOMMO_LEAD_NOT_FOUND' && data.message) return data.message
     if (data.code === 'MISSING_PARAMS') return data.error || 'Informe curso e tipo de ingresso.'
-    // Falhas técnicas: não exposor detalhes ao usuário.
+    // Falhas técnicas: não expor detalhes ao usuário nem prometer consultor ativo.
     return [
       'Não foi possível concluir a inscrição agora.',
-      'INSTRUÇÃO: peça desculpas ao usuário, diga que vai encaminhar para um consultor e siga conversando normalmente. Não cite IDs ou detalhes técnicos.',
+      `INSTRUÇÃO: NÃO prometa que um consultor entrará em contato. Responda ao lead com este texto (pode ajustar levemente o tom):\n\n${buildFacultyContactRedirectReply({ pushName })}`,
     ].join('\n')
   }
   const lines = [
     data.retorno || 'Lead movido para Aguardando Inscrição.',
     `Curso: ${data.curso}`,
     `Tipo de ingresso: ${data.tipo_ingresso}`,
-    'INSTRUÇÃO: confirme ao usuário que o pedido de inscrição foi registrado e que um consultor entrará em contato para finalizar. Tom acolhedor e direto.',
+    'INSTRUÇÃO: confirme ao usuário que o pedido de inscrição foi registrado. NÃO prometa que um consultor entrará em contato ativamente — apenas confirme o registro em tom acolhedor e direto.',
   ]
   return lines.join('\n')
 }
 
-function formatDistribuirResult(data) {
+function formatDistribuirResult(data, pushName) {
   if (!data.ok) {
     if (data.code === 'MISSING_CRM_FIELDS' && data.message) return data.message
     if (data.code === 'KOMMO_LEAD_NOT_FOUND' && data.message) return data.message
     // Em qualquer outro erro, o LLM recebe uma mensagem GENÉRICA com
     // instrução clara — nunca expor pipeline/funil/IDs internos pro
-    // cliente. Falhas técnicas viram "consultor entrará em contato em
-    // breve" do ponto de vista do usuário.
+    // cliente. Falhas técnicas viram o redirecionamento canônico pro
+    // atendimento oficial da Faculdade — nunca "consultor entrará em contato".
     if (data.code === 'LEAD_NOT_ELIGIBLE') {
       return [
-        'Não foi possível encaminhar para um consultor humano agora.',
-        'INSTRUÇÃO: continue ajudando o cliente normalmente e diga que um consultor entrará em contato em breve. Não cite funil, pipeline ou detalhes técnicos.',
+        'Não foi possível encaminhar o atendimento agora.',
+        `INSTRUÇÃO: NÃO prometa consultor ativo. Responda ao lead com este texto (pode ajustar levemente o tom):\n\n${buildFacultyContactRedirectReply({ pushName })}`,
       ].join('\n')
     }
     if (data.code === 'DIST_COMERCIAL_NOT_CONFIGURED') {
       return [
         'Distribuição indisponível por configuração interna.',
-        'INSTRUÇÃO: peça desculpas brevemente e diga que um consultor entrará em contato em breve.',
+        `INSTRUÇÃO: peça desculpas brevemente. NÃO prometa consultor ativo — use este texto:\n\n${buildFacultyContactRedirectReply({ pushName })}`,
       ].join('\n')
     }
     return [
       'Distribuição não executada.',
-      'INSTRUÇÃO: continue a conversa normalmente e diga que um consultor entrará em contato em breve. Não cite detalhes técnicos.',
+      `INSTRUÇÃO: NÃO prometa consultor ativo. Responda ao lead com este texto:\n\n${buildFacultyContactRedirectReply({ pushName })}`,
     ].join('\n')
   }
   const lines = [
@@ -291,7 +292,7 @@ export function buildToolExecutors(env, ctx, flowCtx = {}) {
       }
       const r = await runInscricao(env, args)
       absorbToolMeta(safeCtx, r)
-      return formatInscricaoResult(r)
+      return formatInscricaoResult(r, flowCtx.pushName)
     },
     distribuir_humano: async (args) => {
       const motivo = resolveDistribuirMotivo(args)
@@ -306,7 +307,7 @@ export function buildToolExecutors(env, ctx, flowCtx = {}) {
       if (kind === 'matricula_pos_form') {
         const r = await runDistribuirHumano(env, { ...args, motivo: 'matricula_pos_form' })
         absorbToolMeta(safeCtx, r)
-        return formatDistribuirResult(r)
+        return formatDistribuirResult(r, flowCtx.pushName)
       }
       // Pedido de humano / dúvida sem solução: NÃO ativa mais salesbot.
       // Fluxo de saída do canal: pergunta de confirmação → se o lead

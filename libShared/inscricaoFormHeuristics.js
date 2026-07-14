@@ -12,6 +12,7 @@ import {
   assistantAskedPoloPreFormChoice,
   userMessageLooksLikePoloChoice,
 } from './sumarePoloCatalog.js'
+import { buildFacultyContactRedirectReply } from './humanHandoffHeuristics.js'
 
 export const INSCRICAO_FORM_STATUS_AGUARDANDO = 'aguardando_form_sumar'
 /** Formulário recebido — salesbot de distribuição em andamento. */
@@ -155,6 +156,18 @@ export function buildFormAwaitingFillReply(opts = {}) {
     `Oi${nameBit}! O formulário de inscrição já foi enviado aqui no WhatsApp. ` +
     `Quando terminar de preencher e enviar, seguimos automaticamente com o próximo passo. ` +
     `Precisa de ajuda com algum campo?`
+  )
+}
+
+/**
+ * Lead afirmou ter preenchido/enviado o Form Sumar, mas a verificação no
+ * Kommo/Supabase não encontrou o envio — avisamos e reenviamos na hora.
+ */
+export function buildFormNotReceivedResendReply(opts = {}) {
+  const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
+  return (
+    `Oi${nameBit}! Verificamos por aqui e ainda não recebemos as informações do formulário de inscrição. ` +
+    `Acabei de reenviar agora mesmo — pode preencher e enviar novamente, por favor?`
   )
 }
 
@@ -567,9 +580,7 @@ export function buildInscricaoFormCompleteReply(opts = {}) {
       `Em breve nossa equipe segue com você por aqui para finalizar tudo, tudo bem?`
     )
   }
-  return (
-    `Obrigado${nameBit}! Registramos o formulário. Um consultor da Faculdade Sumaré entrará em contato em breve para concluir sua inscrição.`
-  )
+  return buildFacultyContactRedirectReply({ pushName: opts.pushName })
 }
 
 /** Lead pede reenvio do link do contrato / pagamento. */

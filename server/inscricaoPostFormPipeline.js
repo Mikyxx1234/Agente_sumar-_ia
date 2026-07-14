@@ -14,14 +14,19 @@ import {
   INSCRICAO_FORM_STATUS_DISTRIBUIR_CONSULTOR,
   messageLooksLikeFormSumarResponse,
   messageIsFlowResponsesReceived,
+  messageIsFormularioSumarPreenchidoMarker,
   messageLooksLikeFormFollowUp,
   messageSignalsFormSubmissionAck,
   buildInscricaoFormCompleteReply,
+  buildFormNotReceivedResendReply,
   matriculaPosFormAlreadyProcessed,
+  inscricaoFormAlreadyFilled,
+  captacaoOrPosFormAdvanced,
   INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO,
 } from '../libShared/inscricaoFormHeuristics.js'
 import { findLastFormularioSumSentMs, noteBlob, noteCreatedMs } from '../libShared/kommoFormNotes.js'
 import { sendMessageWithNote } from './whatsappSender.js'
+import { deliverInscricaoForm } from './inscricaoFormFlow.js'
 import { fetchLeadFormSnapshot, validateFormSnapshot } from './inscricaoKommoFields.js'
 import {
   resolvePoloFromKommoSnapshot,
@@ -47,6 +52,7 @@ import {
   leadHasCaptacaoContratoNote,
 } from './postFormSendGuard.js'
 import { getAgentQueueSessionCutoffIso } from './agentQueueSession.js'
+import { buildFacultyContactRedirectReply } from '../libShared/humanHandoffHeuristics.js'
 import {
   runMatriculaCaptacaoAfterForm,
   shouldRunSalesbot49813,
@@ -394,13 +400,10 @@ async function preparePoloStepAfterForm(env, { telefone, leadId, pushName }) {
     }
   }
 
-  const nameBit = pushName ? `, ${String(pushName).split(/\s+/)[0]}` : ''
   return {
     askPolo: false,
     missingPolo: true,
-    reply:
-      `Obrigado${nameBit}! Recebemos seu formulário, mas não localizamos o polo de inscrição no cadastro. ` +
-      `Um consultor da Faculdade Sumaré entrará em contato em breve para concluir sua matrícula.`,
+    reply: buildFacultyContactRedirectReply({ pushName }),
   }
 }
 
@@ -474,23 +477,18 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
       console.error(
         `[inscricaoPostForm] captação falhou lead=${idLead} code=${cap.code} missing=${missing} err=${String(cap.error || '').slice(0, 800)}`,
       )
-      const firstName = pushName ? `, ${String(pushName).split(/\s+/)[0]}` : ''
       const cursoRecoverable =
         cap.code === 'CURSO_INVALIDO_SNAPSHOT' ||
         cap.code === 'CURSO_NAO_RESOLVIDO' ||
         cap.code === 'CURSO_AUSENTE'
       if (cursoRecoverable) {
-        reply =
-          `Obrigado${firstName}! Recebemos seu formulário, mas o *curso informado* não pôde ser confirmado automaticamente. ` +
-          `Um consultor da Faculdade Sumaré vai te ajudar a concluir a inscrição em breve — ou responda aqui com o nome exato do curso desejado.`
+        reply = buildFacultyContactRedirectReply({ pushName })
         await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO).catch(() => {})
         ctxForm = INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO
         captacaoFailedTerminal = false
         captacaoFailReason = cap.code || 'curso_invalido'
       } else if (missing.includes('curso') || cap.code === 'MISSING_FIELDS') {
-        reply =
-          `Obrigado${firstName}! Recebemos seu formulário. O curso informado ainda não está disponível para inscrição automática no momento. ` +
-          `Um consultor da Faculdade Sumaré entrará em contato em breve.`
+        reply = buildFacultyContactRedirectReply({ pushName })
         captacaoFailedTerminal = true
         captacaoFailReason = `${cap.code || 'sem_code'}:${missing || cap.error || 'sem_detalhe'}`
       } else {
@@ -776,9 +774,64 @@ export async function tryProcessInscricaoPostFormPipeline(env, input) {
         model,
         t0,
         ok: false,
-        reply:
-          'Recebi seu formulário! Para seguir, preciso localizar seu cadastro — em instantes um consultor da Faculdade Sumaré fala com você.',
+        reply: buildFacultyContactRedirectReply({ pushName }),
         steps: [{ type: 'inscricao_form_complete', ok: false, code: 'LEAD_NOT_FOUND' }],
+      }),
+    }
+  }
+
+  // B) Lead afirma ter enviado o formulário, mas nada foi detectado no
+  // Kommo/DB: avisa que não recebemos e reenvia (forceResend). NUNCA por
+  // "achismo" — exige claim explícito do lead (messageSignalsFormSubmissionAck)
+  // + status pré-avanço + nada detectado no Kommo. Flow "Flow responses
+  // received" / marcador interno NUNCA passam por aqui: são sinal de
+  // conclusão real do Flow (mesmo que o snapshot ainda esteja frágil), e o
+  // scheduler nunca reenvia por claim vazio (só avança com kommoFormDone).
+  const isFlowCompletionSignal =
+    messageIsFlowResponsesReceived(userMessage) || messageIsFormularioSumarPreenchidoMarker(userMessage)
+
+  if (
+    !isFlowCompletionSignal &&
+    !schedulerTick &&
+    waitingForForm &&
+    !kommoFormDone &&
+    !inscricaoFormAlreadyFilled(row) &&
+    !captacaoOrPosFormAdvanced(row) &&
+    messageSignalsFormSubmissionAck(userMessage)
+  ) {
+    console.log(
+      `[inscricaoPostForm] lead=${idLead} claim_sem_confirmacao_kommo status=${status || 'n/a'} — reenviando Formulario_Sum`,
+    )
+    const delivery = await deliverInscricaoForm(env, {
+      telefone,
+      leadId: idLead,
+      executionId,
+      forceResend: true,
+    })
+    const sendOk = Boolean(delivery.result?.ok)
+    if (sendOk) {
+      await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO).catch(() => {})
+    }
+    return {
+      handled: true,
+      result: buildAgentReturn({
+        executionId,
+        model,
+        t0,
+        ok: sendOk,
+        reply: buildFormNotReceivedResendReply({ pushName }),
+        steps: [
+          {
+            type: 'form_not_received_resend',
+            ok: sendOk,
+            delivery: delivery.delivery,
+            code: delivery.result?.code,
+          },
+        ],
+        ctxSnapshot: {
+          inscricaoForm: sendOk ? INSCRICAO_FORM_STATUS_AGUARDANDO : status,
+          formNotReceivedResent: true,
+        },
       }),
     }
   }

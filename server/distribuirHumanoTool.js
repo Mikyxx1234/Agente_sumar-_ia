@@ -19,6 +19,7 @@ import { findLeadByPhone } from './kommoClient.js'
 import { kommoRawFetch } from './kommoRateLimiter.js'
 import { runKommoSalesbot, normalizeSalesbotMotivo } from './kommoSalesbot.js'
 import { updateDadosCliente } from './dadosClienteStore.js'
+import { buildFacultyContactRedirectReply } from '../libShared/humanHandoffHeuristics.js'
 
 const DEFAULT_DISTRIB_PIPELINE_ID = 11685120
 const DEFAULT_DISTRIB_STATUS_IDS = [89820300, 89820304]
@@ -838,7 +839,7 @@ export async function runDistribuirHumano(env, body) {
   }
 }
 
-export function formatDistribuirHumanoReply(result) {
+export function formatDistribuirHumanoReply(result, pushName) {
   if (!result.ok) {
     if (result.code === 'MISSING_CRM_FIELDS') {
       return result.message || 'Informe o telefone do lead para distribuir o atendimento humano.'
@@ -847,21 +848,22 @@ export function formatDistribuirHumanoReply(result) {
       return result.message || 'Lead não localizado no CRM. Peça pra ele entrar em contato pelo canal padrão.'
     }
     // Mensagem genérica pro LLM (sem citar funil/pipeline/IDs ao cliente).
+    // NÃO prometer consultor ativo — sempre o redirecionamento canônico.
     if (result.code === 'LEAD_NOT_ELIGIBLE') {
       return [
-        'Não foi possível encaminhar para um consultor humano agora.',
-        'INSTRUÇÃO: continue ajudando o cliente normalmente e diga que um consultor entrará em contato em breve. Não cite funil, pipeline ou detalhes técnicos.',
+        'Não foi possível encaminhar o atendimento agora.',
+        `INSTRUÇÃO: NÃO prometa consultor ativo. Responda ao lead com este texto:\n\n${buildFacultyContactRedirectReply({ pushName })}`,
       ].join('\n')
     }
     if (result.code === 'DIST_COMERCIAL_NOT_CONFIGURED') {
       return [
         'Distribuição indisponível por configuração interna.',
-        'INSTRUÇÃO: peça desculpas brevemente e diga que um consultor entrará em contato em breve.',
+        `INSTRUÇÃO: peça desculpas brevemente. NÃO prometa consultor ativo — use este texto:\n\n${buildFacultyContactRedirectReply({ pushName })}`,
       ].join('\n')
     }
     return [
       'Distribuição não executada.',
-      'INSTRUÇÃO: continue a conversa normalmente e diga que um consultor entrará em contato em breve. Não cite detalhes técnicos.',
+      `INSTRUÇÃO: NÃO prometa consultor ativo. Responda ao lead com este texto:\n\n${buildFacultyContactRedirectReply({ pushName })}`,
     ].join('\n')
   }
   const lines = [

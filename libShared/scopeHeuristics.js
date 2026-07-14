@@ -8,6 +8,7 @@ import {
 } from './conversationContextHeuristics.js'
 import { extractCursoAreaFromText } from './cursoConfirmation.js'
 import { messageAsksPaymentInfo } from './inboundMessageSanitize.js'
+import { buildFacultyContactRedirectReply } from './humanHandoffHeuristics.js'
 
 export const DEFAULT_SCOPE_REFUSAL =
   'Olá! Sou o assistente da Faculdade Sumaré e posso te ajudar com cursos, valores, matrícula e informações sobre nossos programas de graduação e pós-graduação (EAD). ' +
@@ -343,28 +344,19 @@ export function detectMatriculaHandoffIntent(userMessage, historyMessages = []) 
   return hasIngresso && hasCurso
 }
 
-/** Encaminhamento automático: só consultor (49777). Matrícula usa fluxo Form Sumar. */
+/** Motivo padrão de distribuir_humano: fluxo de saída do canal (não aciona mais salesbot 49777). Matrícula usa fluxo Form Sumar. */
 export function detectHandoffMotivo() {
   return 'consultor'
 }
 
-/** Resposta ao lead após encaminhamento automático para consultor. */
+/**
+ * Resposta quando o agente não consegue resolver por este canal.
+ * NÃO promete consultor ativo nem contato futuro — orienta o lead a falar
+ * direto com a Faculdade Sumaré pelo atendimento oficial (ver
+ * `buildFacultyContactRedirectReply`, libShared/humanHandoffHeuristics.js).
+ */
 export function buildHumanHandoffReply(opts = {}) {
-  const nameBit = extractFirstName(opts.pushName) ? `, ${extractFirstName(opts.pushName)}` : ''
-  const matricula = opts.motivo === 'matricula'
-  if (opts.ok) {
-    if (matricula) {
-      return (
-        `Perfeito${nameBit}! Já encaminhei seus dados para um consultor finalizar sua matrícula — em breve alguém da equipe da Faculdade Sumaré fala com você por aqui, tudo bem?`
-      )
-    }
-    return (
-      `Entendi${nameBit}! Já encaminhei seu atendimento para um consultor da Faculdade Sumaré — em breve alguém da equipe fala com você por aqui, tudo bem?`
-    )
-  }
-  return (
-    `Peço desculpas pela espera${nameBit}. Registrei seu pedido e um consultor da Faculdade Sumaré entrará em contato em breve para te atender pessoalmente.`
-  )
+  return buildFacultyContactRedirectReply({ pushName: opts.pushName })
 }
 
 /** Resposta cordial para saudação simples (sem chamar o orquestrador). */

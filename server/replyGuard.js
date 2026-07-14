@@ -28,6 +28,7 @@ import {
   HARD_LGPD_LEAK_CODES,
 } from '../libShared/lgpdCompliance.js'
 import { sanitizeCourseLinksFromReply } from '../libShared/courseLinkOutboundGuard.js'
+import { buildFacultyContactRedirectReply } from '../libShared/humanHandoffHeuristics.js'
 
 const PROMISE_FORM_SEND_RX =
   /\b(enviei|acabei de enviar|j[aá] enviei|j[aá] ativei|vou enviar|vou mandar|pode aguardar|aguarde um momento|em instantes (vou|envio))\b[\s\S]{0,80}\bformul[aá]rio\b/i
@@ -87,7 +88,7 @@ function safeReplyForStage(stage) {
   }
   if (stage === 'form_sumar_concluido') {
     return (
-      'Sua inscrição já está concluída por aqui. Em breve um consultor da Faculdade Sumaré entra em contato para os próximos passos.'
+      'Sua inscrição já está concluída por aqui. ' + buildFacultyContactRedirectReply({})
     )
   }
   // Sem stage definido → pede polo para começar o fluxo.

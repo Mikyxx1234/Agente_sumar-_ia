@@ -45,6 +45,7 @@ import {
   resolvePortalUrlForCandidato,
 } from './sumareCaptacaoClient.js'
 import { createLeadAuditNote } from './kommoClient.js'
+import { buildFacultyContactRedirectReply } from '../libShared/humanHandoffHeuristics.js'
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
 
@@ -86,11 +87,7 @@ function buildAskCpfReply(opts = {}) {
 }
 
 function buildInscricaoNaoEncontradaReply(opts = {}) {
-  const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
-  return (
-    `Obrigado${nameBit}! Não localizei automaticamente uma inscrição ativa com os dados do seu cadastro. ` +
-    `Um consultor da Faculdade Sumaré vai te ajudar a concluir em instantes por aqui, tudo bem?`
-  )
+  return buildFacultyContactRedirectReply({ pushName: opts.pushName })
 }
 
 async function lookupCandidatoByGerar(env, snapshot, telefone) {

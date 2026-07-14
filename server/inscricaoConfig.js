@@ -27,8 +27,8 @@ export function matriculaViaConsultorInstruction(args = {}) {
   )
   lines.push(
     'INSTRUÇÃO: o sistema ativará o salesbot Kommo Formulario_Sum (formulário no WhatsApp). Após o preenchimento: salesbot 49813 (matrícula) e pausa da IA.',
-    'PROIBIDO: pedir outro telefone, dizer que não achou cadastro, mandar usar canal padrão externo, ou afirmar que a matrícula já está concluída.',
-    'Responda ao lead de forma acolhedora: um consultor da Faculdade Sumaré entrará em breve para finalizar a matrícula.',
+    'PROIBIDO: pedir outro telefone, dizer que não achou cadastro, mandar usar canal padrão externo, afirmar que a matrícula já está concluída, ou prometer que um consultor entrará em contato.',
+    'Responda ao lead de forma acolhedora, reforçando que o formulário segue automaticamente pelo sistema.',
   )
   return lines.join('\n')
 }

@@ -49,6 +49,7 @@ import {
 import { DADOS_CLIENTE_FORM_GUARD_SELECT, DADOS_CLIENTE_INSCRICAO_SELECT } from './dadosClienteInscricaoFields.js'
 import { gateMatriculaConfirmacaoBeforeForm } from './inscricaoMatriculaConfirmFlow.js'
 import { moveLeadToInscricaoIfNeeded } from './kommoFunnelMoves.js'
+import { buildFacultyContactRedirectReply } from '../libShared/humanHandoffHeuristics.js'
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
 
@@ -447,16 +448,9 @@ export async function tryHandleInscricaoFormStart(env, input) {
     console.error(
       `[inscricaoForm] FALHA delivery=${delivery.delivery} telefone=${telefone} lead=${idLead ?? 'n/a'} err=${delivery.result?.error || delivery.result?.code}`,
     )
-    if (delivery.result?.code === 'MISSING_FORMULARIO_SUM_BOT_ID') {
-      whatsappReply =
-        'Queremos muito te ajudar com a inscrição! No momento o formulário automático não está configurado no sistema — um consultor entrará em contato em breve por aqui.'
-    } else if (delivery.result?.code === 'LEAD_NOT_FOUND') {
-      whatsappReply =
-        'Perfeito! Para enviar o formulário de inscrição, preciso localizar seu cadastro — em instantes um consultor da Faculdade Sumaré fala com você por aqui, tudo bem?'
-    } else {
-      whatsappReply =
-        'Queremos muito te ajudar com a inscrição na Faculdade Sumaré! No momento não consegui abrir o formulário automático no WhatsApp — um consultor entrará em contato em breve por aqui.'
-    }
+    // Falha técnica (bot não configurado, lead não localizado, etc.):
+    // redirecionamento canônico — NUNCA prometer consultor ativo.
+    whatsappReply = buildFacultyContactRedirectReply({ pushName })
   }
 
   const toolName = delivery.delivery === 'kommo_salesbot' ? 'formulario_sum_salesbot' : 'form_sumar_template'

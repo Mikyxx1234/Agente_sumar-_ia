@@ -22,12 +22,15 @@
 
 import {
   INSCRICAO_FORM_STATUS_AGUARDANDO,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM,
   INSCRICAO_FORM_STATUS_CONCLUIDO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
   buildInscricaoFormSentReply,
   buildFormAwaitingFillReply,
+  buildFormNotReceivedResendReply,
   shouldBlockFormularioSumResend,
+  inscricaoFormAlreadyFilled,
 } from '../libShared/inscricaoFormHeuristics.js'
 import {
   SUMARE_POLOS_EAD,
@@ -47,11 +50,15 @@ import {
 import { findLeadByPhone, createLeadAuditNote } from './kommoClient.js'
 import { resolveTransferenciaCursoCodigo, suggestSimilarTransferenciaCursos } from './sumareCaptacaoClient.js'
 import { deliverInscricaoForm } from './inscricaoFormFlow.js'
-import { executeCaptacaoAfterFormResolved } from './inscricaoPostFormPipeline.js'
+import {
+  executeCaptacaoAfterFormResolved,
+  detectFormSumarRecebidoNoKommo,
+} from './inscricaoPostFormPipeline.js'
 import { fetchLeadFormSnapshot } from './inscricaoKommoFields.js'
 import { DADOS_CLIENTE_FORM_GUARD_SELECT } from './dadosClienteInscricaoFields.js'
 import { gateMatriculaConfirmacaoBeforeForm } from './inscricaoMatriculaConfirmFlow.js'
 import { syncSumPoloOnLeadQuiet } from './sumareLeadFields.js'
+import { buildFacultyContactRedirectReply } from '../libShared/humanHandoffHeuristics.js'
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
 
@@ -114,14 +121,19 @@ async function resolveExistingPolo(env, { telefone, leadId, historyMessages = []
   return null
 }
 
-async function gravarPoloEStatusAguardando(env, { telefone, leadId, polo, unidade }) {
+/**
+ * Persiste polo/unidade SEM forçar `aguardando_form_sumar` — o status só é
+ * gravado depois que `deliverInscricaoForm` confirma sucesso (Mario #24068327:
+ * gravar o status antes do deliver fazia o próprio deliver enxergar
+ * "já aguardando" e retornar FORM_ALREADY_SENT/skip no mesmo turno).
+ */
+async function gravarPoloEUnidade(env, { telefone, leadId, polo, unidade }) {
   const row = await ensureDadosClienteRow(env, {
     telefone,
     idLead: leadId,
     fields: {
       polo_inscricao_escolhido: polo.nome,
       captacao_unidade: unidade,
-      [FORM_STATUS_FIELD]: INSCRICAO_FORM_STATUS_AGUARDANDO,
     },
   })
   await syncSumPoloOnLeadQuiet(env, { leadId, telefone, poloNome: polo.nome })
@@ -134,6 +146,28 @@ async function gravarStatus(env, { telefone, leadId, status }) {
     idLead: leadId,
     fields: { [FORM_STATUS_FIELD]: status },
   })
+}
+
+/** Códigos de falha REAL do deliver — mensagem de consultor é adequada. */
+const FORM_DELIVERY_HARD_FAIL_CODES = new Set([
+  'SALESBOT_FAILED',
+  'MISSING_FORMULARIO_SUM_BOT_ID',
+  'LEAD_NOT_FOUND',
+])
+
+/**
+ * Deliver falhou/skippou por já ter sido enviado ou dedupe — não é falha
+ * real, então a resposta deve ser suave (`buildFormAwaitingFillReply`), não
+ * a mensagem de consultor.
+ */
+function isSoftFormDeliverySkip(delivery) {
+  const code = delivery?.result?.code
+  if (FORM_DELIVERY_HARD_FAIL_CODES.has(code)) return false
+  if (code === 'FORM_ALREADY_SENT') return true
+  if (code === 'dedupe_recent') return true
+  if (delivery?.result?.reason === 'dedupe_recent') return true
+  if (delivery?.result?.skipped === true) return true
+  return false
 }
 
 /** Tool: `enviar_form_sumar_inscricao`. */
@@ -289,23 +323,50 @@ export async function runEnviarFormSumarInscricao(env, args = {}, ctx = {}) {
     }
   }
 
-  await gravarPoloEStatusAguardando(env, { telefone, leadId, polo, unidade }).catch(() => {})
+  await gravarPoloEUnidade(env, { telefone, leadId, polo, unidade }).catch(() => {})
 
+  // Envio intencional neste turno: forceResend evita que o próprio deliver
+  // veja um status "aguardando" (gravado por outra réplica/turno) e retorne
+  // FORM_ALREADY_SENT/skip antes de sequer tentar o salesbot.
   const delivery = await deliverInscricaoForm(env, {
     telefone,
     leadId,
     executionId: ctx.executionId,
-    forceResend: false,
+    forceResend: true,
   })
   const sendOk = Boolean(delivery.result?.ok)
 
   if (!sendOk) {
+    if (isSoftFormDeliverySkip(delivery)) {
+      return {
+        ok: true,
+        code: delivery.result?.code || 'FORM_ALREADY_SENT',
+        text: 'Formulário já enviado/skip de reenvio — resposta suave (não é falha real).',
+        replyOverride: buildFormAwaitingFillReply({ pushName }),
+        ctxSnapshot: {
+          inscricaoActionTool: 'enviar_form_sumar_inscricao',
+          inscricaoForm: INSCRICAO_FORM_STATUS_AGUARDANDO,
+          delivery: delivery.delivery,
+          poloId: polo.id,
+          unidade,
+          softSkip: true,
+        },
+        steps: [
+          {
+            type: 'tool_action',
+            tool: 'enviar_form_sumar_inscricao',
+            ok: true,
+            code: delivery.result?.code || 'FORM_ALREADY_SENT',
+            delivery: delivery.delivery,
+          },
+        ],
+      }
+    }
     return {
       ok: false,
       code: delivery.result?.code || 'FORM_SEND_FAILED',
       text: `Falha ao disparar Form Sumar: ${delivery.result?.error || delivery.result?.code || 'erro'}.`,
-      replyOverride:
-        'Queremos muito te ajudar com a inscrição na Faculdade Sumaré! No momento não consegui abrir o formulário automático no WhatsApp — um consultor entrará em contato em breve por aqui.',
+      replyOverride: buildFacultyContactRedirectReply({ pushName }),
       ctxSnapshot: {
         inscricaoActionTool: 'enviar_form_sumar_inscricao',
         inscricaoForm: INSCRICAO_FORM_STATUS_AGUARDANDO,
@@ -325,6 +386,8 @@ export async function runEnviarFormSumarInscricao(env, args = {}, ctx = {}) {
       ],
     }
   }
+
+  await gravarStatus(env, { telefone, leadId, status: INSCRICAO_FORM_STATUS_AGUARDANDO }).catch(() => {})
 
   const reply = buildInscricaoFormSentReply({ pushName, resend: false })
   return {
@@ -657,23 +720,49 @@ export async function runRegistrarPoloInscricao(env, args = {}, ctx = {}) {
     }
   }
 
-  await gravarPoloEStatusAguardando(env, { telefone, leadId, polo, unidade }).catch(() => {})
+  await gravarPoloEUnidade(env, { telefone, leadId, polo, unidade }).catch(() => {})
 
+  // Nova escolha de polo = envio intencional do Form Sumar neste turno.
   const delivery = await deliverInscricaoForm(env, {
     telefone,
     leadId,
     executionId: ctx.executionId,
-    forceResend: false,
+    forceResend: true,
   })
   const sendOk = Boolean(delivery.result?.ok)
 
   if (!sendOk) {
+    if (isSoftFormDeliverySkip(delivery)) {
+      return {
+        ok: true,
+        code: delivery.result?.code || 'FORM_ALREADY_SENT',
+        text: `Polo ${polo.nome} gravado; formulário já enviado/skip de reenvio — resposta suave.`,
+        replyOverride: buildFormAwaitingFillReply({ pushName }),
+        ctxSnapshot: {
+          inscricaoActionTool: 'registrar_polo_inscricao',
+          inscricaoForm: INSCRICAO_FORM_STATUS_AGUARDANDO,
+          poloId: polo.id,
+          poloNome: polo.nome,
+          unidade,
+          delivery: delivery.delivery,
+          softSkip: true,
+        },
+        steps: [
+          {
+            type: 'tool_action',
+            tool: 'registrar_polo_inscricao',
+            ok: true,
+            code: delivery.result?.code || 'FORM_ALREADY_SENT',
+            polo: polo.id,
+          },
+        ],
+      }
+    }
     return {
       ok: false,
       code: delivery.result?.code || 'FORM_SEND_FAILED',
       text: `Polo ${polo.nome} gravado, mas falha ao disparar Form Sumar: ${delivery.result?.error || delivery.result?.code || 'erro'}.`,
-      replyOverride:
-        `Anotamos o polo *${polo.nome}*. No momento não consegui abrir o formulário automático aqui no WhatsApp — um consultor da Faculdade Sumaré entrará em contato em breve por aqui.`,
+      replyOverride: buildFacultyContactRedirectReply({ pushName }),
       ctxSnapshot: {
         inscricaoActionTool: 'registrar_polo_inscricao',
         inscricaoForm: INSCRICAO_FORM_STATUS_AGUARDANDO,
@@ -694,6 +783,8 @@ export async function runRegistrarPoloInscricao(env, args = {}, ctx = {}) {
       ],
     }
   }
+
+  await gravarStatus(env, { telefone, leadId, status: INSCRICAO_FORM_STATUS_AGUARDANDO }).catch(() => {})
 
   const reply = buildPoloEscolhidoAckReply(polo, { pushName })
   return {
@@ -744,9 +835,8 @@ export async function runConfirmarRecebimentoFormulario(env, args = {}, ctx = {}
     return {
       ok: false,
       code: 'LEAD_NOT_FOUND',
-      text: 'Não consegui localizar o lead no Kommo para concluir a inscrição. Encaminhe para consultor.',
-      replyOverride:
-        'Recebi seu formulário! Para seguir, preciso localizar seu cadastro — em instantes um consultor da Faculdade Sumaré fala com você por aqui, tudo bem?',
+      text: 'Não consegui localizar o lead no Kommo para concluir a inscrição.',
+      replyOverride: buildFacultyContactRedirectReply({ pushName }),
       ctxSnapshot: { inscricaoActionTool: 'confirmar_recebimento_formulario', leadNotFound: true },
       steps: [
         { type: 'tool_action', tool: 'confirmar_recebimento_formulario', ok: false, code: 'LEAD_NOT_FOUND' },
@@ -757,7 +847,7 @@ export async function runConfirmarRecebimentoFormulario(env, args = {}, ctx = {}
   const row = await fetchDadosClienteByTelefone(
     env,
     telefone,
-    `${FORM_STATUS_FIELD},polo_inscricao_escolhido,captacao_unidade,captacao_candidato_id`,
+    `${FORM_STATUS_FIELD},polo_inscricao_escolhido,captacao_unidade,captacao_candidato_id,inscricao_form_recebido_at`,
   )
   const status = row?.[FORM_STATUS_FIELD] ?? null
   if (status === INSCRICAO_FORM_STATUS_CONCLUIDO || row?.captacao_candidato_id) {
@@ -775,6 +865,52 @@ export async function runConfirmarRecebimentoFormulario(env, args = {}, ctx = {}
       steps: [
         { type: 'tool_action', tool: 'confirmar_recebimento_formulario', ok: true, code: 'ALREADY_PROCESSED' },
       ],
+    }
+  }
+
+  // Lead afirmou ter enviado o formulário (é por isso que esta tool foi
+  // chamada) — antes de disparar captação, confirma no Kommo/DB que o form
+  // REALMENTE chegou. Sem confirmação: avisa e reenvia (forceResend), sem
+  // acionar captação. Evita matricular/captar com dados vazios.
+  const waitingForForm =
+    status === INSCRICAO_FORM_STATUS_AGUARDANDO || status === INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO
+  if (waitingForForm && !inscricaoFormAlreadyFilled(row)) {
+    const detect = await detectFormSumarRecebidoNoKommo(env, leadId).catch(() => ({ detected: false }))
+    if (!detect.detected) {
+      console.log(
+        `[inscricaoAction] lead=${leadId} confirmar_recebimento claim_sem_confirmacao_kommo status=${status} — reenviando Formulario_Sum`,
+      )
+      const delivery = await deliverInscricaoForm(env, {
+        telefone,
+        leadId,
+        executionId: ctx.executionId,
+        forceResend: true,
+      })
+      const sendOk = Boolean(delivery.result?.ok)
+      if (sendOk) {
+        await gravarStatus(env, { telefone, leadId, status: INSCRICAO_FORM_STATUS_AGUARDANDO }).catch(() => {})
+      }
+      return {
+        ok: sendOk,
+        code: 'FORM_NOT_RECEIVED_RESENT',
+        text: `Lead afirmou ter enviado o formulário, mas não foi detectado no Kommo. Reenviado (ok=${sendOk}).`,
+        replyOverride: buildFormNotReceivedResendReply({ pushName }),
+        ctxSnapshot: {
+          inscricaoActionTool: 'confirmar_recebimento_formulario',
+          inscricaoForm: sendOk ? INSCRICAO_FORM_STATUS_AGUARDANDO : status,
+          formNotReceivedResent: true,
+          delivery: delivery.delivery,
+        },
+        steps: [
+          {
+            type: 'tool_action',
+            tool: 'confirmar_recebimento_formulario',
+            ok: sendOk,
+            code: 'FORM_NOT_RECEIVED_RESENT',
+            delivery: delivery.delivery,
+          },
+        ],
+      }
     }
   }
 

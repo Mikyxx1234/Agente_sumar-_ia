@@ -26,6 +26,7 @@ import {
 import { finalizeCaptacaoForCandidato } from './matriculaCaptacaoPipeline.js'
 import { sendMessageWithNote } from './whatsappSender.js'
 import { executeCaptacaoAfterFormResolved } from './inscricaoPostFormPipeline.js'
+import { buildFacultyContactRedirectReply } from '../libShared/humanHandoffHeuristics.js'
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
 
@@ -86,8 +87,7 @@ export async function tryHandleCaptacaoInscricaoExistenteFlow(env, input) {
           executionId,
           model,
           t0,
-          reply:
-            'Para seguir com a nova inscrição, um consultor da Faculdade Sumaré vai te ajudar em instantes por aqui, tudo bem?',
+          reply: buildFacultyContactRedirectReply({ pushName }),
           steps: [{ type: 'captacao_confirm', ok: false, reason: 'missing_pending_candidato' }],
           ctxSnapshot: { inscricaoForm: status },
         }),
