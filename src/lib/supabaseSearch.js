@@ -379,7 +379,7 @@ export const TOOL_DEFINITIONS = [
     function: {
       name: 'distribuir_humano',
       description:
-        'Encaminha o lead para consultor humano e dispara salesbot no Kommo. motivo consultor (49777): dúvida/humano/FAQ. id_lead opcional.',
+        'Handoff: motivo matricula dispara salesbot de matrícula (49813); motivo consultor inicia saída do canal com links oficiais (atendimento/ouvidoria) — NÃO promete consultor ativo. id_lead opcional.',
       parameters: {
         type: 'object',
         properties: {
