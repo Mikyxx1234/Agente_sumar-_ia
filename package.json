@@ -40,7 +40,6 @@
     "register:grade-curricular-rule30": "node --env-file=.env scripts/register-grade-curricular-rule30.mjs"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.103.3",
     "exceljs": "^4.4.0",
     "express": "^5.2.1",
     "ioredis": "^5.10.1",
