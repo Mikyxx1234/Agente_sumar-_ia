@@ -567,8 +567,24 @@ export function buildInscricaoFormFieldsIncompleteReply(opts = {}) {
   const list = missing.length ? missing.join(', ') : 'alguns dados do cadastro'
   return (
     `Obrigado${nameBit}! Recebemos o formulário, mas ainda faltam informações no cadastro: **${list}**. ` +
-    `Um consultor pode te ajudar a completar — ou, se preferir, preencha novamente o formulário quando reenviarmos. ` +
+    `Pode me enviar esses dados por aqui mesmo, ou se preferir eu reenvio o formulário para você completar novamente. ` +
     `Posso esclarecer qualquer dúvida sobre o curso enquanto isso.`
+  )
+}
+
+/**
+ * Formulário chegou sem curso definido (ausente, ilegível ou não resolvido no
+ * catálogo). Em vez de redirecionar para o atendimento da faculdade, pedimos
+ * o nome do curso diretamente — mantém o lead no fluxo de captação em
+ * andamento (não é falha terminal, não pausa a IA).
+ */
+export function buildAskCursoAfterFormReply(opts = {}) {
+  const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
+  return (
+    `Obrigado${nameBit}! Recebemos o seu formulário. ` +
+    `Para finalizar a inscrição, me conta: qual é o *nome do curso* que você deseja fazer na Faculdade Sumaré? ` +
+    `Se você já é formado(a) e está buscando uma segunda graduação, pode me contar isso também. ` +
+    `Assim que eu tiver essa informação, sigo com os próximos passos da sua matrícula.`
   )
 }
 

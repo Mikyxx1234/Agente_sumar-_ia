@@ -12,6 +12,20 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-07-16 - Nota de auditoria quando atendimento não conclui + curso/polo pós-form
+- **Decisão**: Se pós-form/captação não concluir (falha terminal, redirect faculdade, lead não encontrado, polo/curso ausente), gravar nota Kommo via `createLeadAuditNote` com code/motivo/detalhe/EX. Form sem curso → pedir curso (não redirect). Polo ausente pós-form → pedir polo (não redirect).
+- **Contexto**: Leads Aline #24120625 e Thiago #24121875 receberam `buildFacultyContactRedirectReply` após Form Sumar sem `sum_Curso`.
+- **Alternativas descartadas**: Reativar salesbot consultor 49777; silenciar falhas só em log.
+- **Impacto**: Timeline Kommo explica bloqueios; lead permanece no fluxo comercial pedindo curso/polo.
+
+### 2026-07-16 - Bloquear reprocessamento em `aguardando_distribuicao_form`
+- **Decisão**: Com status `aguardando_distribuicao_form` (já pedimos o curso), não reabrir pós-form por `kommoFormDone` nem `schedulerTick` sem mensagem do lead que pareça nome de curso. Claim retorna `awaiting_curso_from_lead`.
+- **Contexto**: Thiago #24121875 — após mensagem pedindo curso (12:37), o pipeline reprocessou às 12:38 e mandou de novo o redirect da faculdade.
+- **Alternativas descartadas**: Meter o status em `MATRICULA_POS_FORM_IN_PROGRESS` cegamente (bloquearia avanço legítimo quando o lead informar o curso).
+- **Impacto**: Para o loop redirect; lead responde o curso e o fluxo pode seguir. **Requer deploy** do código novo em produção.
+
+---
+
 ### 2026-06-18 - Saúde do agente: grade PDF, memória e dedupe
 
 - **Decisão**

@@ -25,6 +25,22 @@ function looksLikeCommercialEnrollment(t) {
   if (/\b(quero|gostaria|posso|como)\s+(me\s+)?(matricular|inscrever|fazer\s+(a\s+)?inscri)/i.test(t)) return true
   if (/\b(valor|pre[cç]o|mensalidade|bolsa|desconto)\b/i.test(t) && !/\b(atrasad|inadimpl|d[eé]bito)/i.test(t)) return true
   if (/\b(transfer[eê]ncia|aproveitamento\s+de\s+mat[eé]rias?|dispensa\s+de\s+mat[eé]ria)\b/i.test(t)) return true
+  // "Já sou formado e queria saber o tempo/curso…" = interesse comercial (nova/2ª graduação),
+  // não pedido de secretaria/ex-aluno. Clayton #24121727: falso positivo em "formado".
+  if (
+    /\b(j[aá]\s+sou\s+formado|sou\s+formado|segunda\s+gradua[cç][aã]o|2[aª]\s+gradua[cç][aã]o)\b/i.test(t) &&
+    /\b(cursar|curso|tempo|dura[cç][aã]o|quero|queria|gostaria|saber|matricular|inscrever|estudar|gradua)\b/i.test(
+      t,
+    )
+  ) {
+    return true
+  }
+  if (/\b(tempo|dura[cç][aã]o|semestres?)\b/i.test(t) && /\b(cursar|curso|gradua|faculdade|estudar)\b/i.test(t)) {
+    return true
+  }
+  if (/\b(queria|quero|gostaria)\s+saber\b/i.test(t) && /\b(curso|cursar|gradua|mensalidade|valor)\b/i.test(t)) {
+    return true
+  }
   return false
 }
 
@@ -37,7 +53,15 @@ export function messageAsksAcademicAffairsSupportInText(text) {
   if (/\b(trancar|trancamento|trancar\s+(o\s+)?curso|trancar\s+(a\s+)?matr[ií]cula)\b/i.test(t)) return true
   if (/\b(cancelar|cancelamento)\s+(a\s+)?(matr[ií]cula|curso|inscri[cç][aã]o)\b/i.test(t)) return true
   if (/\b(cancelar|cancelamento)\b/i.test(t) && /\b(matricula|curso)\b/i.test(t)) return true
-  if (/\b(ex[-\s]?aluno|j[aá]\s+(fui|era)\s+aluno|j[aá]\s+conclu[ií]|j[aá]\s+finalizei|formado)\b/i.test(t)) return true
+  // Ex-aluno institucional / conclusão de curso. NÃO usar "formado" isolado —
+  // "já sou formado e quero cursar X" é captação (veja looksLikeCommercialEnrollment).
+  if (/\b(ex[-\s]?aluno|j[aá]\s+(fui|era)\s+aluno)\b/i.test(t)) return true
+  if (/\b(j[aá]\s+conclu[ií]|j[aá]\s+finalizei)\b/i.test(t) && !/\b(quero|queria|gostaria|cursar|curso)\b/i.test(t)) {
+    return true
+  }
+  if (/\bformado\b/i.test(t) && !/\b(quero|queria|gostaria|cursar|curso|tempo|dura|saber|estudar)\b/i.test(t)) {
+    return true
+  }
   if (/\b(situa[cç][aã]o\s+acad[eê]mica|secretaria\s+acad[eê]mica|coordena[cç][aã]o\s+do\s+curso)\b/i.test(t)) return true
   if (/\b(hist[oó]rico\s+escolar|hist[oó]rico\s+de\s+notas|declara[cç][aã]o\s+de\s+matr[ií]cula)\b/i.test(t)) return true
   if (/\bsegunda\s+via\b/i.test(t) && /\b(documento|diploma|certificado|hist[oó]rico)\b/i.test(t)) return true

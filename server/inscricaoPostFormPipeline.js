@@ -18,6 +18,8 @@ import {
   messageLooksLikeFormFollowUp,
   messageSignalsFormSubmissionAck,
   buildInscricaoFormCompleteReply,
+  buildInscricaoFormFieldsIncompleteReply,
+  buildAskCursoAfterFormReply,
   buildFormNotReceivedResendReply,
   matriculaPosFormAlreadyProcessed,
   inscricaoFormAlreadyFilled,
@@ -32,10 +34,13 @@ import {
   resolvePoloFromKommoSnapshot,
   matchPoloFromUserMessage,
   resolvePoloUnidadeCode,
+  buildPoloEscolhaPreFormMessage,
   SUMARE_POLOS_EAD,
 } from '../libShared/sumarePoloCatalog.js'
+import { extractCursoAreaFromText, messageIsBareCourseSelection } from '../libShared/cursoConfirmation.js'
+import { normalizeMessageForScope } from '../libShared/scopeHeuristics.js'
 import { runKommoSalesbot } from './kommoSalesbot.js'
-import { findLeadByPhone, listLeadNotes, listLeadEvents } from './kommoClient.js'
+import { findLeadByPhone, listLeadNotes, listLeadEvents, createLeadAuditNote } from './kommoClient.js'
 import { moveLeadToInscricaoIfNeeded } from './kommoFunnelMoves.js'
 import {
   updateDadosCliente,
@@ -98,7 +103,7 @@ async function ensureClienteRowForMatricula(env, telefone, leadId) {
   return null
 }
 
-async function claimMatriculaPosFormExclusive(env, telefone, { leadId } = {}) {
+async function claimMatriculaPosFormExclusive(env, telefone, { leadId, userMessage } = {}) {
   const { url, key, table } = getSupabaseCfg(env)
   const memKey = matriculaClaimMemKey(telefone)
   try {
@@ -109,6 +114,17 @@ async function claimMatriculaPosFormExclusive(env, telefone, { leadId } = {}) {
         reason: 'matricula_already_processed',
         status: existing?.[FORM_STATUS_FIELD],
       }
+    }
+
+    // Defesa em profundidade: mesmo que o pipeline chame o claim (ex.: caller
+    // futuro sem o early-return), aguardando_distribuicao_form só libera com
+    // indício de curso — nunca reabre a captação vazia de novo.
+    const existingStatus = existing?.[FORM_STATUS_FIELD]
+    if (
+      existingStatus === INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO &&
+      !looksLikeCursoAnswerForAguardandoDistribuicao(userMessage)
+    ) {
+      return { claimed: false, reason: 'awaiting_curso_from_lead', status: existingStatus }
     }
 
     let rowId = existing?.id != null ? Number(existing.id) : NaN
@@ -198,6 +214,29 @@ async function pauseAtendimentoIa(env, telefone) {
   return updateDadosCliente(env, { telefone, fields: { atendimento_ia: 'pause' } })
 }
 
+/**
+ * Registra nota de auditoria no Kommo sempre que o pós-form/captação NÃO
+ * conseguir concluir o atendimento automaticamente (falha terminal, redirect
+ * faculdade, lead não encontrado, polo/curso ausente sem resolução).
+ * Best-effort: nunca lança, apenas loga se a criação da nota falhar.
+ */
+async function noteAtendimentoNaoConcluido(env, {
+  leadId, executionId, code, reason, detail, replyKind,
+}) {
+  if (!leadId) return
+  const parts = [
+    '[AUDITORIA] Atendimento não concluído automaticamente',
+    `code=${code || 'n/a'}`,
+    `motivo=${reason || 'n/a'}`,
+  ]
+  if (detail) parts.push(`detalhe=${String(detail).slice(0, 400)}`)
+  if (replyKind) parts.push(`reply=${replyKind}`)
+  if (executionId) parts.push(`EX=${executionId}`)
+  await createLeadAuditNote(env, leadId, parts.join(' | ')).catch((e) =>
+    console.warn('[inscricaoPostForm] audit note failed', e?.message || e),
+  )
+}
+
 function buildAgentReturn({ executionId, model, t0, reply, steps, toolCalls, ctxSnapshot, ok = true }) {
   return {
     ok,
@@ -222,6 +261,28 @@ function shouldTriggerMatriculaPosForm(userMessage, status) {
     return messageLooksLikeFormFollowUp(userMessage, { strictAwaitingForm: true })
   }
   return false
+}
+
+/**
+ * Lead respondeu algo que pode ser o NOME DO CURSO enquanto o status é
+ * aguardando_distribuicao_form (pedimos o curso após o form ter chegado sem
+ * essa informação — buildAskCursoAfterFormReply). Usado para distinguir um
+ * avanço legítimo (lead informou o curso) de um reprocessamento indevido
+ * disparado só por kommoFormDone/schedulerTick (a nota do Kommo continua
+ * "detectável" para sempre, então sem esse filtro o pipeline reentrava em
+ * loop e podia acabar no faculty redirect — caso Thiago #24121875).
+ */
+function looksLikeCursoAnswerForAguardandoDistribuicao(userMessage) {
+  const raw = String(userMessage || '').trim()
+  if (!raw) return false
+  if (messageIsFlowResponsesReceived(raw) || messageIsFormularioSumarPreenchidoMarker(raw)) return false
+  if (messageLooksLikeFormSumarResponse(raw)) return false
+  if (messageIsBareCourseSelection(raw, [])) return true
+  if (extractCursoAreaFromText(raw)) return true
+  const t = normalizeMessageForScope(raw).toLowerCase().trim()
+  if (t.length < 3) return false
+  if (/^\s*(obrigad[oa]s?|ok(ay)?|sim|n[aã]o|pronto|feito|done|blz|beleza)\s*[.!?]*\s*$/i.test(t)) return false
+  return true
 }
 
 function eventCreatedMs(ev) {
@@ -401,9 +462,9 @@ async function preparePoloStepAfterForm(env, { telefone, leadId, pushName }) {
   }
 
   return {
-    askPolo: false,
+    askPolo: true,
     missingPolo: true,
-    reply: buildFacultyContactRedirectReply({ pushName }),
+    reply: buildPoloEscolhaPreFormMessage({ pushName }),
   }
 }
 
@@ -425,6 +486,9 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
    * do scheduler (Plano_Inscricao_CardKommo / lead #23608285). */
   let captacaoFailedTerminal = false
   let captacaoFailReason = ''
+  /** Evita gravar nota de auditoria duplicada quando a falha já foi notada
+   * na branch de captação e depois cai no bloco distribuir_consultor. */
+  let auditNoted = false
 
   if (isSumareCaptacaoEnabled(env)) {
     const cap = await runMatriculaCaptacaoAfterForm(env, {
@@ -481,20 +545,54 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
         cap.code === 'CURSO_INVALIDO_SNAPSHOT' ||
         cap.code === 'CURSO_NAO_RESOLVIDO' ||
         cap.code === 'CURSO_AUSENTE'
-      if (cursoRecoverable) {
-        reply = buildFacultyContactRedirectReply({ pushName })
+      const missingArr = Array.isArray(cap.missing) ? cap.missing : []
+      // Curso ausente/não resolvido NÃO é falha terminal: o lead já preencheu
+      // o formulário (dados/polo ok) e só falta o nome do curso — mantemos o
+      // fluxo aberto e pedimos o curso, em vez de redirecionar para o
+      // atendimento da faculdade (regressão lead Aline #24120625).
+      if (cursoRecoverable || missingArr.includes('curso') || missing.includes('curso')) {
+        reply = buildAskCursoAfterFormReply({ pushName })
         await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO).catch(() => {})
         ctxForm = INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO
         captacaoFailedTerminal = false
-        captacaoFailReason = cap.code || 'curso_invalido'
-      } else if (missing.includes('curso') || cap.code === 'MISSING_FIELDS') {
-        reply = buildFacultyContactRedirectReply({ pushName })
+        captacaoFailReason = cap.code || 'curso_ausente'
+        await noteAtendimentoNaoConcluido(env, {
+          leadId: idLead,
+          executionId,
+          code: cap.code,
+          reason: 'curso pendente — pedindo nome ao lead',
+          replyKind: 'pedir_curso',
+        })
+        auditNoted = true
+      } else if (cap.code === 'MISSING_FIELDS') {
+        // Faltam campos além do curso (ex.: CPF, data de nascimento) — pede
+        // os dados diretamente, sem prometer consultor nem usar o redirect
+        // da faculdade (que é reservado para falhas realmente terminais).
+        reply = buildInscricaoFormFieldsIncompleteReply({ pushName, missingFields: missingArr })
         captacaoFailedTerminal = true
         captacaoFailReason = `${cap.code || 'sem_code'}:${missing || cap.error || 'sem_detalhe'}`
+        await noteAtendimentoNaoConcluido(env, {
+          leadId: idLead,
+          executionId,
+          code: cap.code,
+          reason: 'campos obrigatórios ausentes — pedindo dados ao lead',
+          detail: missing || cap.error,
+          replyKind: 'pedir_campos',
+        })
+        auditNoted = true
       } else {
         reply = buildInscricaoFormCompleteReply({ pushName, ok: false })
         captacaoFailedTerminal = true
         captacaoFailReason = `${cap.code || 'sem_code'}:${missing || cap.error || 'sem_detalhe'}`
+        await noteAtendimentoNaoConcluido(env, {
+          leadId: idLead,
+          executionId,
+          code: cap.code,
+          reason: 'falha terminal na captação — redirect faculdade',
+          detail: missing || cap.error,
+          replyKind: 'faculty_redirect',
+        })
+        auditNoted = true
       }
       toolCalls.push({
         tool: 'sumare_captacao_contrato',
@@ -547,6 +645,11 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
       }).catch(() => ({ ok: false }))
       steps.unshift({ type: 'move_lead_inscricao', ...funnelMove })
     }
+  } else if (ctxForm === INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO) {
+    // Curso pendente (pedimos o nome do curso ao lead) — NÃO é falha terminal.
+    // Mantém a IA ativa e o status aguardando_distribuicao para que a resposta
+    // do lead com o curso continue o fluxo normalmente (sem pausar/concluir).
+    steps.unshift({ type: 'aguardando_curso', ok: true, reason: captacaoFailReason })
   } else if (captacaoFailedTerminal && !matriculaOk) {
     // Plano_Inscricao_CardKommo — captação falhou definitivamente e o salesbot
     // fallback também não rodou. Estado terminal evita o loop do scheduler
@@ -559,6 +662,16 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
     })
     await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_DISTRIBUIR_CONSULTOR).catch(() => {})
     ctxForm = INSCRICAO_FORM_STATUS_DISTRIBUIR_CONSULTOR
+    if (!auditNoted) {
+      await noteAtendimentoNaoConcluido(env, {
+        leadId: idLead,
+        executionId,
+        code: 'DISTRIBUIR_CONSULTOR',
+        reason: captacaoFailReason || 'falha terminal — distribuir consultor',
+        replyKind: 'falha_terminal',
+      })
+      auditNoted = true
+    }
   } else {
     const pauseRes = await pauseAtendimentoIa(env, telefone)
     steps.unshift({ type: 'ia_paused', ok: pauseRes.ok })
@@ -582,7 +695,7 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
  * Form preenchido → pergunta polo (se necessário) → API Captação → salesbot 49813 fallback.
  */
 async function stepMatriculaPosForm(env, ctx) {
-  const { telefone, idLead, executionId, model, pushName, t0, kommoFormDetected } = ctx
+  const { telefone, idLead, executionId, model, pushName, t0, kommoFormDetected, userMessage } = ctx
 
   if (idLead != null && (await leadHasPostFormRegistradoNoteSinceLastFormSend(env, idLead))) {
     console.log(`[inscricaoPostForm] lead=${idLead} skip matricula_pos_form (nota pós-form após último Formulario_Sum)`)
@@ -592,6 +705,14 @@ async function stepMatriculaPosForm(env, ctx) {
   const poloPrep = await preparePoloStepAfterForm(env, { telefone, leadId: idLead, pushName })
 
   if (poloPrep?.missingPolo) {
+    await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO_POLO).catch(() => {})
+    await noteAtendimentoNaoConcluido(env, {
+      leadId: idLead,
+      executionId,
+      code: 'POLO_AUSENTE_POS_FORM',
+      reason: 'polo não localizado após form',
+      replyKind: 'pedir_polo',
+    })
     return {
       handled: true,
       result: buildAgentReturn({
@@ -600,12 +721,12 @@ async function stepMatriculaPosForm(env, ctx) {
         t0,
         reply: poloPrep.reply,
         steps: [{ type: 'polo_ausente_pos_form', ok: false }],
-        ctxSnapshot: { inscricaoForm: INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO },
+        ctxSnapshot: { inscricaoForm: INSCRICAO_FORM_STATUS_AGUARDANDO_POLO },
       }),
     }
   }
 
-  const claim = await claimMatriculaPosFormExclusive(env, telefone, { leadId: idLead })
+  const claim = await claimMatriculaPosFormExclusive(env, telefone, { leadId: idLead, userMessage })
   if (!claim.claimed) {
     console.log(
       `[inscricaoPostForm] lead=${idLead} matricula_pos_form skip claim=${claim.reason} status=${claim.status || 'n/a'}`,
@@ -705,6 +826,21 @@ export async function tryProcessInscricaoPostFormPipeline(env, input) {
   if (status === INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO) return null
   if (status === INSCRICAO_FORM_STATUS_DISTRIBUIR_CONSULTOR) return null
 
+  // Aguardando o NOME DO CURSO (pedimos após o form ter chegado sem essa
+  // info): só reprocessa se o lead respondeu algo que pareça o curso. Sem
+  // isso, kommoFormDone (nota do Kommo continua "detectável") ou schedulerTick
+  // reentravam no pipeline sem curso — loop pedindo o curso de novo ou, em
+  // builds antigas, redirect faculdade. Caso Thiago #24121875.
+  if (
+    status === INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO &&
+    !looksLikeCursoAnswerForAguardandoDistribuicao(userMessage)
+  ) {
+    console.log(
+      `[inscricaoPostForm] skip reprocess aguardando_curso telefone=${telefone} scheduler=${Boolean(schedulerTick)}`,
+    )
+    return null
+  }
+
   const idLead = await resolveLeadId(env, telefone, leadIdHint)
 
   if (
@@ -758,15 +894,22 @@ export async function tryProcessInscricaoPostFormPipeline(env, input) {
     }
   }
 
-  const trigger =
-    shouldTriggerMatriculaPosForm(userMessage, status) ||
-    (schedulerTick && status === INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO) ||
-    kommoFormDone
+  // Atalho `schedulerTick && status === AGUARDANDO_DISTRIBUICAO` removido: o
+  // early-return acima já bloqueia esse status sem resposta de curso do lead,
+  // então manter o atalho aqui só reabriria o loop via schedulerTick.
+  const trigger = shouldTriggerMatriculaPosForm(userMessage, status) || kommoFormDone
 
   if (!trigger) return null
 
   if (idLead == null) {
     if (schedulerTick) return { handled: false }
+    await noteAtendimentoNaoConcluido(env, {
+      leadId: leadIdHint,
+      executionId,
+      code: 'LEAD_NOT_FOUND',
+      reason: 'lead não encontrado no Kommo após form',
+      replyKind: 'faculty_redirect',
+    })
     return {
       handled: true,
       result: buildAgentReturn({
@@ -844,6 +987,7 @@ export async function tryProcessInscricaoPostFormPipeline(env, input) {
     pushName,
     t0,
     kommoFormDetected: kommoFormDone,
+    userMessage,
   })
 }
 

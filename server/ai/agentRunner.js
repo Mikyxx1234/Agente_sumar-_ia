@@ -1161,7 +1161,8 @@ export async function runAgent(env, input) {
         } else if (stage === 'aguardando_form_sumar') {
           descr += ' (Form Sumar já enviado — quando o lead disser "pronto" / "preenchi", chame confirmar_recebimento_formulario)'
         } else if (stage === 'aguardando_distribuicao_form') {
-          descr += ' (Form recebido, distribuindo)'
+          descr +=
+            ' (Form recebido sem curso resolvido — PERGUNTE o nome do curso e, ao receber, continue a matrícula/captação. NÃO redirecione para atendimento/ouvidoria.)'
         } else if (stage === 'aguardando_aceite_contrato') {
           descr += ' (lead já tem link do contrato — NÃO reenvie formulário)'
         } else if (stage === 'form_sumar_concluido') {

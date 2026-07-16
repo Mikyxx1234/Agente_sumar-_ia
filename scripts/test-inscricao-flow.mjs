@@ -29,7 +29,10 @@ import {
   runRegistrarPoloInscricao,
   runConfirmarRecebimentoFormulario,
 } from '../server/inscricaoActionTools.js'
-import { tryProcessInscricaoPostFormPipeline } from '../server/inscricaoPostFormPipeline.js'
+import {
+  tryProcessInscricaoPostFormPipeline,
+  executeCaptacaoAfterFormResolved,
+} from '../server/inscricaoPostFormPipeline.js'
 import {
   FORM_SUMAR_FLOW_COMPLETED_MARKER,
   messageIsFlowResponsesReceived,
@@ -37,9 +40,13 @@ import {
   inboundTextForFormFlowCompletion,
   historyIndicatesFormSumarCompleted,
   INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_POLO,
   INSCRICAO_FORM_STATUS_AGUARDANDO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
   INSCRICAO_FORM_STATUS_CONCLUIDO,
+  buildAskCursoAfterFormReply,
+  buildInscricaoFormFieldsIncompleteReply,
 } from '../libShared/inscricaoFormHeuristics.js'
 import {
   isKommoSystemOrIntegrationNote,
@@ -92,6 +99,7 @@ import {
   SUMARE_OUVIDORIA_URL,
 } from '../libShared/humanHandoffHeuristics.js'
 import { buildHumanHandoffReply } from '../libShared/scopeHeuristics.js'
+import { messageAsksAcademicAffairsSupportInText } from '../libShared/academicAffairsHeuristics.js'
 
 let passed = 0
 let failed = 0
@@ -1324,6 +1332,243 @@ section('23 — Não encaminhar para consultor: redirecionamento pro atendimento
     !/consultor entrar[aá]/i.test(handoffReplyFail),
     '23.5 buildHumanHandoffReply não promete consultor ativo (ok=false)',
   )
+}
+
+section('24 — Academic affairs: não confundir "já sou formado" + curso')
+
+{
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText(
+      'Já sou formado e queria saber o tempo que preciso cursar Artes Visuais.',
+    ),
+    false,
+    '24.1 Clayton: formado + tempo/curso NÃO é acadêmico',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('sou formado quero cursar pedagogia'),
+    false,
+    '24.2 formado + quero cursar NÃO é acadêmico',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('preciso trancar a matrícula'),
+    true,
+    '24.3 trancamento continua acadêmico',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('sou ex-aluno e quero segunda via do diploma'),
+    true,
+    '24.4 ex-aluno + diploma continua acadêmico',
+  )
+}
+
+section('25 — Form sem curso: pedir curso em vez de redirecionar (regressão Aline #24120625)')
+
+{
+  // 25.1 Helper puro: pede o nome do curso, sem prometer consultor nem mandar
+  // links de atendimento/ouvidoria.
+  const askCurso = buildAskCursoAfterFormReply({ pushName: 'Aline' })
+  assert(/nome do curso/i.test(askCurso), '25.1 pede o nome do curso')
+  assert(/, Aline/.test(askCurso), '25.1b inclui primeiro nome quando pushName fornecido')
+  assert(!/consultor\s+(entrar[aá]|vai\s+entrar)/i.test(askCurso), '25.1c NÃO promete consultor')
+  assert(!askCurso.includes(SUMARE_ATENDIMENTO_URL), '25.1d NÃO contém URL de atendimento')
+  assert(!askCurso.includes(SUMARE_OUVIDORIA_URL), '25.1e NÃO contém URL de ouvidoria')
+
+  // 25.2 buildInscricaoFormFieldsIncompleteReply também não promete consultor.
+  const camposIncompletos = buildInscricaoFormFieldsIncompleteReply({
+    pushName: 'Bruno',
+    missingFields: ['cpf', 'data_nasc'],
+  })
+  assert(!/consultor\s+pode\s+te\s+ajudar/i.test(camposIncompletos), '25.2 NÃO promete consultor ativo')
+  assert(/cpf, data_nasc/i.test(camposIncompletos), '25.2b lista os campos faltantes')
+
+  // 25.3 Integração: executeCaptacaoAfterFormResolved com captação Sumaré
+  // habilitada e lead sem curso no snapshot Kommo (custom_fields_values
+  // vazio) → deve pedir o curso, manter status aguardando_distribuicao e
+  // NÃO pausar a IA (nem sobrescrever para form_sumar_concluido).
+  const envCaptacao = {
+    ...env,
+    SUMARE_CAPTACAO_ENABLED: 'true',
+    SUMARE_CAPTACAO_BASE_URL: 'https://mock-captacao.sumare.edu.br',
+    SUMARE_CAPTACAO_TOKEN: 'mock-captacao-token',
+  }
+  installFetchStub(defaultSupabaseStub({ dadosClienteRow: { id: 1, id_lead: 23845769 } }))
+  try {
+    const capOut = await executeCaptacaoAfterFormResolved(envCaptacao, {
+      telefone: ctx.telefone,
+      idLead: ctx.leadId,
+      executionId: ctx.executionId,
+      pushName: 'Aline',
+    })
+    assertEqual(
+      capOut.ctxForm,
+      INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
+      '25.3 ctxForm=aguardando_distribuicao_form (curso pendente)',
+    )
+    assert(/nome do curso/i.test(capOut.reply || ''), '25.3b reply pede o nome do curso')
+    assert(!(capOut.reply || '').includes(SUMARE_ATENDIMENTO_URL), '25.3c reply NÃO contém link de atendimento')
+
+    const pauseCall = fetchCalls.find(
+      (c) =>
+        c.method === 'PATCH' &&
+        c.url.includes('dados_cliente_sum') &&
+        String(c.body || '').includes('atendimento_ia'),
+    )
+    assert(!pauseCall, '25.3d IA NÃO é pausada nesse branch (curso pendente)')
+
+    const statusPatchCalls = fetchCalls.filter(
+      (c) => c.method === 'PATCH' && c.url.includes('dados_cliente_sum') && String(c.body || '').includes('inscricao_form_status'),
+    )
+    const overwroteConcluido = statusPatchCalls.some((c) =>
+      String(c.body || '').includes(INSCRICAO_FORM_STATUS_CONCLUIDO),
+    )
+    assert(!overwroteConcluido, '25.3e status NÃO é sobrescrito para form_sumar_concluido')
+  } finally {
+    restoreFetch()
+  }
+}
+
+section('26 — Polo ausente pós-form: pedir polo (não redirecionar) + nota de auditoria (regressão Thiago #24121875)')
+
+{
+  // 26.1 Helper puro: pede o polo, sem link de atendimento/ouvidoria.
+  const poloMsg = buildPoloEscolhaPreFormMessage({ pushName: 'Thiago' })
+  assert(/polo/i.test(poloMsg), '26.1 pede o polo')
+  assert(!poloMsg.includes(SUMARE_ATENDIMENTO_URL), '26.1b NÃO contém URL de atendimento')
+  assert(!poloMsg.includes(SUMARE_OUVIDORIA_URL), '26.1c NÃO contém URL de ouvidoria')
+
+  // 26.2 Integração: tryProcessInscricaoPostFormPipeline com Kommo confirmando
+  // o Flow, mas sem polo salvo (Supabase) nem no snapshot Kommo (custom_fields
+  // vazio) e sem fallback de polo default válido → deve pedir o polo (NÃO
+  // buildFacultyContactRedirectReply) e gravar nota de auditoria no Kommo.
+  const pipelinePoloCtx = {
+    telefone: '5511988885555',
+    leadId: 24121875,
+    pushName: 'Thiago',
+    executionId: 'EX-TEST-POLO',
+    model: 'gpt-4.1-mini',
+    t0: Date.now(),
+  }
+  installFetchStub(
+    defaultSupabaseStub({
+      dadosClienteRow: {
+        id: 20,
+        id_lead: 24121875,
+        inscricao_form_status: 'aguardando_form_sumar',
+      },
+      notes: [flowResponsesReceivedNote()],
+    }),
+  )
+  try {
+    const r = await tryProcessInscricaoPostFormPipeline(
+      { ...env, INSCRICAO_DEFAULT_POLO_ID: '' },
+      { ...pipelinePoloCtx, userMessage: 'Flow responses received' },
+    )
+    assert(r?.handled === true, '26.2 pipeline handled=true (polo ausente pós-form)')
+    assert(!(r?.result?.reply || '').includes(SUMARE_ATENDIMENTO_URL), '26.2b reply NÃO redireciona p/ faculdade')
+    assert(/polo/i.test(r?.result?.reply || ''), '26.2c reply pede o polo')
+    assertEqual(
+      r?.result?.ctxSnapshot?.inscricaoForm,
+      INSCRICAO_FORM_STATUS_AGUARDANDO_POLO,
+      '26.2d ctxSnapshot.inscricaoForm=aguardando_escolha_polo',
+    )
+
+    const statusPatchPolo = fetchCalls.some(
+      (c) =>
+        c.method === 'PATCH' &&
+        c.url.includes('dados_cliente_sum') &&
+        String(c.body || '').includes(INSCRICAO_FORM_STATUS_AGUARDANDO_POLO),
+    )
+    assert(statusPatchPolo, '26.2e status persistido como aguardando_escolha_polo')
+
+    const auditNoteCall = fetchCalls.find(
+      (c) => c.method === 'POST' && /\/api\/v4\/leads\/24121875\/notes/.test(c.url),
+    )
+    assert(Boolean(auditNoteCall), '26.2f nota de auditoria gravada no Kommo')
+    assert(
+      /AUDITORIA/.test(JSON.stringify(auditNoteCall?.body || '')),
+      '26.2g nota de auditoria contém marcador [AUDITORIA]',
+    )
+  } finally {
+    restoreFetch()
+  }
+}
+
+section('27 — Loop pós-curso: aguardando_distribuicao_form não reprocessa sem resposta de curso (regressão Thiago #24121875)')
+
+{
+  const pipelineCtx27 = {
+    telefone: '5511900001111',
+    leadId: 24121999,
+    pushName: 'Thiago',
+    executionId: 'EX-TEST-CURSO-LOOP',
+    model: 'gpt-4.1-mini',
+    t0: Date.now(),
+  }
+
+  // Lead já formulário confirmado no Kommo (nota Flow persiste "pra sempre"),
+  // mas ainda não respondeu qual é o curso — status aguardando_distribuicao_form.
+  const rowAguardandoCurso = {
+    id: 30,
+    id_lead: 24121999,
+    inscricao_form_status: 'aguardando_distribuicao_form',
+    polo_inscricao_escolhido: 'Pinheiros',
+    captacao_unidade: 'ED_SP_P5',
+  }
+
+  // 27.1 schedulerTick puro (sem mensagem do lead) → NÃO reprocessa (null).
+  installFetchStub(
+    defaultSupabaseStub({ dadosClienteRow: rowAguardandoCurso, notes: [flowResponsesReceivedNote()] }),
+  )
+  try {
+    const r = await tryProcessInscricaoPostFormPipeline(env, {
+      ...pipelineCtx27,
+      userMessage: '',
+      schedulerTick: true,
+    })
+    assertEqual(r, null, '27.1 schedulerTick sem curso → pipeline retorna null (não reprocessa)')
+  } finally {
+    restoreFetch()
+  }
+
+  // 27.2 kommoFormDone via mensagem (marcador de flow, sem curso) → também bloqueia.
+  installFetchStub(
+    defaultSupabaseStub({ dadosClienteRow: rowAguardandoCurso, notes: [flowResponsesReceivedNote()] }),
+  )
+  try {
+    const r = await tryProcessInscricaoPostFormPipeline(env, {
+      ...pipelineCtx27,
+      userMessage: 'Flow responses received',
+      schedulerTick: false,
+    })
+    assertEqual(r, null, '27.2 kommoFormDone sem curso → pipeline retorna null (bloqueia loop)')
+    assert(
+      !fetchCalls.some((c) => c.method === 'POST' && /\/notes/.test(c.url)),
+      '27.2b nenhuma nota de auditoria/redirect gravada no Kommo (nem tentou reprocessar)',
+    )
+  } finally {
+    restoreFetch()
+  }
+
+  // 27.3 Lead responde com o nome do curso → pipeline processa normalmente,
+  // sem short-circuit indevido e sem cair no redirect faculdade.
+  installFetchStub(
+    defaultSupabaseStub({ dadosClienteRow: rowAguardandoCurso, notes: [flowResponsesReceivedNote()] }),
+  )
+  try {
+    const r = await tryProcessInscricaoPostFormPipeline(env, {
+      ...pipelineCtx27,
+      userMessage: 'Pedagogia',
+      schedulerTick: false,
+    })
+    assert(r !== null, '27.3 lead informa curso → pipeline NÃO retorna null')
+    assert(r?.handled === true, '27.3b pipeline handled=true quando lead informa curso')
+    assert(
+      !(r?.result?.reply || '').includes(SUMARE_ATENDIMENTO_URL),
+      '27.3c reply NÃO redireciona p/ faculdade quando lead informa curso',
+    )
+  } finally {
+    restoreFetch()
+  }
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */
