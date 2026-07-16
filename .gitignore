@@ -10,3 +10,12 @@ Thumbs.db
 *.tmp
 .idea/
 .vscode/
+
+# Ops scratch / one-off dumps (do not commit)
+funnel*.json
+scripts/_*
+scripts/*.txt
+data/_*.html
+data/pdfs/
+data/cursos-*-sumare.xlsx
+data/auditoria-*-????-??-??.json
