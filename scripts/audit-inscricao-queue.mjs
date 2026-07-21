@@ -61,6 +61,7 @@ const args = process.argv.slice(2)
 const apply = args.includes('--apply')
 const retryCaptacao = args.includes('--retry-captacao')
 const handleAll = args.includes('--handle') || args.includes('--handle-all')
+const bucketFilter = args.find((a) => a.startsWith('--bucket='))?.slice('--bucket='.length) || null
 const DEBOUNCE_MS = 6000
 const INTER_LEAD_MS = 2500
 
@@ -402,6 +403,7 @@ const ACTIONABLE = new Set([
 ])
 
 const toRun = details.filter((d) => {
+  if (bucketFilter && d.bucket !== bucketFilter) return false
   if (!ACTIONABLE.has(d.action)) return false
   if (handleAll) return true
   if (retryCaptacao) {

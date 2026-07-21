@@ -35,6 +35,22 @@ function normalizeCursoKey(name) {
     .trim()
 }
 
+/**
+ * Match parcial por tokens (palavras completas), não por substring dentro de
+ * uma palavra. Evita que "psicopedagogia" case com "pedagogia" só porque uma
+ * string contém a outra como substring — exige que os tokens do lado mais
+ * curto apareçam como palavras inteiras no lado mais longo.
+ */
+function cursoKeysPartialMatch(a, b) {
+  if (a === b) return false
+  const tokensA = a.split(' ').filter(Boolean)
+  const tokensB = b.split(' ').filter(Boolean)
+  const [shorter, longer] = tokensA.length <= tokensB.length ? [tokensA, tokensB] : [tokensB, tokensA]
+  if (!shorter.length) return false
+  const longerSet = new Set(longer)
+  return shorter.every((t) => longerSet.has(t))
+}
+
 function modalidadeRank(mod) {
   const m = String(mod || '').toLowerCase()
   if (m === 'ead') return 0
@@ -88,10 +104,7 @@ export async function resolveCursoCodigoFromDb(cursoInscricao, env = process.env
 
   const matches = rows.filter((r) => normalizeCursoKey(r.curso_nome) === key)
   if (!matches.length) {
-    const partial = rows.filter((r) => {
-      const nk = normalizeCursoKey(r.curso_nome)
-      return nk.includes(key) || key.includes(nk)
-    })
+    const partial = rows.filter((r) => cursoKeysPartialMatch(normalizeCursoKey(r.curso_nome), key))
     if (!partial.length) return ''
     partial.sort((a, b) => modalidadeRank(a.modalidade) - modalidadeRank(b.modalidade))
     return String(partial[0].codigo_original || '').trim().toUpperCase()
@@ -157,7 +170,7 @@ function lookupOfertaModalidades(map, key) {
   let best = null
   for (const [k, set] of map) {
     if (!k || k.length < 5) continue
-    if (k.includes(key) || key.includes(k)) {
+    if (cursoKeysPartialMatch(k, key)) {
       if (!best || k.length > best.k.length) best = { k, set }
     }
   }
@@ -191,7 +204,7 @@ export async function resolveCursoOfertaFromDb(cursoInscricao, env = process.env
   if (!candidatos.length) {
     candidatos = rows.filter((r) => {
       const nk = normalizeCursoKey(r.curso_nome)
-      return nk && (nk.includes(key) || key.includes(nk))
+      return nk && cursoKeysPartialMatch(nk, key)
     })
   }
   if (!candidatos.length) return null

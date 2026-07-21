@@ -18,6 +18,18 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 - **Alternativas descartadas**: Reativar salesbot consultor 49777; silenciar falhas só em log.
 - **Impacto**: Timeline Kommo explica bloqueios; lead permanece no fluxo comercial pedindo curso/polo.
 
+### 2026-07-21 - Match parcial de curso: não aceitar substring dentro da palavra
+- **Decisão**: Em `sumareCaptacaoCursoStore`, match parcial exige tokens (palavra inteira), não `includes` bruto — evita "Psicopedagogia" → Pedagogia (`PED_*`).
+- **Contexto**: Daiana #24132039 (pós Psicopedagogia); gerar com nome curto matriculava graduação Pedagogia.
+- **Alternativas descartadas**: Bloquear só o par psico/pedagogia; manter substring.
+- **Impacto**: Pós e nomes compostos deixam de colidir com cursos-substring.
+
+### 2026-07-20 - Transferência: não misturar sucesso com faculty redirect
+- **Decisão**: Se a captação falha no texto (redirect faculdade) mas o salesbot 49813 salva o fluxo, substituir o reply de falha por mensagem de sucesso. Em `runTransferenciaRecaptacaoPosForm`, nunca concatenar prefixo de transferência com reply que parece faculty redirect.
+- **Contexto**: Diego #24127679 — inscrição/transferência ok, mas a bolha juntava "Registramos sua transferência" + "não consegui concluir…".
+- **Alternativas descartadas**: Confiar só no LLM para filtrar; manter redirect quando `cap.ok`.
+- **Impacto**: Lead vê só confirmação + próximo passo (link/contrato).
+
 ### 2026-07-16 - Bloquear reprocessamento em `aguardando_distribuicao_form`
 - **Decisão**: Com status `aguardando_distribuicao_form` (já pedimos o curso), não reabrir pós-form por `kommoFormDone` nem `schedulerTick` sem mensagem do lead que pareça nome de curso. Claim retorna `awaiting_curso_from_lead`.
 - **Contexto**: Thiago #24121875 — após mensagem pedindo curso (12:37), o pipeline reprocessou às 12:38 e mandou de novo o redirect da faculdade.
@@ -2132,3 +2144,36 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 - **Impacto**
   - Módulos: `libShared/apiSumareOrigemHeuristics.js`, `server/apiSumareAdvancedEntryFlow.js`, `kommoAgentFunnelGate.js`.
   - `proactiveGreet` ignora leads Api Sumaré em inscrição/pagamento.
+
+### 2026-07-21 - FAQ documentos/histórico para transferência + fix heurística acadêmica
+
+- **Decisão**
+  - Modelo usado: Opus (principal, orquestração — implementação delegada ao Executor).
+  - Novo tópico FAQ `documentos_transferencia_dispensa` em `scripts/add-info-faq-sumare.mjs`,
+    inserido em `grad_info` e `pos_info`: histórico/documentos de dispensa/aproveitamento são
+    solicitados posteriormente para anexar na plataforma do aluno; a equipe da Sumaré analisa e
+    responde; enquanto isso o lead aguarda finalização da matrícula e e-mail de primeiro acesso.
+  - `libShared/academicAffairsHeuristics.js` (`looksLikeCommercialEnrollment`): expandido
+    `dispensa de matéria` para também casar `dispensa de disciplina(s)`; adicionado check que
+    trata histórico/comprovante/documentos como comercial (não acadêmico) quando aparecem no
+    mesmo texto que transferência/aproveitamento/dispensa.
+  - `server/ai/promptsLoader.js` (regra 31 — INGRESSO POR TRANSFERÊNCIA): acrescentado bloco
+    orientando a IA a responder com a política da FAQ quando o lead perguntar quando/como entregar
+    histórico/documentos para dispensa, sem redirecionar para Portal/atendimento acadêmico.
+
+- **Contexto**
+  - Lead Ítrio (#24133683) perguntou "não querem o meu histórico, comprovante de matrícula para
+    a dispensa de disciplinas?" durante negociação de transferência. A heurística acadêmica
+    (`messageAsksAcademicAffairsSupportInText`) casava `histórico escolar` mesmo quando o contexto
+    era claramente de ingresso por transferência, disparando o redirect acadêmico indevido
+    (regra 32) em vez de seguir o fluxo comercial da regra 31.
+
+- **Alternativas descartadas**
+  - Remover por completo o gatilho de `histórico escolar` da heurística acadêmica: quebraria o
+    caso legítimo de aluno já matriculado/ex-aluno pedindo histórico (regra 32).
+
+- **Impacto**
+  - `messageAsksAcademicAffairsSupportInText('Mas não querem o meu histórico, comprovante de
+    matrícula para realizar a dispensa de disciplinas?')` passa a retornar `false` mesmo com
+    "histórico escolar" explícito no texto, sem regressão nos casos de aluno matriculado/ex-aluno
+    (`declaração de matrícula`, `ex-aluno ... histórico escolar` continuam `true`).

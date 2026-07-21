@@ -95,6 +95,7 @@ import {
 } from '../libShared/inscricaoFormHeuristics.js'
 import {
   buildFacultyContactRedirectReply,
+  replyLooksLikeFacultyContactRedirect,
   SUMARE_ATENDIMENTO_URL,
   SUMARE_OUVIDORIA_URL,
 } from '../libShared/humanHandoffHeuristics.js'
@@ -1568,6 +1569,78 @@ section('27 — Loop pós-curso: aguardando_distribuicao_form não reprocessa se
     )
   } finally {
     restoreFetch()
+  }
+}
+
+section('28 — Transferência: não concatenar sucesso + faculty redirect (Diego)')
+
+{
+  const failReply = buildFacultyContactRedirectReply({ pushName: 'Diego' })
+  assert(replyLooksLikeFacultyContactRedirect(failReply), '28.1 detecta redirect de falha')
+  assert(
+    !replyLooksLikeFacultyContactRedirect(
+      'Em instantes enviamos por aqui o link atualizado para conclusão da matrícula.',
+    ),
+    '28.2 texto de sucesso/próximo passo NÃO é redirect',
+  )
+
+  // Espelha a regra de runTransferenciaRecaptacaoPosForm: se cap.ok mas reply
+  // é faculty redirect, usa fallback — nunca cola os dois.
+  const prefix =
+    'Perfeito, Diego! Registramos sua *transferência externa* de Publicidade para História.\n\n'
+  const capOk = true
+  const capReply = failReply
+  const usable = Boolean(capReply.trim()) && !replyLooksLikeFacultyContactRedirect(capReply)
+  let out = prefix
+  if (capOk && usable) out += capReply
+  else {
+    out +=
+      'Em instantes enviamos por aqui o link atualizado para conclusão da matrícula. Qualquer dúvida, estamos à disposição.'
+  }
+  assert(out.startsWith('Perfeito, Diego!'), '28.3 mantém prefixo de sucesso')
+  assert(!out.includes(SUMARE_ATENDIMENTO_URL), '28.4 NÃO anexa URL de atendimento após sucesso')
+  assert(!/n[aã]o consegui concluir/i.test(out), '28.5 NÃO anexa "não consegui concluir"')
+}
+
+section('29 — resolveCursoOfertaFromDb: match parcial por token (não por substring), evita psicopedagogia→pedagogia')
+
+{
+  const { resolveCursoOfertaFromDb, invalidateCaptacaoCursoCache } = await import(
+    '../server/sumareCaptacaoCursoStore.js'
+  )
+
+  const catalogoRows = [
+    { codigo_original: 'PED_6_EAD', codigo_base: 'PED', curso_nome: 'Pedagogia', modalidade: 'EAD', ativo: true },
+    {
+      codigo_original: 'RH_6_EAD',
+      codigo_base: 'RH',
+      curso_nome: 'Gestão de Recursos Humanos',
+      modalidade: 'EAD',
+      ativo: true,
+    },
+  ]
+
+  invalidateCaptacaoCursoCache()
+  installFetchStub((call) => {
+    if (call.url.includes('/rest/v1/sumare_captacao_curso')) return { status: 200, body: catalogoRows }
+    if (call.url.includes('grad_preco') || call.url.includes('pos_preco')) return { status: 200, body: [] }
+    return { status: 200, body: [] }
+  })
+  try {
+    const psico = await resolveCursoOfertaFromDb('Psicopedagogia', env)
+    assertEqual(psico, null, '29.1 "Psicopedagogia" NÃO resolve para Pedagogia (sem match parcial por substring)')
+
+    const ped = await resolveCursoOfertaFromDb('Pedagogia', env)
+    assertEqual(ped?.codigo, 'PED_6_EAD', '29.2 "Pedagogia" continua resolvendo PED_6_EAD (match exato)')
+
+    const rh1 = await resolveCursoOfertaFromDb('Recursos Humanos', env)
+    assertEqual(rh1?.codigo, 'RH_6_EAD', '29.3 "Recursos Humanos" resolve RH_6_EAD (match parcial por token)')
+
+    const rh2 = await resolveCursoOfertaFromDb('Gestão de Recursos Humanos', env)
+    assertEqual(rh2?.codigo, 'RH_6_EAD', '29.4 "Gestão de Recursos Humanos" continua resolvendo RH_6_EAD (match exato)')
+  } finally {
+    restoreFetch()
+    invalidateCaptacaoCursoCache()
   }
 }
 

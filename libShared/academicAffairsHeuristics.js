@@ -24,7 +24,17 @@ function normalize(text) {
 function looksLikeCommercialEnrollment(t) {
   if (/\b(quero|gostaria|posso|como)\s+(me\s+)?(matricular|inscrever|fazer\s+(a\s+)?inscri)/i.test(t)) return true
   if (/\b(valor|pre[cç]o|mensalidade|bolsa|desconto)\b/i.test(t) && !/\b(atrasad|inadimpl|d[eé]bito)/i.test(t)) return true
-  if (/\b(transfer[eê]ncia|aproveitamento\s+de\s+mat[eé]rias?|dispensa\s+de\s+mat[eé]ria)\b/i.test(t)) return true
+  if (/\b(transfer[eê]ncia|aproveitamento\s+de\s+mat[eé]rias?|dispensa\s+de\s+(mat[eé]rias?|disciplinas?))\b/i.test(t)) return true
+  // Histórico/comprovante/documentos NO CONTEXTO de transferência/aproveitamento/dispensa
+  // são pedido de entrega de documentação de ingresso (comercial), não atendimento
+  // acadêmico de aluno já matriculado. Ítrio #24133683: "não querem meu histórico,
+  // comprovante de matrícula para a dispensa de disciplinas?".
+  if (
+    /\b(hist[oó]rico|comprovante|documentos?)\b/i.test(t) &&
+    /\b(transfer[eê]ncia|aproveitamento|dispensa)\b/i.test(t)
+  ) {
+    return true
+  }
   // "Já sou formado e queria saber o tempo/curso…" = interesse comercial (nova/2ª graduação),
   // não pedido de secretaria/ex-aluno. Clayton #24121727: falso positivo em "formado".
   if (

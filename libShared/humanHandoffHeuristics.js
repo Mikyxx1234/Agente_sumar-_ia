@@ -59,6 +59,16 @@ export function buildFacultyContactRedirectReply(opts = {}) {
   )
 }
 
+/** True se o texto é (ou contém) o redirect canônico de falha — não misturar com sucesso. */
+export function replyLooksLikeFacultyContactRedirect(text) {
+  const t = String(text || '')
+  if (!t.trim()) return false
+  return (
+    /n[aã]o consegui concluir isso por aqui/i.test(t) ||
+    (t.includes(SUMARE_ATENDIMENTO_URL) && /atendimento\/consultoria|Ouvidoria Sumar/i.test(t))
+  )
+}
+
 /** Reapresenta os links se o lead voltar a falar depois do encerramento. */
 export function buildExitChannelAlreadyDoneReply(opts = {}) {
   return (

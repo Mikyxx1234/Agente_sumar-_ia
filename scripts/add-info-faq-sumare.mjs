@@ -4,6 +4,8 @@
  *   - reajuste_anual      : desconto mantido até o fim do curso; reajuste 8–12%/ano
  *   - rematricula_sem_taxa: Sumaré não cobra taxa de rematrícula
  *   - ouvidoria_sumare    : link e contato da Ouvidoria institucional
+ *   - documentos_transferencia_dispensa: quando/como entregar histórico/documentos
+ *     para dispensa/aproveitamento de disciplinas (transferência externa)
  *
  * Aditivo, reversível e idempotente (metadata.topic). Embedding text-embedding-3-small (1536).
  *
@@ -62,6 +64,18 @@ const TOPICS = [
         'https://sumare.edu.br/ouvidoria.html',
         '',
         'Na página você encontra orientações de contato, incluindo o e-mail ouvidoria@sumare.edu.br.',
+      ].join('\n'),
+  },
+  {
+    topic: 'documentos_transferencia_dispensa',
+    content: (nivel) =>
+      [
+        `assunto: quando enviar histórico escolar e documentos para dispensa/aproveitamento de disciplinas — transferência externa (${nivel})`,
+        'palavras-chave: histórico escolar, comprovante de matrícula, documentos para transferência, transferência externa, dispensa de disciplinas, dispensa de matérias, aproveitamento de matérias, aproveitamento de disciplinas, anexar na plataforma do aluno, quando enviar documentos, quando mandar histórico',
+        '',
+        'O histórico escolar e os documentos para análise de dispensa/aproveitamento de disciplinas são solicitados posteriormente, para anexar na plataforma do aluno.',
+        'Depois que o aluno anexar os documentos, a equipe da Faculdade Sumaré analisa e responde se está tudo certo ou se precisa de mais informação/documento.',
+        'Enquanto isso, o aluno pode aguardar a finalização da matrícula e o e-mail de primeiro acesso.',
       ].join('\n'),
   },
 ]

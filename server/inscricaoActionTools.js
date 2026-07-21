@@ -58,7 +58,10 @@ import { fetchLeadFormSnapshot } from './inscricaoKommoFields.js'
 import { DADOS_CLIENTE_FORM_GUARD_SELECT } from './dadosClienteInscricaoFields.js'
 import { gateMatriculaConfirmacaoBeforeForm } from './inscricaoMatriculaConfirmFlow.js'
 import { syncSumPoloOnLeadQuiet } from './sumareLeadFields.js'
-import { buildFacultyContactRedirectReply } from '../libShared/humanHandoffHeuristics.js'
+import {
+  buildFacultyContactRedirectReply,
+  replyLooksLikeFacultyContactRedirect,
+} from '../libShared/humanHandoffHeuristics.js'
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
 
@@ -447,10 +450,16 @@ async function runTransferenciaRecaptacaoPosForm(
     `Perfeito${nameBit}! Registramos sua *transferência externa* de ${origemBit}${semestreBit} ` +
     `para ${destinoBit} na Faculdade Sumaré. Nossa equipe acadêmica vai analisar o aproveitamento de disciplinas.\n\n`
 
-  if (cap.ok && cap.reply) {
-    replyOverride += cap.reply
-  } else if (cap.code === 'NEEDS_CONFIRM_NOVA_INSCRICAO' && cap.reply) {
-    replyOverride += cap.reply
+  // Nunca concatenar o redirect de falha da faculdade após o sucesso da
+  // transferência (Diego #24127679). Só anexa reply de captação "útil".
+  const capReply = String(cap.reply || '').trim()
+  const capReplyUsable =
+    Boolean(capReply) && !replyLooksLikeFacultyContactRedirect(capReply)
+
+  if (cap.ok && capReplyUsable) {
+    replyOverride += capReply
+  } else if (cap.code === 'NEEDS_CONFIRM_NOVA_INSCRICAO' && capReplyUsable) {
+    replyOverride += capReply
   } else {
     replyOverride +=
       'Em instantes enviamos por aqui o link atualizado para conclusão da matrícula. Qualquer dúvida, estamos à disposição.'

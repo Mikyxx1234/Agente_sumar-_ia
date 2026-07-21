@@ -4,6 +4,7 @@
  *
  *   node scripts/activate-aguardando-pending.mjs --dry-run
  *   node scripts/activate-aguardando-pending.mjs --apply [--limit N]
+ *   node scripts/activate-aguardando-pending.mjs --apply --all
  */
 import fs from 'node:fs'
 import {
@@ -46,6 +47,7 @@ if (fs.existsSync(envFile)) {
 
 const args = process.argv.slice(2)
 const dryRun = !args.includes('--apply')
+const processAll = args.includes('--all')
 const limit = Number(args.find((a, i) => args[i - 1] === '--limit') || 0) || 0
 
 const PIPE = AGENT_FUNNEL_PIPELINE_ID
@@ -170,7 +172,7 @@ for (const lead of leads) {
     continue
   }
   const formSt = String(row?.inscricao_form_status || '').trim()
-  if (formSt && SKIP_FORM.has(formSt)) {
+  if (!processAll && formSt && SKIP_FORM.has(formSt)) {
     skipped.push({ lid, reason: `form_${formSt}` })
     continue
   }
@@ -195,6 +197,22 @@ for (const lead of leads) {
     bufferLooksLikeLead ||
     histPending ||
     (noteInbound && userCount === 0 && !hist.some((r) => String(r?.bot_message || '').trim()))
+
+  if (processAll) {
+    candidates.push({
+      lid,
+      phone,
+      contactId,
+      sessionId: buf.sessionId,
+      buf: buf.count,
+      histPending,
+      userCount,
+      seed: lastUser || noteInbound || null,
+      notePreview: noteInbound?.slice(0, 50) || null,
+      allMode: true,
+    })
+    continue
+  }
 
   if (leadSpoke && agentDidNotReply) {
     candidates.push({
@@ -221,18 +239,22 @@ for (const lead of leads) {
 if (limit > 0) candidates.splice(limit)
 
 console.log(
-  `mode=${dryRun ? 'DRY-RUN' : 'APPLY'} aguardando_total=${leads.length} candidates=${candidates.length} skipped=${skipped.length}`,
+  `mode=${dryRun ? 'DRY-RUN' : 'APPLY'} all=${processAll} aguardando_total=${leads.length} candidates=${candidates.length} skipped=${skipped.length}`,
 )
 for (const c of candidates) {
-  console.log(
-    `[pending] lead=${c.lid} buf=${c.buf} users=${c.userCount} histPending=${c.histPending} seed=${String(c.seed || '').slice(0, 55)}`,
-  )
+  if (!processAll) {
+    console.log(
+      `[pending] lead=${c.lid} buf=${c.buf} users=${c.userCount} histPending=${c.histPending} seed=${String(c.seed || '').slice(0, 55)}`,
+    )
+  }
 }
 
 const stats = { moved: 0, synced: 0, seeded: 0, flushed: 0, sendOk: 0, errors: 0 }
 
 for (const c of candidates) {
-  console.log(`[move] lead=${c.lid} → Atendimento`)
+  if (!processAll || stats.moved % 25 === 0) {
+    console.log(`[move] lead=${c.lid} → Atendimento (${stats.moved + 1}/${candidates.length})`)
+  }
   if (!dryRun) {
     const mv = await updateLeadPipelineStatus(env, c.lid, {
       pipelineId: PIPE,

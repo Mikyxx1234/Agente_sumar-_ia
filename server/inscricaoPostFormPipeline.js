@@ -57,7 +57,10 @@ import {
   leadHasCaptacaoContratoNote,
 } from './postFormSendGuard.js'
 import { getAgentQueueSessionCutoffIso } from './agentQueueSession.js'
-import { buildFacultyContactRedirectReply } from '../libShared/humanHandoffHeuristics.js'
+import {
+  buildFacultyContactRedirectReply,
+  replyLooksLikeFacultyContactRedirect,
+} from '../libShared/humanHandoffHeuristics.js'
 import {
   runMatriculaCaptacaoAfterForm,
   shouldRunSalesbot49813,
@@ -621,10 +624,23 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
       result: matriculaOk ? `Salesbot ${salesbotRes.botId} disparado` : salesbotRes.text || 'falha',
       ok: matriculaOk,
     })
-    if (matriculaOk && !isSumareCaptacaoEnabled(env)) {
-      await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_CONCLUIDO).catch(() => {})
-      reply = buildInscricaoFormCompleteReply({ pushName, ok: true })
-      ctxForm = 'completed'
+    if (matriculaOk) {
+      // Captação pode ter falhado no texto (faculty redirect) e o salesbot 49813
+      // "salvar" o fluxo — NÃO manter o reply de falha (Diego #24127679:
+      // "Registramos transferência" + "não consegui concluir" na mesma bolha).
+      captacaoFailedTerminal = false
+      if (replyLooksLikeFacultyContactRedirect(reply) || !String(reply || '').trim()) {
+        reply = buildInscricaoFormCompleteReply({ pushName, ok: true })
+      }
+      if (!isSumareCaptacaoEnabled(env)) {
+        await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_CONCLUIDO).catch(() => {})
+        ctxForm = 'completed'
+      } else if (
+        ctxForm !== INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE &&
+        ctxForm !== INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO
+      ) {
+        ctxForm = INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE
+      }
     }
   }
 
