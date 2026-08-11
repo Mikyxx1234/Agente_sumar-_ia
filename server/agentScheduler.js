@@ -45,8 +45,8 @@
  *   KOMMO_CHANNEL_SECRET / SCOPE_ID    só p/ mode=amojo (histórico Chats)
  *   KOMMO_LEAD_CHAT_MAP={"19884275":"uuid-chat"}  opcional — chat_id por lead
  *   KOMMO_AGENT_TEST_LEAD_IDS          (opcional) whitelist CSV de lead ids em teste
- *   KOMMO_SCHEDULER_VERBOSE=true       loga URLs longas do poll quando buffer vazio
- *                                      (senão só 1 linha resumida por lead).
+ *   KOMMO_SCHEDULER_VERBOSE=true       loga 1 linha por lead com buffer vazio + diag/URLs do poll.
+ *                                      Default off: só o resumo do tick (N sem msg).
  */
 
 import {
@@ -554,12 +554,14 @@ export async function runSchedulerTick(env) {
         const pollOn = isKommoInboundPollEnabled(env)
         const mode = normalizeKommoInboundPollMode(env.KOMMO_INBOUND_POLL_MODE)
         const showDetail = Boolean(whitelist) || isSchedulerVerbose(env)
-        // Antes o diag só rodava com KOMMO_AGENT_TEST_LEAD_IDS — em produção
-        // ficava silencioso e parecia que "nada executava". Sempre logamos 1
-        // linha; URLs longas só com whitelist ou KOMMO_SCHEDULER_VERBOSE=true.
-        console.log(
-          `[scheduler] buffer vazio session=${sessionId} lead=${lead.id} mode=${pollOn ? mode : 'webhook'} — sem inbound novo neste tick.`,
-        )
+        // Em produção o resumo do tick (stats.skippedNoMessages) já basta —
+        // logar 1 linha por lead a cada tick vazio vira flood. Per-lead só
+        // com whitelist (KOMMO_AGENT_TEST_LEAD_IDS) ou KOMMO_SCHEDULER_VERBOSE=true.
+        if (showDetail) {
+          console.log(
+            `[scheduler] buffer vazio session=${sessionId} lead=${lead.id} mode=${pollOn ? mode : 'webhook'} — sem inbound novo neste tick.`,
+          )
+        }
         if (pollOn && showDetail) {
           if (mode === 'dispatcher') {
             console.log(formatDispatcherDiagLine(lead.id))
@@ -646,7 +648,9 @@ export function startAgentScheduler(env) {
     running = true
     runSchedulerTick(env)
       .then((stats) => {
-        if (stats.processed > 0 || stats.errors > 0) {
+        // Sempre 1 linha de resumo quando houve funil (ou erro). Evita flood
+        // per-lead e ainda mostra que o scheduler está vivo em idle.
+        if (stats.leadsInFunnel > 0 || stats.processed > 0 || stats.errors > 0) {
           const wl = stats.skippedNotInWhitelist ? `, ${stats.skippedNotInWhitelist} fora da whitelist` : ''
           console.log(
             `[scheduler] tick: ${stats.leadsInFunnel} no funil, ${stats.processed} processados, ${stats.skippedDebounce} aguardando debounce, ${stats.skippedNoMessages} sem msg${wl}, ${stats.errors} erros`,

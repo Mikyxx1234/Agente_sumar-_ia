@@ -12,6 +12,12 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-08-11 - Log per-lead "buffer vazio" do scheduler gated por KOMMO_SCHEDULER_VERBOSE
+- **Decisão**: Em `server/agentScheduler.js`, o `console.log` `[scheduler] buffer vazio session=... lead=...` só roda quando `showDetail` for true (`KOMMO_AGENT_TEST_LEAD_IDS` na whitelist OU `KOMMO_SCHEDULER_VERBOSE=true`). Sem isso, produção só emite o resumo agregado do tick (`stats.skippedNoMessages`). Diag detalhado do poll (URLs/dispatcher/events) continua atrás do mesmo gate.
+- **Contexto**: Flood de logs no EasyPanel dava aparência de "diversas solicitações" simultâneas, levando a desligar o serviço por engano — na verdade eram só ticks ociosos do scheduler (buffer vazio), não crash nem sobrecarga real.
+- **Alternativas descartadas**: Amostrar 1 a cada N leads (mais complexo, esconde qual lead específico ficou sem inbound quando precisar debugar); silenciar também o resumo do tick (perderia observabilidade de que o scheduler está rodando).
+- **Impacto**: Produção com `KOMMO_SCHEDULER_VERBOSE` ausente/false (default) para de logar 1 linha por lead ocioso a cada tick; debug de whitelist/teste mantém o detalhe de sempre.
+
 ### 2026-07-16 - Nota de auditoria quando atendimento não conclui + curso/polo pós-form
 - **Decisão**: Se pós-form/captação não concluir (falha terminal, redirect faculdade, lead não encontrado, polo/curso ausente), gravar nota Kommo via `createLeadAuditNote` com code/motivo/detalhe/EX. Form sem curso → pedir curso (não redirect). Polo ausente pós-form → pedir polo (não redirect).
 - **Contexto**: Leads Aline #24120625 e Thiago #24121875 receberam `buildFacultyContactRedirectReply` após Form Sumar sem `sum_Curso`.
