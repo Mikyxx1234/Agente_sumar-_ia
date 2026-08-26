@@ -54,12 +54,15 @@ import {
   extractContactPhone,
   extractLeadPhone,
 } from './kommoClient.js'
-import { listLeadsInAgentQueue } from './kommoAgentFunnel.js'
 import {
   assertLeadInAgentFunnel,
-  describeLeadFunnel,
+  describeCrmLeadFunnel as describeLeadFunnel,
+  isEduitBackend,
+  listLeadsInAgentQueue,
+  normalizeCrmLeadId,
   resolveAgentFunnelFromEnv,
-} from './kommoAgentFunnelGate.js'
+  getCrmBackend,
+} from './crmAdapter.js'
 import { phoneToWhatsAppSessionId, whatsAppSessionVariants } from './phoneWhatsApp.js'
 import { getMessages, getLastTouchedAt, listSessionsWithPendingMessages } from './evolution/messageBuffer.js'
 import { clearBufferIfStaleRepush } from './sessionFlushDedupe.js'
@@ -76,6 +79,7 @@ import { reactivateOrphanLeads, isReactivationEnabled, getSweepIntervalMs } from
 import { sendMessageWithNote } from './whatsappSender.js'
 import { saveConversation } from './historyStore.js'
 import { generateExecutionId } from './ai/executionTelemetry.js'
+import { fetchDadosClienteByLeadId, normalizeTelefone } from './dadosClienteStore.js'
 import {
   syncKommoInboundToBuffer,
   isKommoInboundPollEnabled,
@@ -117,6 +121,9 @@ let lastReactivationSweepMs = 0
  * Throttled — não roda a cada tick. Idempotente: lead já no funil é ignorado.
  */
 async function maybeReactivationSweep(env, stats) {
+  // Reativação Kommo (pipelines/status numéricos). EduIT: Entrada→Atendimento
+  // já ocorre no gate (ensureEduitDealReadyForAgent) no flush por telefone.
+  if (isEduitBackend(env)) return
   if (!isReactivationEnabled(env)) return
   const now = Date.now()
   if (now - lastReactivationSweepMs < getSweepIntervalMs(env)) return
@@ -181,11 +188,11 @@ async function tryFlushWebhookOrphanSessions(env, { debounceMs, stats }) {
         stats.skippedFunnelGate = (stats.skippedFunnelGate || 0) + 1
         console.log(
           `[scheduler] flush órfão ${sessionId} BLOQUEADO funnel_gate reason=${funnel.reason} ` +
-            `(kommo ${describeLeadFunnel(funnel.lead || { pipeline_id: funnel.pipeline_id, status_id: funnel.status_id })})`,
+            `(${getCrmBackend(env)} ${describeLeadFunnel(funnel.lead || { pipeline_id: funnel.pipeline_id, status_id: funnel.status_id })})`,
         )
         continue
       }
-      const leadId = Number(funnel.lead?.id)
+      const leadId = normalizeCrmLeadId(funnel.lead?.id, env)
       console.log(
         `[scheduler] flush órfão ${sessionId} lead=${leadId} (${messages.length} msgs, idade=${Math.round(ageMs / 1000)}s)`,
       )
@@ -245,6 +252,9 @@ async function mapWithConcurrency(items, worker, limit) {
 function isEnabled(env) {
   const flag = String(env.KOMMO_SCHEDULER_ENABLED || '').trim().toLowerCase()
   if (flag === 'false' || flag === '0' || flag === 'no') return false
+  if (isEduitBackend(env)) {
+    return Boolean(String(env.EDUIT_BASE_URL || '').trim() && String(env.EDUIT_API_KEY || '').trim())
+  }
   if (!env.KOMMO_BASE_URL || !env.KOMMO_ACCESS_TOKEN) return false
   return true
 }
@@ -286,8 +296,15 @@ async function resolveEffectiveSessionId(env, phone) {
 }
 
 function getTestLeadWhitelist(env) {
-  const raw = String(env.KOMMO_AGENT_TEST_LEAD_IDS || '').trim()
+  const raw = String(env.KOMMO_AGENT_TEST_LEAD_IDS || env.EDUIT_AGENT_TEST_DEAL_IDS || '').trim()
   if (!raw) return null
+  if (isEduitBackend(env)) {
+    const ids = raw
+      .split(/[,\s;]+/)
+      .map((s) => String(s).trim())
+      .filter(Boolean)
+    return ids.length > 0 ? new Set(ids) : null
+  }
   const ids = raw
     .split(/[,\s;]+/)
     .map((s) => Number(String(s).trim()))
@@ -316,12 +333,15 @@ export async function runSchedulerTick(env) {
   // 1) Listar leads no funil (um ou vários status — ver KOMMO_AGENT_STATUS_IDS)
   const listing = await listLeadsInAgentQueue(env)
   if (!listing.ok && !(listing.leads || []).length) {
-    const base = String(env.KOMMO_BASE_URL || '').replace(/\/$/, '') || '(vazio)'
+    const backend = getCrmBackend(env)
+    const base = isEduitBackend(env)
+      ? String(env.EDUIT_BASE_URL || '').replace(/\/$/, '') || '(vazio)'
+      : String(env.KOMMO_BASE_URL || '').replace(/\/$/, '') || '(vazio)'
     console.error(
-      `[scheduler] kommo list falhou: http=${listing.httpStatus ?? 'n/a'} base=${base} ` +
+      `[scheduler] ${backend} list falhou: http=${listing.httpStatus ?? 'n/a'} base=${base} ` +
         `status_ids=[${statusIds.join(',')}] pipeline=${pipelineId} err=${String(listing.error || 'unknown').slice(0, 280)}`,
     )
-    // Kommo indisponível (ex.: 403 do IP do servidor): ainda tenta buffer só do webhook Evolution.
+    // CRM indisponível: ainda tenta buffer só do webhook Evolution/Meta.
     await tryFlushWebhookOrphanSessions(env, { debounceMs, stats })
     return stats
   }
@@ -329,28 +349,34 @@ export async function runSchedulerTick(env) {
   stats.leadsInFunnel = leadsAll.length
 
   // Feedback IA + ciclo de sessão (saída/reentrada na fila do agente).
+  // Snapshot atual usa Number(id) — incompatível com CUID EduIT; pular no backend eduit.
   let funnelEnteredIds = new Set()
   let funnelExitedIds = []
-  try {
-    const snap = notifyFunnelSnapshot(env, leadsAll.map((l) => Number(l.id)))
-    funnelEnteredIds = new Set((snap.enteredIds || snap.entered || []).map(Number).filter((n) => Number.isFinite(n) && n > 0))
-    funnelExitedIds = (snap.exitedIds || [])
-      .map(Number)
-      .filter((n) => Number.isFinite(n) && n > 0)
-    if (isAgentQueueSessionEnabled(env) && funnelExitedIds.length > 0) {
-      endAgentQueueSessionsForLeads(env, funnelExitedIds, { reason: 'funnel_exit' }).catch((err) => {
-        console.warn('[scheduler] agentQueueSession end:', err.message)
-      })
+  if (!isEduitBackend(env)) {
+    try {
+      const snap = notifyFunnelSnapshot(env, leadsAll.map((l) => Number(l.id)))
+      funnelEnteredIds = new Set((snap.enteredIds || snap.entered || []).map(Number).filter((n) => Number.isFinite(n) && n > 0))
+      funnelExitedIds = (snap.exitedIds || [])
+        .map(Number)
+        .filter((n) => Number.isFinite(n) && n > 0)
+      if (isAgentQueueSessionEnabled(env) && funnelExitedIds.length > 0) {
+        endAgentQueueSessionsForLeads(env, funnelExitedIds, { reason: 'funnel_exit' }).catch((err) => {
+          console.warn('[scheduler] agentQueueSession end:', err.message)
+        })
+      }
+    } catch (err) {
+      console.error('[scheduler] feedbackIA notify falhou:', err.message)
     }
-  } catch (err) {
-    console.error('[scheduler] feedbackIA notify falhou:', err.message)
   }
 
   // Whitelist de teste: descarta leads fora da lista ANTES do bulk de
   // contatos, evitando 1 chamada Kommo extra à toa.
   let leads = leadsAll
   if (whitelist) {
-    leads = leadsAll.filter((l) => whitelist.has(Number(l.id)))
+    leads = leadsAll.filter((l) => {
+      if (isEduitBackend(env)) return whitelist.has(String(l.id))
+      return whitelist.has(Number(l.id))
+    })
     stats.skippedNotInWhitelist = leadsAll.length - leads.length
     if (stats.skippedNotInWhitelist > 0) {
       console.log(`[scheduler] whitelist ativa — ${leads.length}/${leadsAll.length} leads passaram (ids permitidos: ${[...whitelist].join(',')})`)
@@ -370,21 +396,23 @@ export async function runSchedulerTick(env) {
     return stats
   }
 
-  // 2) Coletar contact IDs e bulk-fetch
+  // 2) Coletar contact IDs e bulk-fetch (Kommo only)
   const contactIds = []
-  for (const lead of leads) {
-    const cs = lead?._embedded?.contacts || []
-    for (const c of cs) {
-      if (Number.isFinite(Number(c.id))) contactIds.push(Number(c.id))
-    }
-  }
   const contactById = new Map()
-  if (contactIds.length > 0) {
-    const bulk = await bulkGetContactsByIds(env, contactIds)
-    if (bulk.ok) {
-      for (const c of bulk.contacts) contactById.set(Number(c.id), c)
-    } else {
-      console.warn('[scheduler] bulkGetContactsByIds falhou:', bulk.error || bulk.status)
+  if (!isEduitBackend(env)) {
+    for (const lead of leads) {
+      const cs = lead?._embedded?.contacts || []
+      for (const c of cs) {
+        if (Number.isFinite(Number(c.id))) contactIds.push(Number(c.id))
+      }
+    }
+    if (contactIds.length > 0) {
+      const bulk = await bulkGetContactsByIds(env, contactIds)
+      if (bulk.ok) {
+        for (const c of bulk.contacts) contactById.set(Number(c.id), c)
+      } else {
+        console.warn('[scheduler] bulkGetContactsByIds falhou:', bulk.error || bulk.status)
+      }
     }
   }
 
@@ -392,35 +420,51 @@ export async function runSchedulerTick(env) {
   // pronta. Processamos em paralelo mas com lock por sessão (no flushSession).
   const processLead = async (lead) => {
     try {
-      const cs = lead?._embedded?.contacts || []
+      const crmLeadId = normalizeCrmLeadId(lead?.id, env)
       let phone = null
       /** Contato cujo telefone bate com a sessão — usado no poll de eventos entity=contact. */
       let contactIdForPoll = null
-      for (const c of cs) {
-        const detail = contactById.get(Number(c.id))
-        if (!detail) continue
-        const p = extractContactPhone(detail)
-        if (p) {
-          phone = p
-          contactIdForPoll = Number(c.id)
-          break
+
+      if (isEduitBackend(env)) {
+        // Meta inbound: telefone vem do buffer; resolve via Supabase (id_lead/eduit_deal_id).
+        const row = await fetchDadosClienteByLeadId(env, crmLeadId)
+        phone = normalizeTelefone(row?.telefone || '')
+        if (!phone) {
+          console.warn(
+            `[scheduler] deal=${crmLeadId} ignorado: sem telefone em dados_cliente_sum (eduit_deal_id/id_lead). ` +
+              'Rode o backfill ou aguarde inbound Meta que persiste o vínculo.',
+          )
+          stats.skippedNoPhone = (stats.skippedNoPhone || 0) + 1
+          return
         }
-      }
-      if (!phone) {
-        phone = extractLeadPhone(lead)
-      }
-      if (!phone) {
-        console.warn(
-          `[scheduler] lead=${lead.id} ignorado: nenhum telefone extraível do contato (field PHONE) nem do lead. ` +
-            'Sem telefone não há sessionId WhatsApp → buffer vazio e a IA nunca responde. Preencha telefone no Kommo (contato ou lead).',
-        )
-        stats.skippedNoPhone = (stats.skippedNoPhone || 0) + 1
-        return
+      } else {
+        const cs = lead?._embedded?.contacts || []
+        for (const c of cs) {
+          const detail = contactById.get(Number(c.id))
+          if (!detail) continue
+          const p = extractContactPhone(detail)
+          if (p) {
+            phone = p
+            contactIdForPoll = Number(c.id)
+            break
+          }
+        }
+        if (!phone) {
+          phone = extractLeadPhone(lead)
+        }
+        if (!phone) {
+          console.warn(
+            `[scheduler] lead=${lead.id} ignorado: nenhum telefone extraível do contato (field PHONE) nem do lead. ` +
+              'Sem telefone não há sessionId WhatsApp → buffer vazio e a IA nunca responde. Preencha telefone no Kommo (contato ou lead).',
+          )
+          stats.skippedNoPhone = (stats.skippedNoPhone || 0) + 1
+          return
+        }
       }
       const sessionId = await resolveEffectiveSessionId(env, phone)
       if (!sessionId) return
 
-      if (funnelEnteredIds.has(Number(lead.id))) {
+      if (!isEduitBackend(env) && funnelEnteredIds.has(Number(lead.id))) {
         try {
           const reentry = await beginAgentQueueSession(env, {
             leadId: Number(lead.id),
@@ -438,64 +482,69 @@ export async function runSchedulerTick(env) {
         }
       }
 
-      const syncRes = await syncKommoInboundToBuffer(env, {
-        leadId: Number(lead.id),
-        sessionId,
-        phone,
-        contactId:
-          contactIdForPoll != null && Number.isFinite(contactIdForPoll) && contactIdForPoll > 0
-            ? contactIdForPoll
-            : null,
-      })
-
-      let skipFlushAfterPostForm = false
-      try {
-        const postFormAdv = await tryAdvanceInscricaoPostFormScheduler(env, {
-          telefone: phone,
+      if (!isEduitBackend(env)) {
+        await syncKommoInboundToBuffer(env, {
           leadId: Number(lead.id),
+          sessionId,
+          phone,
+          contactId:
+            contactIdForPoll != null && Number.isFinite(contactIdForPoll) && contactIdForPoll > 0
+              ? contactIdForPoll
+              : null,
         })
-        if (postFormAdv?.handled) {
-          skipFlushAfterPostForm = true
-          const ctxForm = postFormAdv.result?.ctxSnapshot?.inscricaoForm ?? 'n/a'
-          const botId = postFormAdv.result?.ctxSnapshot?.salesbotId ?? 'n/a'
-          const matriculaOk = postFormAdv.result?.toolCalls?.[0]?.ok
-          console.log(
-            `[scheduler] pós-form lead=${lead.id} handled=true inscricaoForm=${ctxForm} salesbot=${botId} matricula_ok=${matriculaOk}`,
-          )
-          const reply = postFormAdv.result?.reply
-          const contratoWhatsappSent = Boolean(postFormAdv.result?.ctxSnapshot?.contratoWhatsappSent)
-          const skipSchedulerWhatsapp = Boolean(postFormAdv.result?.ctxSnapshot?.skipSchedulerWhatsapp)
-          const mustSendContrato =
-            reply &&
-            /sumare\.edu\.br/i.test(reply) &&
-            /\bcontrato\b/i.test(reply) &&
-            !contratoWhatsappSent
-          if (reply && (mustSendContrato || (!contratoWhatsappSent && !skipSchedulerWhatsapp))) {
-            const execId = generateExecutionId()
-            const sendRes = await sendMessageWithNote(env, {
-              telefone: phone,
-              text: reply,
-              leadId: Number(lead.id),
-              executionId: execId,
-            })
-            await saveConversation(env, {
-              telefone: phone,
-              userMessage: '[scheduler] avanço pós-formulário Kommo',
-              botMessage: reply,
-            }).catch(() => {})
-            console.log(`[scheduler] pós-form lead=${lead.id} whatsapp_send_ok=${sendRes?.ok}`)
-          } else if (contratoWhatsappSent) {
-            console.log(`[scheduler] pós-form lead=${lead.id} link contrato já enviado pela captação`)
-          } else if (skipSchedulerWhatsapp) {
-            console.log(`[scheduler] pós-form lead=${lead.id} WhatsApp omitido (captação/salesbot já enviou)`)
-          }
-        }
-      } catch (postErr) {
-        console.warn(`[scheduler] pós-form lead=${lead.id}:`, postErr.message)
       }
-      if (isKommoInboundPollDebugLead(env, Number(lead.id))) {
+
+      // Pós-form / salesbot é Kommo-specific — fora da fatia EduIT.
+      let skipFlushAfterPostForm = false
+      if (!isEduitBackend(env)) {
+        try {
+          const postFormAdv = await tryAdvanceInscricaoPostFormScheduler(env, {
+            telefone: phone,
+            leadId: crmLeadId,
+          })
+          if (postFormAdv?.handled) {
+            skipFlushAfterPostForm = true
+            const ctxForm = postFormAdv.result?.ctxSnapshot?.inscricaoForm ?? 'n/a'
+            const botId = postFormAdv.result?.ctxSnapshot?.salesbotId ?? 'n/a'
+            const matriculaOk = postFormAdv.result?.toolCalls?.[0]?.ok
+            console.log(
+              `[scheduler] pós-form lead=${crmLeadId} handled=true inscricaoForm=${ctxForm} salesbot=${botId} matricula_ok=${matriculaOk}`,
+            )
+            const reply = postFormAdv.result?.reply
+            const contratoWhatsappSent = Boolean(postFormAdv.result?.ctxSnapshot?.contratoWhatsappSent)
+            const skipSchedulerWhatsapp = Boolean(postFormAdv.result?.ctxSnapshot?.skipSchedulerWhatsapp)
+            const mustSendContrato =
+              reply &&
+              /sumare\.edu\.br/i.test(reply) &&
+              /\bcontrato\b/i.test(reply) &&
+              !contratoWhatsappSent
+            if (reply && (mustSendContrato || (!contratoWhatsappSent && !skipSchedulerWhatsapp))) {
+              const execId = generateExecutionId()
+              const sendRes = await sendMessageWithNote(env, {
+                telefone: phone,
+                text: reply,
+                leadId: crmLeadId,
+                executionId: execId,
+              })
+              await saveConversation(env, {
+                telefone: phone,
+                userMessage: '[scheduler] avanço pós-formulário Kommo',
+                botMessage: reply,
+              }).catch(() => {})
+              console.log(`[scheduler] pós-form lead=${crmLeadId} whatsapp_send_ok=${sendRes?.ok}`)
+            } else if (contratoWhatsappSent) {
+              console.log(`[scheduler] pós-form lead=${crmLeadId} link contrato já enviado pela captação`)
+            } else if (skipSchedulerWhatsapp) {
+              console.log(`[scheduler] pós-form lead=${crmLeadId} WhatsApp omitido (captação/salesbot já enviou)`)
+            }
+          }
+        } catch (postErr) {
+          console.warn(`[scheduler] pós-form lead=${crmLeadId}:`, postErr.message)
+        }
+      }
+      if (!isEduitBackend(env) && isKommoInboundPollDebugLead(env, Number(lead.id))) {
         console.log(
-          `[scheduler][debug] pós-sync lead=${lead.id} session=${sessionId} pushed=${syncRes.pushed} byMode=${JSON.stringify(syncRes.byMode)}`,
+          `[scheduler][debug] pós-sync lead=${lead.id} session=${sessionId}`,
         )
       }
 
@@ -522,36 +571,36 @@ export async function runSchedulerTick(env) {
         try {
           const greet = await tryProactiveGreet(env, {
             telefone: phone,
-            leadId: Number(lead.id),
+            leadId: crmLeadId,
             sessionId,
             lead,
             source: 'scheduler',
           })
           if (greet?.action === 'greet_sent') {
-            console.log(`[scheduler] saudação proativa lead=${lead.id} enviada`)
+            console.log(`[scheduler] saudação proativa lead=${crmLeadId} enviada`)
             stats.processed += 1
             return
           }
         } catch (greetErr) {
-          console.warn(`[scheduler] saudação proativa lead=${lead.id}:`, greetErr.message)
+          console.warn(`[scheduler] saudação proativa lead=${crmLeadId}:`, greetErr.message)
         }
 
         try {
           const inact = await tryInactivityReengagement(env, {
             telefone: phone,
-            leadId: Number(lead.id),
+            leadId: crmLeadId,
             sessionId,
             lead,
           })
           if (inact?.action && !['skip', 'disabled'].includes(inact.action)) {
-            console.log(`[scheduler] inatividade lead=${lead.id} action=${inact.action}`)
+            console.log(`[scheduler] inatividade lead=${crmLeadId} action=${inact.action}`)
           }
         } catch (inactErr) {
-          console.warn(`[scheduler] inatividade lead=${lead.id}:`, inactErr.message)
+          console.warn(`[scheduler] inatividade lead=${crmLeadId}:`, inactErr.message)
         }
 
         stats.skippedNoMessages += 1
-        const pollOn = isKommoInboundPollEnabled(env)
+        const pollOn = !isEduitBackend(env) && isKommoInboundPollEnabled(env)
         const mode = normalizeKommoInboundPollMode(env.KOMMO_INBOUND_POLL_MODE)
         const showDetail = Boolean(whitelist) || isSchedulerVerbose(env)
         // Em produção o resumo do tick (stats.skippedNoMessages) já basta —
@@ -559,7 +608,7 @@ export async function runSchedulerTick(env) {
         // com whitelist (KOMMO_AGENT_TEST_LEAD_IDS) ou KOMMO_SCHEDULER_VERBOSE=true.
         if (showDetail) {
           console.log(
-            `[scheduler] buffer vazio session=${sessionId} lead=${lead.id} mode=${pollOn ? mode : 'webhook'} — sem inbound novo neste tick.`,
+            `[scheduler] buffer vazio session=${sessionId} lead=${crmLeadId} mode=${pollOn ? mode : 'webhook'} — sem inbound novo neste tick.`,
           )
         }
         if (pollOn && showDetail) {
@@ -606,17 +655,17 @@ export async function runSchedulerTick(env) {
         return
       }
 
-      const funnel = await assertLeadInAgentFunnel(env, { leadId: Number(lead.id), lead })
+      const funnel = await assertLeadInAgentFunnel(env, { leadId: crmLeadId, lead, telefone: phone })
       if (!funnel.ok) {
         stats.skippedFunnelGate = (stats.skippedFunnelGate || 0) + 1
         console.warn(
-          `[scheduler] lead=${lead.id} flush omitido funnel_gate reason=${funnel.reason} ` +
+          `[scheduler] lead=${crmLeadId} flush omitido funnel_gate reason=${funnel.reason} ` +
             describeLeadFunnel(funnel.lead || lead),
         )
         return
       }
-      console.log(`[scheduler] flush ${sessionId} lead=${lead.id} (${messages.length} msgs, idade=${Math.round(ageMs / 1000)}s)`)
-      await flushSession(env, sessionId, { leadIdHint: lead.id })
+      console.log(`[scheduler] flush ${sessionId} lead=${crmLeadId} (${messages.length} msgs, idade=${Math.round(ageMs / 1000)}s)`)
+      await flushSession(env, sessionId, { leadIdHint: crmLeadId })
       stats.processed += 1
     } catch (err) {
       stats.errors += 1

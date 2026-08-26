@@ -233,10 +233,11 @@ export async function updateDadosCliente(env, { telefone, fields }) {
  */
 export async function marcarClienteIA(env, { telefone, idLead }) {
   if (idLead == null || idLead === '') {
-    return { ok: false, code: 'MISSING_ID_LEAD', error: 'Informe id_lead (id retornado do Kommo).' }
+    return { ok: false, code: 'MISSING_ID_LEAD', error: 'Informe id_lead (id retornado do CRM).' }
   }
-  const idLeadNum = Number(idLead)
-  const idLeadValue = Number.isFinite(idLeadNum) ? idLeadNum : String(idLead)
+  // text column: preserva CUID EduIT; Kommo numérico continua como número quando possível
+  const s = String(idLead).trim()
+  const idLeadValue = /^\d+$/.test(s) ? Number(s) : s
 
   return updateDadosCliente(env, {
     telefone,
@@ -277,8 +278,8 @@ export async function ensureDadosClienteRow(env, { telefone, idLead, fields = {}
     ...fields,
   }
   if (idLead != null && idLead !== '') {
-    const n = Number(idLead)
-    row.id_lead = Number.isFinite(n) ? n : idLead
+    const s = String(idLead).trim()
+    row.id_lead = /^\d+$/.test(s) ? Number(s) : s
   }
 
   try {
@@ -317,12 +318,37 @@ export async function getLeadIdByTelefone(env, telefone) {
   try {
     const { url, key, table } = getConfig(env)
     if (!url || !key) return null
-    const row = await fetchDadosClienteByTelefone(env, telefone, 'id_lead')
+    const row = await fetchDadosClienteByTelefone(env, telefone, 'id_lead,eduit_deal_id')
     if (!row) return null
+    // Prefer deal CUID EduIT quando presente — nunca Number() em CUID
+    const cuid = row.eduit_deal_id != null && String(row.eduit_deal_id).trim()
+      ? String(row.eduit_deal_id).trim()
+      : null
+    if (cuid && /^c[a-z0-9]{8,}$/i.test(cuid)) return cuid
     const raw = row.id_lead
     if (raw == null || raw === '') return null
-    const n = Number(raw)
-    return Number.isFinite(n) ? n : raw
+    const s = String(raw).trim()
+    if (/^c[a-z0-9]{8,}$/i.test(s)) return s
+    const n = Number(s)
+    return Number.isFinite(n) && n > 0 ? n : s
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Busca linha por id_lead ou eduit_deal_id (CUID ou número Kommo como text).
+ */
+export async function fetchDadosClienteByLeadId(env, leadId, select = 'telefone,id_lead,eduit_deal_id,eduit_contact_id,eduit_conversation_id') {
+  const { url, key, table } = getConfig(env)
+  if (!url || !key) return null
+  const id = String(leadId || '').trim()
+  if (!id) return null
+  try {
+    const filter = `or=(id_lead.eq.${encodeURIComponent(id)},eduit_deal_id.eq.${encodeURIComponent(id)})`
+    const { ok, data } = await supabaseGet(url, key, `${table}?${filter}&select=${select}&limit=1`)
+    if (!ok || !Array.isArray(data) || !data.length) return null
+    return data[0]
   } catch {
     return null
   }

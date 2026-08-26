@@ -76,8 +76,8 @@ const SEND_FAIL_ESCALATION_STATUS_ID = 106377088
  * reconhece esse prefixo como nota de sistema e não a re-injeta como fala do lead.
  */
 async function escalateSendFailureToHuman(env, { executionId, sessionId, leadId, errorText, failCount, items }) {
-  const lid = Number(leadId)
-  if (!Number.isFinite(lid) || lid <= 0) {
+  const lid = normalizeCrmLeadId(leadId, env)
+  if (lid == null) {
     console.warn(
       `[${executionId}] escalação de falha de envio SEM leadId (session=${sessionId}) — mantém só o backoff`,
     )
@@ -87,11 +87,15 @@ async function escalateSendFailureToHuman(env, { executionId, sessionId, leadId,
   const noteText =
     `Encaminhamento automático: IA não conseguiu responder o lead após ${failCount} tentativas. ` +
     `Erro: ${brief} (agente IA)`
-  const note = await createLeadNote(env, lid, noteText).catch((e) => ({ ok: false, error: e.message }))
-  const move = await updateLeadPipelineStatus(env, lid, {
-    pipelineId: SEND_FAIL_ESCALATION_PIPELINE_ID,
-    statusId: SEND_FAIL_ESCALATION_STATUS_ID,
-  }).catch((e) => ({ ok: false, error: e.message }))
+  const { createLeadNote: crmNote } = await import('../crmAdapter.js')
+  const note = await crmNote(env, lid, noteText).catch((e) => ({ ok: false, error: e.message }))
+  let move = { ok: true, skipped: true }
+  if (!isEduitBackend(env)) {
+    move = await updateLeadPipelineStatus(env, lid, {
+      pipelineId: SEND_FAIL_ESCALATION_PIPELINE_ID,
+      statusId: SEND_FAIL_ESCALATION_STATUS_ID,
+    }).catch((e) => ({ ok: false, error: e.message }))
+  }
   // Lead saiu do funil da IA — zera o backoff para não re-escalar se voltar.
   clearSendRetryBackoff(sessionId)
   // Marca a sessão como parada para humano (hash do buffer não respondido). A
@@ -114,8 +118,16 @@ import { runAgent } from '../ai/agentRunner.js'
 import { saveConversation } from '../historyStore.js'
 import { getLeadIdByTelefone, shouldHoldOnIaPause } from '../dadosClienteStore.js'
 import { seenMessage, withSessionLock } from './concurrency.js'
-import { findLeadByPhone, createLeadNote, updateLeadPipelineStatus } from '../kommoClient.js'
-import { assertLeadInAgentFunnel, describeLeadFunnel } from '../kommoAgentFunnelGate.js'
+import { updateLeadPipelineStatus } from '../kommoClient.js'
+import {
+  assertLeadInAgentFunnel,
+  describeCrmLeadFunnel as describeLeadFunnel,
+  findLeadByPhone,
+  isEduitBackend,
+  normalizeCrmLeadId,
+  persistEduitIds,
+  resolveAndPersistEduitIds,
+} from '../crmAdapter.js'
 import { sendMessageWithNote } from '../whatsappSender.js'
 import { generateExecutionId, saveExecution } from '../ai/executionTelemetry.js'
 import { rememberWamid, getWamids } from './sessionWamid.js'
@@ -681,10 +693,10 @@ async function flushSessionInner(env, sessionId, opts = {}) {
       }
     }
 
-    const leadIdHint = Number(opts.leadIdHint)
+    const leadIdHint = normalizeCrmLeadId(opts.leadIdHint, env)
     if (!opts.skipFunnelGate) {
       const funnel = await assertLeadInAgentFunnel(env, {
-        leadId: Number.isFinite(leadIdHint) && leadIdHint > 0 ? leadIdHint : undefined,
+        leadId: leadIdHint || undefined,
         telefone,
       })
       if (!funnel.ok) {
@@ -694,6 +706,14 @@ async function flushSessionInner(env, sessionId, opts = {}) {
             `${describeLeadFunnel(funnel.lead || { pipeline_id: funnel.pipeline_id, status_id: funnel.status_id })} | pending: ${pending}`,
         )
         return { skipped: 'funnel_gate', reason: funnel.reason, pending }
+      }
+      // Persiste CUIDs EduIT quando o gate resolveu/moveu o deal
+      if (isEduitBackend(env) && funnel.lead?.id && telefone) {
+        await persistEduitIds(env, telefone, {
+          dealId: funnel.lead.eduit_deal_id || funnel.lead.id,
+          contactId: funnel.lead.eduit_contact_id,
+          conversationId: funnel.lead.eduit_conversation_id,
+        }).catch(() => {})
       }
     }
 
@@ -727,7 +747,7 @@ async function flushSessionInner(env, sessionId, opts = {}) {
 
     const executionId = opts.executionId || generateExecutionId()
     const startedAt = new Date().toISOString()
-    const leadIdForAgent = Number.isFinite(leadIdHint) && leadIdHint > 0 ? leadIdHint : null
+    const leadIdForAgent = leadIdHint || null
     console.log(`[${executionId}] flush ${sessionId} → "${mensagemCompleta}"`)
     console.log(
       `[${executionId}] RECEBEU_MENSAGEM session=${sessionId} telefone=${telefone} leadIdHint=${leadIdForAgent ?? 'n/a'} itens=${itens.length} chars=${mensagemCompleta.length}`,
@@ -787,28 +807,46 @@ async function flushSessionInner(env, sessionId, opts = {}) {
     }
 
     if (out?.ok && out.reply) {
-      // 1ª prioridade: leadId vindo do scheduler (já achou no Kommo p/
+      // 1ª prioridade: leadId vindo do scheduler (já achou no CRM p/
       // listar quem tá no funil). Evita chamar findLeadByPhone de novo.
+      let eduitConversationId = null
       if (leadIdForAgent != null) {
         idLead = leadIdForAgent
-        console.log(`[${executionId}] kommo lead ${idLead} (hint do scheduler) p/ ${telefone}`)
+        console.log(`[${executionId}] crm lead ${idLead} (hint do scheduler) p/ ${telefone}`)
       } else {
         try {
           const lookup = await findLeadByPhone(env, telefone)
           if (lookup.ok && lookup.lead) {
-            idLead = lookup.lead.id
-            console.log(`[${executionId}] kommo lead ${idLead} encontrado p/ ${telefone}`)
+            idLead = normalizeCrmLeadId(lookup.lead.id, env)
+            eduitConversationId = lookup.conversationId || lookup.lead.eduit_conversation_id || null
+            console.log(`[${executionId}] crm lead ${idLead} encontrado p/ ${telefone}`)
+            if (isEduitBackend(env)) {
+              await persistEduitIds(env, telefone, {
+                dealId: lookup.lead.eduit_deal_id || idLead,
+                contactId: lookup.contactId || lookup.lead.eduit_contact_id,
+                conversationId: eduitConversationId,
+              }).catch(() => {})
+            }
           } else if (!lookup.ok) {
-            console.warn(`[${executionId}] kommo falha: ${lookup.error || lookup.status}`)
+            console.warn(`[${executionId}] crm falha: ${lookup.error || lookup.status}`)
           } else {
-            console.log(`[${executionId}] kommo nenhum lead p/ ${telefone}`)
+            console.log(`[${executionId}] crm nenhum lead p/ ${telefone}`)
           }
         } catch (err) {
-          console.error(`[${executionId}] kommo exception:`, err.message)
+          console.error(`[${executionId}] crm exception:`, err.message)
         }
       }
       if (idLead == null) {
         try { idLead = await getLeadIdByTelefone(env, telefone) } catch {}
+      }
+      if (isEduitBackend(env) && !eduitConversationId && telefone) {
+        try {
+          const ids = await resolveAndPersistEduitIds(env, telefone)
+          if (ids.ok) {
+            eduitConversationId = ids.conversationId
+            if (idLead == null && ids.dealId) idLead = ids.dealId
+          }
+        } catch {}
       }
 
       // Para o "digitando..." imediatamente antes do envio: o próprio envio
@@ -837,10 +875,12 @@ async function flushSessionInner(env, sessionId, opts = {}) {
             leadId: idLead,
             executionId,
             freshUserTurn: true,
+            conversationId: eduitConversationId || undefined,
           })
           if (sendResult?.ok && (sendResult.sent || 0) > 0) {
             console.log(
-              `[${executionId}] ENVIOU_WHATSAPP partes=${sendResult.sent}/${sendResult.total} leadId=${idLead ?? 'n/a'}`,
+              `[${executionId}] ENVIOU_WHATSAPP partes=${sendResult.sent}/${sendResult.total} leadId=${idLead ?? 'n/a'}` +
+                `${isEduitBackend(env) ? ' via=eduit' : ''}`,
             )
           } else if (sendResult?.deduped) {
             console.warn(

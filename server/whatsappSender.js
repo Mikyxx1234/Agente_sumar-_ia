@@ -30,6 +30,11 @@ import {
   releasePostFormSendSync,
 } from './postFormSendGuard.js'
 import { sanitizeCourseLinksFromReply } from '../libShared/courseLinkOutboundGuard.js'
+import {
+  isEduitBackend,
+  sendEduitOutboundText,
+  normalizeCrmLeadId,
+} from './crmAdapter.js'
 
 /**
  * Marca a mensagem do cliente como "lida" e mostra o "digitando..." pro
@@ -152,7 +157,34 @@ export function splitMessage(input, maxLen = 1000) {
  * Envia UM pedaço via WhatsApp Cloud API.
  * @returns { ok, status?, messageId?, code?, error? }
  */
-export async function sendText(env, { to, text }) {
+export async function sendText(env, { to, text, conversationId } = {}) {
+  // CRM EduIT: único caminho de outbound — POST conversa (sem Cloud API / Evolution).
+  if (isEduitBackend(env)) {
+    const recipient = digitsOnly(to)
+    if (!recipient) return { ok: false, code: 'MISSING_TO', error: 'destinatário vazio' }
+    const body = String(text || '')
+    if (!body.trim()) return { ok: false, code: 'EMPTY_BODY', error: 'texto vazio' }
+    const sent = await sendEduitOutboundText(env, {
+      telefone: recipient,
+      text: body,
+      conversationId,
+    })
+    if (!sent.ok) {
+      return {
+        ok: false,
+        code: sent.code || 'EDUIT_SEND_FAILED',
+        status: sent.status,
+        error: sent.error || 'falha envio EduIT',
+      }
+    }
+    return {
+      ok: true,
+      status: sent.status,
+      messageId: sent.messageId || null,
+      via: 'eduit',
+    }
+  }
+
   const outbound = String(env.WHATSAPP_OUTBOUND_MODE || 'cloud').toLowerCase().trim()
   if (outbound === 'evolution') {
     return sendTextViaEvolution(env, { to, text })
@@ -212,11 +244,19 @@ export async function sendText(env, { to, text }) {
  * @param {object} params
  * @param {string} params.telefone      destinatário (aceita JID ou só dígitos)
  * @param {string} params.text          resposta completa da IA (será split)
- * @param {number|string} [params.leadId] id do lead no Kommo (opcional — se faltar, pula notas)
+ * @param {number|string} [params.leadId] id do lead Kommo ou deal CUID EduIT
  * @param {string} [params.executionId] id único de execução; gerado se não informado
+ * @param {string} [params.conversationId] conversa EduIT (só CRM_BACKEND=eduit)
  * @returns { ok, executionId, total, sent, steps[], error? }
  */
-export async function sendMessageWithNote(env, { telefone, text, leadId, executionId, freshUserTurn = false }) {
+export async function sendMessageWithNote(env, {
+  telefone,
+  text,
+  leadId,
+  executionId,
+  freshUserTurn = false,
+  conversationId,
+} = {}) {
   const cfg = getConfig(env)
   const linkSan = sanitizeCourseLinksFromReply(text)
   if (linkSan.removed > 0) {
@@ -301,9 +341,16 @@ export async function sendMessageWithNote(env, { telefone, text, leadId, executi
     const execId = executionId || generateExecutionId()
     const steps = []
 
+    const crmLeadId = normalizeCrmLeadId(leadId, env)
+    const useEduit = isEduitBackend(env)
+
     for (let i = 0; i < parts.length; i++) {
       const part = parts[i]
-      const sent = await sendText(env, { to: telefone, text: part })
+      const sent = await sendText(env, {
+        to: telefone,
+        text: part,
+        conversationId: useEduit ? conversationId : undefined,
+      })
       steps.push({ step: 'send', index: i + 1, total: parts.length, ...sent })
       if (!sent.ok) {
         return {
@@ -316,8 +363,12 @@ export async function sendMessageWithNote(env, { telefone, text, leadId, executi
         }
       }
 
-      if (leadId != null && leadId !== '') {
-        const note = await createLeadNote(env, leadId, `${part} - ${execId}`)
+      // EduIT: a conversa já registra o outbound — não criar nota no deal (duplica UI).
+      // Kommo: mantém POST /leads/{id}/notes por parte (comportamento atual).
+      if (useEduit) {
+        steps.push({ step: 'note', index: i + 1, skipped: true, reason: 'eduit_conversation_only' })
+      } else if (crmLeadId != null && crmLeadId !== '') {
+        const note = await createLeadNote(env, crmLeadId, `${part} - ${execId}`)
         steps.push({ step: 'note', index: i + 1, total: parts.length, ...note })
         if (!note.ok) {
           console.warn(`[WhatsApp][kommo-note] falha parte ${i + 1}: ${note.error || note.status}`)

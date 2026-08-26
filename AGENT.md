@@ -12,17 +12,59 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-08-26 - Cutover env: CRM_BACKEND=eduit (inbound Meta, outbound EduIT)
+- **Decisão**: Produção liga o CRM EduIT com `CRM_BACKEND=eduit`, `EDUIT_BASE_URL` e `EDUIT_API_KEY`. Variáveis Kommo permanecem no EasyPanel só para rollback (`CRM_BACKEND=kommo`). Inbound permanece no webhook Meta. Outbound, com backend eduit, ignora `WHATSAPP_OUTBOUND_MODE` e envia só `POST /api/conversations/{id}/messages`. Scheduler continua ligado (`KOMMO_SCHEDULER_ENABLED=true`); no backend eduit ele lista Atendimento+Inscrição no EduIT.
+- **Contexto**: Fatia 1 (cliente/adapter/gate/backfill) já no código. Default do código continua kommo até o env de produção ser alterado e o serviço reiniciado.
+- **Alternativas descartadas**: Dual-write Kommo+EduIT no mesmo tick (duplica mensagem); desligar Kommo tokens agora (impede rollback); webhook EduIT nesta fatia (ainda não homologado).
+- **Impacto**: Deploy do código desta fatia **antes** de setar `CRM_BACKEND=eduit`. Sem o código novo as variáveis EduIT são ignoradas.
+
+### 2026-08-24 - Custom fields: PUT com values[] (array), não objeto
+- **Decisão**: Gravar campos com `PUT /api/deals/{cuid}/custom-fields` body `{ values: [{ fieldId, name, value }] }`. Host da UI EasyPanel `frontend-front.v74knz.easypanel.host`. Não alterar código do CRM por isso. Ler pelo CUID; `GET /api/deals/25` panel continua vazio.
+- **Contexto**: Objeto `{ values: { polo: "..." } }` dá 200 sem persistir — falso negativo. Array no shape do dealPanelFields grava (homologado no #25).
+- **Alternativas descartadas**: Pedir rewrite do handler; usar número do deal no GET.
+- **Impacto**: Agente/eduitClient usa o array; token Bearer atual basta.
+
+### 2026-08-24 - Custom fields: PUT no-op + GET número vs CUID
+- **Decisão**: Tratar como bug do EduIT. Agente deve ler/escrever pelo CUID quando o PUT for corrigido. Mover para Perdido já funciona com a key atual (`PUT stageId`); 401 restante é channels/users/detalhe de conversa — não bloquear Perdido.
+- **Contexto**: #25 GET `/api/deals/25` panel vazio; GET pelo CUID mostra curso/origem da UI. PUT API não sobrescreve.
+- **Alternativas descartadas**: Pedir nova permissão só para fila Perdido (já movemos #25 e restauramos).
+- **Impacto**: Time CRM corrige persistência + join; agente não muda key por causa de Perdido.
+
+### 2026-08-24 - Sender WhatsApp permanece na Meta na fase 1
+- **Decisão**: Agente continua enviando pela Cloud API / Evolution. EduIT é CRM (etapa/nota/campos). Não duplicar POST de mensagem no EduIT. CRM deve bloquear texto livre fora da janela 24h (UI + 422 `window_closed`). Custom fields: IDs ok, PUT 200 sem persistir — correção no EduIT.
+- **Contexto**: Mesma API key lê deals/mensagens; 401 em `/api/channels`, `/api/users`, detalhe da conversa. Etapa Perdido já existe (`cmt38aydx01qbrw01sd97lahm`).
+- **Alternativas descartadas**: Mandar tudo pelo POST do EduIT agora (API ignora 24h e não tem HSM). Tratar 401 como “falta fila Perdido”.
+- **Impacto**: Time CRM corrige persistência de campos + escopos da key + gate 24h; agente só troca sender na fase 2.
+
+### 2026-08-24 - EduIT como CRM alvo; Kommo permanece até dual-write sair
+- **Decisão**: Migrar operação do agente para o CRM EduIT (`crm.eduit.com.br`). Funil por slug (Atendimento + Inscrição = IA). WhatsApp sender oficial = API do EduIT (não misturar Cloud API). Salesbot vira `POST /api/deals/{id}/actions/*` + webhook `deal.form_submitted`. Estado de inscrição/captação/pause continua no Supabase no dia 1. Spec de gaps e sprints em `docs/eduit-crm-instrucoes-completas.md`.
+- **Contexto**: Conta EduIT própria; API Bearer já lista deals, move etapa, lê mensagens e cria nota. Bloqueios: webhooks 404, custom fields não gravam, templates vazios, 401 em canais/users.
+- **Alternativas descartadas**: Continuar só no Kommo (CRM já está sendo substituído); reescrever o agente inteiro antes do contrato de API (quebra homologação no lead #25).
+- **Impacto**: Time EduIT fecha Sprint A (API/webhooks/templates/campos); agente só troca cliente depois do aceite no deal William #25.
+
 ### 2026-08-11 - Log per-lead "buffer vazio" do scheduler gated por KOMMO_SCHEDULER_VERBOSE
 - **Decisão**: Em `server/agentScheduler.js`, o `console.log` `[scheduler] buffer vazio session=... lead=...` só roda quando `showDetail` for true (`KOMMO_AGENT_TEST_LEAD_IDS` na whitelist OU `KOMMO_SCHEDULER_VERBOSE=true`). Sem isso, produção só emite o resumo agregado do tick (`stats.skippedNoMessages`). Diag detalhado do poll (URLs/dispatcher/events) continua atrás do mesmo gate.
 - **Contexto**: Flood de logs no EasyPanel dava aparência de "diversas solicitações" simultâneas, levando a desligar o serviço por engano — na verdade eram só ticks ociosos do scheduler (buffer vazio), não crash nem sobrecarga real.
 - **Alternativas descartadas**: Amostrar 1 a cada N leads (mais complexo, esconde qual lead específico ficou sem inbound quando precisar debugar); silenciar também o resumo do tick (perderia observabilidade de que o scheduler está rodando).
 - **Impacto**: Produção com `KOMMO_SCHEDULER_VERBOSE` ausente/false (default) para de logar 1 linha por lead ocioso a cada tick; debug de whitelist/teste mantém o detalhe de sempre.
 
+### 2026-07-23 - Duração no PDF de grade curricular por tipo de curso (fix Saneamento Ambiental)
+- **Decisão**: Em `pdfDefaultsForRow` (`libShared/gradeCurricularPdfService.js`), usar `row.duracao` do JSON quando presente; senão, tecnólogo (via `grauFromCourseName`, prefixo de código `TS` ou nome/código contendo "tecnolog") default `'4 semestres'`; bacharelado/licenciatura default `'8 semestres'`; pós continua `'6 meses'`. Marcado `"duracao": "4 semestres"` nos registros `TSAMB_EAD` e `TSAMB_SEMI` em `data/grade-curricular-sumare.json`.
+- **Contexto**: Lead #24135605 recebeu PDF de grade de Saneamento Ambiental (tecnólogo) com "8 semestres" — incorreto, curso tem 4 semestres.
+- **Alternativas descartadas**: Hardcode só para TSAMB no JS sem campo no JSON (pior para manutenção, esconde a exceção); mudar duração default de todos os cursos de Gestão/tecnólogo para 4 semestres sem confirmar caso a caso (risco de errar outros cursos não auditados).
+- **Impacto**: PDF de Saneamento Ambiental (EAD/Semi) sai com duração correta; outros tecnólogos passam a ter default 4 semestres a menos que o JSON tenha `duracao` explícita.
+
 ### 2026-07-16 - Nota de auditoria quando atendimento não conclui + curso/polo pós-form
 - **Decisão**: Se pós-form/captação não concluir (falha terminal, redirect faculdade, lead não encontrado, polo/curso ausente), gravar nota Kommo via `createLeadAuditNote` com code/motivo/detalhe/EX. Form sem curso → pedir curso (não redirect). Polo ausente pós-form → pedir polo (não redirect).
 - **Contexto**: Leads Aline #24120625 e Thiago #24121875 receberam `buildFacultyContactRedirectReply` após Form Sumar sem `sum_Curso`.
 - **Alternativas descartadas**: Reativar salesbot consultor 49777; silenciar falhas só em log.
 - **Impacto**: Timeline Kommo explica bloqueios; lead permanece no fluxo comercial pedindo curso/polo.
+
+### 2026-07-23 - FAQ transferência externa: pergunta composta (o que fazer / quando começa / quantas matérias dispensa)
+- **Decisão**: Registrar no RAG (`grad_info` id=78648, `pos_info` id=88961, topic `transferencia_externa_como_funciona`) a resposta-base aprovada para quando o lead pergunta o que precisa fazer, quando começa a estudar e quantas matérias dispensa numa transferência externa. Reforçar regra 31 (`server/ai/promptsLoader.js`) com subitem "PERGUNTA COMPOSTA": usar buscar_perguntas/buscar_conhecimento, responder no espírito da FAQ, coletar/confirmar os 3 campos e chamar `registrar_transferencia` quando completos. PROIBIDO inventar/estimar quantidade de disciplinas dispensadas antes da análise acadêmica.
+- **Contexto**: Lead perguntou de forma combinada (o quê / quando / quantas matérias, já informando "fiz até o 3º semestre") e não havia orientação explícita nem FAQ dedicada para essa combinação — risco de inventar número de disciplinas ou perder o dado de semestre já informado.
+- **Alternativas descartadas**: Responder só com texto genérico da regra 31 sem FAQ dedicada (a menção à pergunta composta ficaria diluída); prometer número aproximado de matérias dispensadas (proibido — só sai após análise de histórico/ementas).
+- **Impacto**: Agente passa a ter FAQ específica para essa combinação de perguntas em grad_info/pos_info e reforço na regra 31 para não inventar número de disciplinas, não confundir com reativação de ex-aluno/2ª graduação, e reconhecer dados já informados pelo lead.
 
 ### 2026-07-21 - Match parcial de curso: não aceitar substring dentro da palavra
 - **Decisão**: Em `sumareCaptacaoCursoStore`, match parcial exige tokens (palavra inteira), não `includes` bruto — evita "Psicopedagogia" → Pedagogia (`PED_*`).
@@ -2183,3 +2225,61 @@ Histórico das decisões estruturais do agente. Formato por entrada:
     matrícula para realizar a dispensa de disciplinas?')` passa a retornar `false` mesmo com
     "histórico escolar" explícito no texto, sem regressão nos casos de aluno matriculado/ex-aluno
     (`declaração de matrícula`, `ex-aluno ... histórico escolar` continuam `true`).
+
+### 2026-07-22 - FAQ formas de pagamento da mensalidade + fix LGPD cartão/PIX + separação do pagamento de matrícula
+
+- **Decisão**
+  - Modelo usado: Opus (principal, orquestração — implementação delegada ao Executor).
+  - Novo tópico FAQ `formas_pagamento_mensalidade` em `scripts/add-info-faq-sumare.mjs`, inserido
+    em `grad_info` (id=78647) e `pos_info` (id=88960): pagamento das mensalidades por boleto
+    bancário, PIX ou cartão de crédito, com opção de escolher/alterar no Portal do Aluno; corpo
+    deixa explícito que é sobre mensalidade (pós-matrícula), não sobre a taxa/link de matrícula.
+  - `libShared/inboundMessageSanitize.js` (`messageAsksPaymentInfo`): adicionado guard
+    `MATRICULA_PAYMENT_INTENT_RX` (verbo de pagamento a até 15 chars de matrícula/link
+    contrato/taxa/inscrição, sem "mensalidade" no texto → `false`, deixa o fluxo de
+    captação/inscrição responder). Extraída `messageAsksPaymentMethodOptions` (formas de
+    pagamento, boleto/PIX/cartão, Portal do Aluno) para permitir reuso e exclusão seletiva.
+  - `libShared/paymentDiscountHeuristics.js` (`messageAsksPaymentDiscount`): excluído
+    `messageAsksPaymentMethodOptions` do fluxo de desconto por pagamento antecipado — pergunta
+    sobre "formas de pagamento" não deve mais disparar a resposta canônica de desconto
+    (`server/paymentDiscountFlow.js`), e sim seguir para a FAQ institucional nova.
+  - `server/ai/agentRunner.js` (`paymentInfoHint`): hint atualizado para cobrir também "quais
+    formas de pagamento existem" (boleto/PIX/cartão + Portal do Aluno), com proibição explícita
+    de confundir com pagamento da matrícula/taxa/link de contrato.
+  - `server/ai/promptsLoader.js` (regra 24): acrescentadas 2 linhas com as formas de pagamento
+    da mensalidade e a distinção em relação à taxa/link de matrícula.
+  - `libShared/lgpdCompliance.js` (`BANK_LEAK_RX`): adicionado `INSTITUTIONAL_PAYMENT_MENTION_RX`
+    para remover da checagem de vazamento menções institucionais a boleto/PIX/cartão de
+    crédito/débito quando NÃO seguidas de referência a pessoa (do/da/dele/dela/pessoal) nem de
+    dado real (":" ou dígito) — mesmo padrão já usado para o falso positivo "Banco de Dados".
+  - `scripts/test-lgpd-guard.mjs`: asserts para os 2 critérios de aceite de
+    `messageAsksPaymentInfo` (formas de pagamento / boleto no cartão / link da matrícula) e para
+    `replyLeaksSensitiveCandidateData` com a resposta aprovada (leak=false) e vazamentos reais
+    (PIX com e-mail, conta bancária com dados → leak=true).
+
+- **Contexto**
+  - Thiago (#24137069) perguntou as formas de pagamento da mensalidade; a resposta institucional
+    aprovada ("boleto bancário, PIX e cartão de crédito... Portal do Aluno") era bloqueada pelo
+    guard LGPD (`lgpd_financial_leak`) por causar falso positivo em "cartão de crédito" e menções
+    genéricas a PIX/cartão como forma de pagamento, tratadas como se fossem dado bancário do
+    candidato.
+
+- **Alternativas descartadas**
+  - Remover `BANK_LEAK_RX` para cartão/PIX por completo: perderia a proteção contra vazamento
+    real de dado bancário do candidato (ex.: "PIX do aluno: email@gmail.com", "conta bancária do
+    aluno").
+  - Aplicar a exceção "não houver mensalidade" da `messageAsksPaymentInfo` a qualquer menção de
+    matrícula no texto: quebrava o teste existente (`vivianMsg`, que mistura pergunta de
+    pagamento no prazo com "Tem matrícula?" no mesmo texto). Restrito a proximidade
+    (<=15 caracteres) entre o verbo de pagamento e o termo de matrícula/contrato/inscrição.
+
+- **Impacto**
+  - `messageAsksPaymentInfo('formas de pagamento de mensalidades')` e
+    `messageAsksPaymentInfo('posso pagar o boleto no cartão')` → `true`;
+    `messageAsksPaymentInfo('como pago o link da matrícula')` → `false`.
+  - `replyLeaksSensitiveCandidateData` com a resposta aprovada → `leak: false`; vazamento real
+    (PIX/e-mail, conta bancária com dados) continua `leak: true`.
+  - `messageAsksPaymentDiscount` não é mais acionado por pergunta de "forma de pagamento" — evita
+    responder desconto por pagamento antecipado quando o lead só quer saber boleto/PIX/cartão.
+  - Suíte `scripts/test-inscricao-flow.mjs` (259 asserts) e `scripts/test-lgpd-compliance.mjs`
+    seguem passando sem regressão.
