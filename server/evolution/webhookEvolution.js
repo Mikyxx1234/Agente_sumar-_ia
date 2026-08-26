@@ -96,18 +96,45 @@ async function escalateSendFailureToHuman(env, { executionId, sessionId, leadId,
       statusId: SEND_FAIL_ESCALATION_STATUS_ID,
     }).catch((e) => ({ ok: false, error: e.message }))
   }
+  // EduIT: sem move de etapa — pausa persistente para o gate shouldHoldOnIaPause
+  // reter flushes futuros. Buffer permanece (humano vê a mensagem pendente).
+  let pause = { ok: true, skipped: true }
+  if (isEduitBackend(env)) {
+    const telefone = normalizeTelefone(sessionId)
+    if (!telefone) {
+      pause = { ok: false, error: 'no_telefone_from_session', sessionId }
+    } else {
+      pause = await updateDadosCliente(env, {
+        telefone,
+        fields: { atendimento_ia: 'pause' },
+      }).catch((e) => ({ ok: false, error: e.message, telefone }))
+      if (pause.ok && !pause.matched) {
+        pause = {
+          ok: false,
+          error: 'dados_cliente_row_not_found',
+          telefone,
+          updated: pause.updated ?? 0,
+        }
+      }
+    }
+  }
   // Lead saiu do funil da IA — zera o backoff para não re-escalar se voltar.
   clearSendRetryBackoff(sessionId)
   // Marca a sessão como parada para humano (hash do buffer não respondido). A
   // reativação por inbound (leadReactivation.js) deve ignorar essa sessão
   // enquanto o conteúdo do buffer não mudar — evita o loop escalar↔reativar.
   markSessionParkedForHuman(sessionId, items)
+  const escalateOk = Boolean(note.ok && move.ok && pause.ok)
   console.warn(
     `[${executionId}] ESCALADO p/ humano lead=${lid} (falhas=${failCount}) ` +
-      `note_ok=${note.ok} move_ok=${move.ok} destino=${SEND_FAIL_ESCALATION_PIPELINE_ID}/${SEND_FAIL_ESCALATION_STATUS_ID}` +
-      `${note.ok ? '' : ` note_err=${note.error}`}${move.ok ? '' : ` move_err=${move.error}`}`,
+      `note_ok=${note.ok} move_ok=${move.ok}${move.skipped ? '(skipped)' : ''} ` +
+      `pause_ok=${pause.ok}${pause.skipped ? '(skipped)' : ''} ` +
+      `destino=${SEND_FAIL_ESCALATION_PIPELINE_ID}/${SEND_FAIL_ESCALATION_STATUS_ID}` +
+      `${note.ok ? '' : ` note_err=${note.error}`}` +
+      `${move.ok ? '' : ` move_err=${move.error}`}` +
+      `${pause.ok ? '' : ` pause_err=${pause.error || 'n/a'} telefone=${pause.telefone || normalizeTelefone(sessionId) || 'n/a'}`}`,
   )
-  return { ok: note.ok && move.ok, note, move }
+  return { ok: escalateOk, note, move, pause }
 }
 import { tryClaimAgentFlush, tryReserveFlushSync, releaseFlushSync, releaseAgentFlush } from '../flushClaim.js'
 import { shouldSkipReplyCooldown, markReplyCooldown, getReplyCooldownRemainingMs } from '../replyCooldown.js'
@@ -116,7 +143,11 @@ import { fetchEvolutionMediaBase64, resolveInstanceName, describeMediaPayloadSha
 import { normalizeEvolutionInstance } from './instanceConfig.js'
 import { runAgent } from '../ai/agentRunner.js'
 import { saveConversation } from '../historyStore.js'
-import { getLeadIdByTelefone, shouldHoldOnIaPause } from '../dadosClienteStore.js'
+import {
+  getLeadIdByTelefone,
+  shouldHoldOnIaPause,
+  updateDadosCliente,
+} from '../dadosClienteStore.js'
 import { seenMessage, withSessionLock } from './concurrency.js'
 import { updateLeadPipelineStatus } from '../kommoClient.js'
 import {

@@ -7,8 +7,15 @@ import { kommoRawFetch } from './kommoRateLimiter.js'
 import { parseFormDataNoteFields } from '../libShared/inscricaoFormHeuristics.js'
 import { normalizeCpf, kommoDataNascLooksInvalid } from './sumareCaptacaoClient.js'
 import { isGarbageCursoInscricao } from '../libShared/captacaoSnapshotSanitize.js'
+import { contactPhoneDigits, getDealById, isEduitCuid } from './eduitClient.js'
 
 const KOMMO_FIELD_NOME = 304628
+
+/** Fallback CUID de campos EduIT (docs) — preferir match por name normalizado. */
+const EDUIT_FIELD_ID_FALLBACK = {
+  curso: 'cmt4cxxs6gbxsow01pf26inmn',
+  polo: 'cmt4cyv21gbyiow016u7zjhl6',
+}
 
 const FIELD_ALIASES = {
   email: ['e-mail', 'email', 'e_mail', 'sum_email', 'sum e-mail', 'sum e mail'],
@@ -85,6 +92,107 @@ function pickByAliases(fields, fieldsByName, aliases) {
   return ''
 }
 
+function normalizeEduitFieldKey(name) {
+  return String(name || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[\s_-]+/g, '')
+}
+
+/**
+ * Lê valor de dealPanelFields EduIT. Prefere names normalizados; fieldIds só como fallback.
+ * Não inventa valor — vazio/null permanece ''.
+ */
+function pickEduitPanelValue(panelFields, { names = [], fieldIds = [] } = {}) {
+  if (!Array.isArray(panelFields) || panelFields.length === 0) return ''
+  const byName = new Map()
+  for (const f of panelFields) {
+    const key = normalizeEduitFieldKey(f?.name)
+    if (key && !byName.has(key)) byName.set(key, f)
+  }
+  for (const name of names) {
+    const f = byName.get(normalizeEduitFieldKey(name))
+    if (!f) continue
+    const v = f.value
+    if (v != null && String(v).trim()) return String(v).trim()
+  }
+  for (const id of fieldIds) {
+    if (!id) continue
+    const want = String(id).trim()
+    const f = panelFields.find(
+      (x) => String(x?.fieldId || x?.field_id || '').trim() === want,
+    )
+    if (!f) continue
+    const v = f.value
+    if (v != null && String(v).trim()) return String(v).trim()
+  }
+  return ''
+}
+
+function snapshotFromEduitDeal(deal) {
+  const panel = Array.isArray(deal?.dealPanelFields) ? deal.dealPanelFields : []
+  const nomePanel = pickEduitPanelValue(panel, { names: ['nome', 'sum_nome', 'nomecompleto'] })
+  const title = String(deal?.title || deal?.name || '').trim()
+  const snapshot = {
+    nome: !isCampoAusente(nomePanel) ? nomePanel : title,
+    email: pickEduitPanelValue(panel, { names: ['email', 'e-mail', 'e_mail'] }),
+    cpf: pickEduitPanelValue(panel, { names: ['cpf'] }),
+    curso_inscricao: pickEduitPanelValue(panel, {
+      names: ['curso', 'curso_inscricao', 'cursoinscricao'],
+      fieldIds: [EDUIT_FIELD_ID_FALLBACK.curso],
+    }),
+    tipo_inscricao: pickEduitPanelValue(panel, {
+      names: ['tipo_inscricao', 'tipoinscricao', 'tipo'],
+    }),
+    polo_inscricao: pickEduitPanelValue(panel, {
+      names: ['polo', 'polo_inscricao', 'poloinscricao'],
+      fieldIds: [EDUIT_FIELD_ID_FALLBACK.polo],
+    }),
+    data_nasc: pickEduitPanelValue(panel, {
+      names: ['dtnascimento', 'data_nasc', 'datanascimento', 'nascimento'],
+    }),
+    sexo: pickEduitPanelValue(panel, { names: ['sexo', 'genero', 'gênero'] }),
+    unidade: pickEduitPanelValue(panel, { names: ['unidade', 'campus'] }),
+    turno: pickEduitPanelValue(panel, { names: ['turno'] }),
+    modalidade: pickEduitPanelValue(panel, { names: ['modalidade'] }),
+    status_inscricao: pickEduitPanelValue(panel, {
+      names: ['status_inscricao', 'statusinscricao', 'status'],
+    }),
+    origem: pickEduitPanelValue(panel, { names: ['origem'] }),
+    responsible_user_id: Number(deal?.ownerId || deal?.responsible_user_id) || 0,
+    status_id: Number(deal?.status_id) || 0,
+    pipeline_id: Number(deal?.pipeline_id) || 0,
+  }
+  if (isGarbageCursoInscricao(snapshot.curso_inscricao)) {
+    snapshot.curso_inscricao = ''
+  }
+  return snapshot
+}
+
+async function fetchEduitLeadFormSnapshot(env, dealId) {
+  const got = await getDealById(env, dealId)
+  if (!got.ok || !got.deal) {
+    return {
+      ok: false,
+      error: got.error || 'deal_nao_encontrado',
+      code: got.code || undefined,
+    }
+  }
+  const deal = got.deal
+  const snapshot = snapshotFromEduitDeal(deal)
+  const contact = deal?.contact || deal?.contacts?.[0] || null
+  const phones = contact ? contactPhoneDigits(contact) : []
+  const lead = {
+    ...deal,
+    id: deal.id || dealId,
+    name: deal.title || deal.name || snapshot.nome || '',
+    ...(phones[0] ? { phone: phones[0] } : {}),
+  }
+  return { ok: true, lead, snapshot }
+}
+
 async function kommoGetLead(env, leadId) {
   const base = (env.KOMMO_BASE_URL || '').replace(/\/$/, '')
   const token = env.KOMMO_ACCESS_TOKEN || ''
@@ -101,9 +209,14 @@ async function kommoGetLead(env, leadId) {
 }
 
 /**
- * @returns {Promise<{ ok: boolean, lead?: object, fieldsByName?: Map, error?: string }>}
+ * @returns {Promise<{ ok: boolean, lead?: object, snapshot?: object, fieldsByName?: Map, error?: string }>}
  */
 export async function fetchLeadFormSnapshot(env, leadId) {
+  const rawId = String(leadId ?? '').trim()
+  if (isEduitCuid(rawId)) {
+    return fetchEduitLeadFormSnapshot(env, rawId)
+  }
+
   const id = Number(leadId)
   if (!Number.isFinite(id) || id <= 0) {
     return { ok: false, error: 'lead_id_invalido' }

@@ -103,7 +103,7 @@ export async function tryHandleMatriculaAceitePagamentoFlow(env, input) {
 
   const row = await getClienteRow(env, telefone)
   const status = row?.[FORM_STATUS_FIELD] ?? null
-  const contractUrl = String(row?.captacao_contrato_link || '').trim()
+  let contractUrl = String(row?.captacao_contrato_link || '').trim()
   const candidatoId = String(row?.captacao_candidato_id || '').trim()
 
   if (status === INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO) {
