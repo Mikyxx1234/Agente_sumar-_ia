@@ -23,6 +23,7 @@ import {
   dealToAgentLead,
   assertLeadInAgentFunnel,
   leadMatchesAgentFunnel,
+  persistEduitIds,
 } from '../server/crmAdapter.js'
 import {
   AGENT_FUNNEL_PIPELINE_ID,
@@ -150,6 +151,11 @@ expect(
 {
   const r = await assertLeadInAgentFunnel({ CRM_BACKEND: 'eduit' }, { skip: true })
   expect('assert skip eduit', r.ok === true)
+}
+
+{
+  const miss = await persistEduitIds({}, '5511999999999', {})
+  expect('persistEduitIds MISSING_IDS', miss.ok === false && miss.code === 'MISSING_IDS')
 }
 
 // sendText / outbound path — mock fetch

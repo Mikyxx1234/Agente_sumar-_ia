@@ -36,7 +36,7 @@ import {
 } from './eduitClient.js'
 import {
   fetchDadosClienteByTelefone,
-  updateDadosCliente,
+  ensureDadosClienteRow,
   isAtendimentoIaPaused,
 } from './dadosClienteStore.js'
 
@@ -232,14 +232,17 @@ export function leadMatchesAgentFunnel(lead, context = {}) {
 
 /**
  * Persiste CUIDs EduIT + id_lead=deal CUID em dados_cliente_sum.
+ * Cria a linha se o telefone ainda não existir (ensureDadosClienteRow).
  */
 export async function persistEduitIds(env, telefone, { dealId, contactId, conversationId } = {}) {
   const fields = {}
+  let idLead
   if (dealId) {
     const d = String(dealId).trim()
     if (isEduitCuid(d)) {
       fields.eduit_deal_id = d
       fields.id_lead = d
+      idLead = d
     }
   }
   if (contactId) {
@@ -253,7 +256,24 @@ export async function persistEduitIds(env, telefone, { dealId, contactId, conver
   if (!Object.keys(fields).length) {
     return { ok: false, code: 'MISSING_IDS', error: 'nenhum CUID válido para persistir' }
   }
-  return updateDadosCliente(env, { telefone, fields })
+  const result = await ensureDadosClienteRow(env, {
+    telefone,
+    ...(idLead ? { idLead } : {}),
+    fields,
+  })
+  if (
+    result?.ok === true &&
+    result.created !== true &&
+    result.matched !== true &&
+    !(Number(result.updated) > 0)
+  ) {
+    return {
+      ok: false,
+      code: 'DADOS_CLIENTE_NOT_PERSISTED',
+      error: 'nem insert nem update afetou linha em dados_cliente_sum',
+    }
+  }
+  return result
 }
 
 /**
