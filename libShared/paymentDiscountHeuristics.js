@@ -2,12 +2,15 @@
  * Desconto por pagamento antecipado da mensalidade (70% / 50% / 20% conforme o dia).
  */
 
-import { messageAsksPaymentInfo } from './inboundMessageSanitize.js'
+import { messageAsksPaymentInfo, messageAsksPaymentMethodOptions } from './inboundMessageSanitize.js'
 import { messageAsksPriceUntilCourseEndInText } from './priceDurationHeuristics.js'
 
 /** Lead pergunta sobre desconto na mensalidade / pagamento antecipado. */
 export function messageAsksPaymentDiscount(text) {
   if (!messageAsksPaymentInfo(text)) return false
+  // "quais são as formas de pagamento" (boleto/PIX/cartão) é FAQ institucional própria —
+  // não é pergunta de desconto por pagamento antecipado.
+  if (messageAsksPaymentMethodOptions(text)) return false
   // "desconto até o fim do curso" / reajuste — fluxo dedicado (priceDurationFlow).
   if (messageAsksPriceUntilCourseEndInText(text)) return false
   return true

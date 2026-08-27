@@ -6,6 +6,8 @@
  *   - ouvidoria_sumare    : link e contato da Ouvidoria institucional
  *   - documentos_transferencia_dispensa: quando/como entregar histórico/documentos
  *     para dispensa/aproveitamento de disciplinas (transferência externa)
+ *   - transferencia_externa_como_funciona: resposta-base para "o que preciso fazer
+ *     para transferir / quando começo a estudar / quantas matérias dispenso"
  *
  * Aditivo, reversível e idempotente (metadata.topic). Embedding text-embedding-3-small (1536).
  *
@@ -67,6 +69,18 @@ const TOPICS = [
       ].join('\n'),
   },
   {
+    topic: 'formas_pagamento_mensalidade',
+    content: (nivel) =>
+      [
+        `assunto: formas de pagamento das MENSALIDADES do curso — boleto, PIX e cartão de crédito; alteração no Portal do Aluno (${nivel})`,
+        'palavras-chave: formas de pagamento, formas de pagamento de mensalidades, como pago meu boleto, posso pagar o boleto no cartão, pagar mensalidade no cartão, boleto ou cartão, PIX mensalidade, como pagar mensalidade, portal do aluno forma de pagamento',
+        '',
+        'O pagamento das mensalidades pode ser efetuado de três formas: boleto bancário, PIX e cartão de crédito. É possível escolher e alterar a forma de pagamento no Portal do Aluno sempre que a mensalidade estiver disponível.',
+        '',
+        'Importante: esta resposta é sobre o pagamento das MENSALIDADES do curso (já matriculado/aluno) — não é sobre o pagamento da taxa/link de matrícula. O pagamento da matrícula (taxa de inscrição) segue pelo link de contrato/candidatura enviado no fluxo de matrícula, também com opções de PIX, boleto e cartão nesse link.',
+      ].join('\n'),
+  },
+  {
     topic: 'documentos_transferencia_dispensa',
     content: (nivel) =>
       [
@@ -76,6 +90,24 @@ const TOPICS = [
         'O histórico escolar e os documentos para análise de dispensa/aproveitamento de disciplinas são solicitados posteriormente, para anexar na plataforma do aluno.',
         'Depois que o aluno anexar os documentos, a equipe da Faculdade Sumaré analisa e responde se está tudo certo ou se precisa de mais informação/documento.',
         'Enquanto isso, o aluno pode aguardar a finalização da matrícula e o e-mail de primeiro acesso.',
+      ].join('\n'),
+  },
+  {
+    topic: 'transferencia_externa_como_funciona',
+    content: (nivel) =>
+      [
+        `assunto: transferência externa — o que fazer, quando começa a estudar e quantas matérias dispensa (${nivel})`,
+        'palavras-chave: transferência externa, o que preciso fazer para transferir, o que eu preciso fazer, quando começo a estudar, quantas matérias eu consigo dispensar, quantas matérias dispenso, quantas disciplinas aproveito, fiz até o 3º semestre, aproveitamento de matérias, dispensa de disciplinas, quando recebo acesso, como funciona a transferência',
+        '',
+        'O que fazer por este canal: confirmar (1) o curso de origem, (2) o último semestre concluído e (3) o curso desejado na Sumaré (EAD). Com os 3 dados, o atendimento segue para escolha do polo, formulário e pagamento da matrícula, tudo por aqui mesmo, pelo WhatsApp.',
+        '',
+        'Sobre quantas matérias são dispensadas: a quantidade exata SÓ é definida depois da análise acadêmica (histórico escolar + ementas das disciplinas). NÃO informe um número antes dessa análise. Em geral, quanto mais disciplinas o aluno concluiu com aprovação, maior a chance de aproveitamento; o que não for dispensado entra normalmente na grade nos semestres seguintes. Os documentos (histórico etc.) são pedidos depois da matrícula, para anexar na plataforma do aluno.',
+        '',
+        'Se o aluno fizer a matrícula hoje: após a confirmação do pagamento, os dados de acesso costumam chegar no e-mail cadastrado em até 24h, e a partir daí já é possível começar a estudar no AVA. O calendário e a liberação das disciplinas seguem o processo normal da matrícula.',
+        '',
+        'Peça somente o que ainda faltar (curso de origem e/ou curso desejado). Se o lead já informou o semestre concluído (ex.: "fiz até o 3º semestre"), reconheça a informação e não peça de novo.',
+        '',
+        'ATENÇÃO: NÃO inventar nem estimar quantidade de disciplinas dispensadas antes da análise acadêmica. NÃO enviar o link do formulário de transferência do site institucional. NÃO confundir esta transferência externa (aluno de outra faculdade) com reativação de ex-aluno da própria Sumaré (fluxo do site de reativação) nem com 2ª graduação — são processos diferentes.',
       ].join('\n'),
   },
 ]

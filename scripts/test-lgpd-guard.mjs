@@ -62,4 +62,24 @@ const guard = validateReplyLgpd({
 assert.equal(guard.violation, true)
 assert.equal(guard.code, 'lgpd_email_leak')
 
+// Formas de pagamento da mensalidade (boleto/PIX/cartão) — não é vazamento LGPD (Thiago #24137069).
+assert.equal(messageAsksPaymentInfo('formas de pagamento de mensalidades'), true)
+assert.equal(messageAsksPaymentInfo('posso pagar o boleto no cartão'), true)
+assert.equal(messageAsksPaymentInfo('como pago o link da matrícula'), false)
+
+const formasPagamentoReply =
+  'O pagamento das mensalidades pode ser efetuado de três formas: boleto bancário, PIX e cartão de crédito. ' +
+  'É possível escolher e alterar a forma de pagamento no Portal do Aluno sempre que a mensalidade estiver disponível.'
+const formasPagamentoOk = replyLeaksSensitiveCandidateData(formasPagamentoReply, {
+  userMessage: 'quais são as formas de pagamento da mensalidade?',
+})
+assert.equal(formasPagamentoOk.leak, false)
+
+const pixEmailLeak = replyLeaksSensitiveCandidateData('PIX do aluno: email@gmail.com')
+assert.equal(pixEmailLeak.leak, true)
+
+const contaBancariaLeak = replyLeaksSensitiveCandidateData('A conta bancária dele: agência 001 conta 12345-6')
+assert.equal(contaBancariaLeak.leak, true)
+assert.equal(contaBancariaLeak.code, 'lgpd_financial_leak')
+
 console.log('test-lgpd-guard: OK')

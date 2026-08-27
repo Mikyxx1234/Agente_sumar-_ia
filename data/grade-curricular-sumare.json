@@ -5278,6 +5278,7 @@
     "ok": true,
     "status": 200,
     "codigo": "TSAMB_EAD",
+    "duracao": "4 semestres",
     "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
     "pages": [
       {
@@ -5337,6 +5338,7 @@
     "ok": true,
     "status": 200,
     "codigo": "TSAMB_SEMI",
+    "duracao": "4 semestres",
     "intro": "As disciplinas de cada curso da Sumaré são concebidas pelo NDE (Núcleo Docente Estruturante), que é composto por professores com notório saber, que além da DCN (Diretrizes Curriculares Nacionais) de cada curso, levam em consideração as pautas mais importantes do mercado de trabalho, ou seja, o que você aprende na Sumaré você usa na prática!",
     "pages": [
       {

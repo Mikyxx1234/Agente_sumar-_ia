@@ -142,11 +142,21 @@ export function listGradeGrausForCurso({ curso, nivel } = {}) {
   return [...graus]
 }
 
+function isTecnologoRow(row) {
+  if (grauFromCourseName(row.nome) === 'tecnologo' || grauFromCourseName(row.id) === 'tecnologo') return true
+  const codigoPrefix = String(row.codigo || '').split('_')[0]
+  if (/^TS/i.test(codigoPrefix)) return true
+  if (norm(row.codigo).includes('tecnolog') || norm(row.nome).includes('tecnolog')) return true
+  return false
+}
+
 function pdfDefaultsForRow(row) {
   const isPos = row.nivel === 'pos'
+  const duracaoRow = row.duracao != null ? String(row.duracao).trim() : ''
+  const duracao = duracaoRow || (isPos ? '6 meses' : isTecnologoRow(row) ? '4 semestres' : '8 semestres')
   return {
     titulacao: isPos ? 'Pós-Graduação (lato sensu)' : 'Graduação',
-    duracao: isPos ? '6 meses' : '8 semestres',
+    duracao,
     investimento: '',
     url: row.url || (isPos ? 'https://mg.sumare.edu.br' : 'https://sumare.edu.br'),
   }

@@ -27,6 +27,14 @@ const ADDRESS_LEAK_RX =
 /** Dados bancários do candidato — NÃO incluir "banco" solto (falso positivo em "Banco de Dados"). */
 const BANK_LEAK_RX =
   /\b(cartão|cartao|conta bancária|conta bancaria|pix)\s*(do|da|de|:)?\s*[:\s]*.{4,}/i
+/**
+ * Menções institucionais a formas de pagamento (boleto/PIX/cartão de crédito/débito) — não é
+ * vazamento LGPD. Só é removido do texto de checagem quando NÃO seguido de referência a uma
+ * pessoa (do/da/dele/dela/pessoal) nem de dado real (":" ou dígito), casos em que a menção
+ * segue sendo tratada como vazamento real pelo BANK_LEAK_RX abaixo.
+ */
+const INSTITUTIONAL_PAYMENT_MENTION_RX =
+  /\b(boleto\s+banc[aá]rio|boleto|pix|cart[aã]o\s+de\s+cr[eé]dito|cart[aã]o\s+de\s+d[eé]bito|cart[aã]o)\b(?!\s*[:])(?!\s*\d)(?!\s+(do|da|de|dele|dela|pessoal)\b)/gi
 /** Agência bancária do titular — não confundir com "agência de publicidade/marketing". */
 const AGENCIA_BANCARIA_LEAK_RX =
   /\bag[eê]ncia\s+banc[aá]ria\s*(do|da|de|:)?\s*[:\s]*.{2,}/i
@@ -97,7 +105,9 @@ export function replyLeaksSensitiveCandidateData(reply, { userMessage = '' } = {
   if (ADDRESS_LEAK_RX.test(text) && !replyContainsInstitutionalLocationInfo(text)) {
     return { leak: true, code: 'lgpd_address_leak' }
   }
-  const textForBankCheck = text.replace(CURSO_BANCO_DE_DADOS_RX, 'curso tecnologo dados')
+  const textForBankCheck = text
+    .replace(CURSO_BANCO_DE_DADOS_RX, 'curso tecnologo dados')
+    .replace(INSTITUTIONAL_PAYMENT_MENTION_RX, 'forma de pagamento')
   if (BANK_LEAK_RX.test(textForBankCheck) || BANK_INSTITUTION_LEAK_RX.test(textForBankCheck)) {
     return { leak: true, code: 'lgpd_financial_leak' }
   }

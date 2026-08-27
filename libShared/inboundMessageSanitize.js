@@ -180,15 +180,43 @@ export function messageAsksCoursePrice(text) {
 }
 
 /**
+ * Pergunta claramente sobre PAGAR a MATRÍCULA/inscrição (taxa, link do contrato,
+ * comprovante) — o verbo/substantivo de pagamento aparece próximo (<=15 chars) de
+ * matrícula/contrato/inscrição. NÃO é dúvida sobre forma de pagamento de mensalidade.
+ * Exige ausência de "mensalidade(s)" no texto para não bloquear pergunta mista
+ * (ex.: "todas se eu pagar no prazo... tem matrícula?" continua sendo pagamento de mensalidade).
+ */
+const MATRICULA_PAYMENT_INTENT_RX =
+  /\bpag(o|ar|amento)\b[\s\S]{0,15}\b(matr[ií]cula|link\s+(do\s+)?contrato|taxa\s+de\s+matr[ií]cula|inscri[cç][aã]o)\b|\b(matr[ií]cula|link\s+(do\s+)?contrato|taxa\s+de\s+matr[ií]cula)\b[\s\S]{0,15}\bpag(o|ar|amento)\b|\bcomprovante\s+de\s+pagamento\b|\bpaguei\s+(a\s+)?matr[ií]cula\b/i
+
+/**
+ * Lead pergunta QUAIS SÃO as formas de pagamento da mensalidade (boleto/PIX/cartão) —
+ * diferente de pergunta sobre desconto/data de vencimento. Resposta é a FAQ institucional
+ * `formas_pagamento_mensalidade`, não o plano de pagamento antecipado.
+ */
+const PAYMENT_METHOD_OPTIONS_RX =
+  /\b(formas?\s+de\s+pagamento|boleto\s+(ou|e)\s+cart[aã]o|pagar\s+(o\s+)?boleto\s+no\s+cart[aã]o|pagar\s+(a\s+)?mensalidade\s+no\s+cart[aã]o|portal\s+do\s+aluno.{0,30}(forma|pagamento)|pix\s+(da\s+|na\s+)?mensalidade)\b/i
+
+export function messageAsksPaymentMethodOptions(text) {
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (!t || t.length < 4) return false
+  return PAYMENT_METHOD_OPTIONS_RX.test(t)
+}
+
+/**
  * Mensagem do lead pergunta sobre FORMA/DATAS de pagamento da mensalidade
- * (quando pagar, dia de vencimento, como pagar, desconto por pagamento antecipado).
- * Deve ser respondida com o plano de pagamento da base — nunca encaminhar a consultor só por isso.
+ * (quando pagar, dia de vencimento, como pagar, desconto por pagamento antecipado,
+ * quais são as formas de pagamento aceitas — boleto/PIX/cartão).
+ * Deve ser respondida com o plano de pagamento/formas de pagamento da base — nunca
+ * encaminhar a consultor só por isso.
  */
 export function messageAsksPaymentInfo(text) {
   const t = normalizeMessageForScope(text).toLowerCase()
   if (!t || t.length < 4) return false
+  if (MATRICULA_PAYMENT_INTENT_RX.test(t) && !/\bmensalidades?\b/i.test(t)) return false
+  if (messageAsksPaymentMethodOptions(text)) return true
   if (
-    /\b(datas?\s+(de\s+|para\s+|pra\s+)?pagamento|forma\s+de\s+pagamento|como\s+(eu\s+)?pago|como\s+pagar|quando\s+(eu\s+)?(pago|pagar|vence)|quais?\s+dias?\s+(posso\s+)?pagar|dias?\s+(de\s+|para\s+|pra\s+)?(pagar|pagamento|vencimento)|vencimento|venc\w*|pagamento\s+antecipado|pagar\s+antecipad|desconto\s+(por\s+|no\s+)?pagamento|pag(ar|amento)\s+no\s+prazo|pagar\s+no\s+prazo|no\s+primeiro\s+dia|1\s*[°ºoª]?\s*dia\s+do\s+m[eê]s|todas\s+se\s+eu\s+pag)\b/i.test(
+    /\b(datas?\s+(de\s+|para\s+|pra\s+)?pagamento|como\s+(eu\s+)?pago|como\s+pagar|quando\s+(eu\s+)?(pago|pagar|vence)|quais?\s+dias?\s+(posso\s+)?pagar|dias?\s+(de\s+|para\s+|pra\s+)?(pagar|pagamento|vencimento)|vencimento|venc\w*|pagamento\s+antecipado|pagar\s+antecipad|desconto\s+(por\s+|no\s+)?pagamento|pag(ar|amento)\s+no\s+prazo|pagar\s+no\s+prazo|no\s+primeiro\s+dia|1\s*[°ºoª]?\s*dia\s+do\s+m[eê]s|todas\s+se\s+eu\s+pag)\b/i.test(
       t,
     )
   ) {
