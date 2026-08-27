@@ -307,7 +307,14 @@ export async function tryHandlePoloPreFormFlow(env, input) {
   })
   const sendOk = Boolean(delivery.result?.ok)
   const ack = buildPoloEscolhidoAckReply(polo, { pushName })
-  const formReply = sendOk ? ack : buildInscricaoFormSentReply({ pushName })
+  // Falha no envio: mensagem verdadeira (polo ok, form não enviado) + ok externo true
+  // para o flush entregar a reply; steps/toolCalls e status pré-form preservam a falha.
+  const nameBit = pushName ? `, ${String(pushName).split(/\s+/)[0]}` : ''
+  const formDeliveryFailedReply =
+    `Perfeito${nameBit}! Polo *${polo.nome}* registrado. ` +
+    `Neste momento não foi possível abrir o formulário por aqui. ` +
+    `Para continuar, fale conosco pelo canal oficial: https://sumare.edu.br/atendimento/`
+  const formReply = sendOk ? ack : formDeliveryFailedReply
 
   console.log(
     `[inscricaoPolo] pre_form polo=${polo.id} lead=${idLead ?? 'n/a'} form_ok=${sendOk} delivery=${delivery.delivery}`,
@@ -319,7 +326,7 @@ export async function tryHandlePoloPreFormFlow(env, input) {
       executionId,
       model,
       t0,
-      ok: sendOk,
+      ok: true,
       reply: formReply,
       steps: [
         { type: 'polo_pre_form_escolhido', polo: polo.id, unidade, ok: true },

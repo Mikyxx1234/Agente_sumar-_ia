@@ -426,13 +426,11 @@ export async function runSchedulerTick(env) {
       let contactIdForPoll = null
 
       if (isEduitBackend(env)) {
-        // Meta inbound: telefone vem do buffer; resolve via Supabase (id_lead/eduit_deal_id).
         const row = await fetchDadosClienteByLeadId(env, crmLeadId)
-        phone = normalizeTelefone(row?.telefone || '')
+        phone = normalizeTelefone(row?.telefone || lead?.phone || lead?._raw?.contact?.phone || '')
         if (!phone) {
           console.warn(
-            `[scheduler] deal=${crmLeadId} ignorado: sem telefone em dados_cliente_sum (eduit_deal_id/id_lead). ` +
-              'Rode o backfill ou aguarde inbound Meta que persiste o vínculo.',
+            `[scheduler] deal=${crmLeadId} ignorado: sem telefone em dados_cliente_sum nem no contato EduIT.`,
           )
           stats.skippedNoPhone = (stats.skippedNoPhone || 0) + 1
           return

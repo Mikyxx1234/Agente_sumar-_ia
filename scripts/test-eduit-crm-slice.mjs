@@ -14,6 +14,9 @@ import {
   eduitAgentStageIds,
   getDealById,
   contactPhoneDigits,
+  listConversationMessages,
+  normalizeEduitConversationMessage,
+  parseEduitMessageAt,
 } from '../server/eduitClient.js'
 import {
   getCrmBackend,
@@ -24,7 +27,13 @@ import {
   assertLeadInAgentFunnel,
   leadMatchesAgentFunnel,
   persistEduitIds,
+  loadCrmRecentMessages,
 } from '../server/crmAdapter.js'
+import {
+  mergeHistoriesDedupe,
+  trimHistoryTail,
+  mergeCrmAndSupabaseHistories,
+} from '../libShared/historyMerge.js'
 import {
   AGENT_FUNNEL_PIPELINE_ID,
   leadMatchesAgentFunnel as kommoLeadMatches,
@@ -381,6 +390,544 @@ expect('extractMessageId {}', extractMessageId({}) == null)
     { delayMs: 0, maxRetries: 5, label: 'test' },
   )
   expect('withThrottleRetry recovers 429', retried.ok === true && calls === 3)
+}
+
+// --- listConversationMessages: filtros / ordem / at em ms ---
+{
+  expect(
+    'parseEduitMessageAt ISO → ms',
+    parseEduitMessageAt('2026-08-27T12:00:00.000Z') === Date.parse('2026-08-27T12:00:00.000Z'),
+  )
+  expect('parseEduitMessageAt epoch ms', parseEduitMessageAt(1_700_000_000_000) === 1_700_000_000_000)
+  expect('parseEduitMessageAt epoch s', parseEduitMessageAt(1_700_000_000) === 1_700_000_000_000)
+
+  expect(
+    'normalize filtra private',
+    normalizeEduitConversationMessage({
+      id: 'cmtmsgpriv00000000000001',
+      direction: 'in',
+      content: 'segredo',
+      isPrivate: true,
+      createdAt: '2026-08-27T10:00:00Z',
+    }) == null,
+  )
+  expect(
+    'normalize filtra note',
+    normalizeEduitConversationMessage({
+      id: 'cmtmsgnote00000000000001',
+      direction: 'out',
+      type: 'note',
+      content: 'nota interna',
+      createdAt: '2026-08-27T10:00:00Z',
+    }) == null,
+  )
+  expect(
+    'normalize filtra sem role',
+    normalizeEduitConversationMessage({
+      id: 'cmtmsgnorole000000000001',
+      content: 'texto',
+      createdAt: '2026-08-27T10:00:00Z',
+    }) == null,
+  )
+  expect(
+    'normalize filtra content vazio',
+    normalizeEduitConversationMessage({
+      id: 'cmtmsgempty0000000000001',
+      direction: 'in',
+      content: '   ',
+      createdAt: '2026-08-27T10:00:00Z',
+    }) == null,
+  )
+  const normIn = normalizeEduitConversationMessage({
+    id: 'cmtmsgin0000000000000001',
+    direction: 'inbound',
+    content: 'oi',
+    createdAt: '2026-08-27T10:00:00.000Z',
+    seq: 2,
+  })
+  expect('normalize inbound → user', normIn?.role === 'user' && normIn.source === 'eduit')
+  expect(
+    'normalize at é number ms',
+    typeof normIn?.at === 'number' && normIn.at === Date.parse('2026-08-27T10:00:00.000Z'),
+  )
+  expect(
+    'normalize outbound → assistant',
+    normalizeEduitConversationMessage({
+      id: 'cmtmsgout000000000000001',
+      direction: 'out',
+      content: 'olá',
+      createdAt: '2026-08-27T10:01:00Z',
+    })?.role === 'assistant',
+  )
+
+  const prevFetch = globalThis.fetch
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    text: async () =>
+      JSON.stringify({
+        messages: [
+          {
+            id: 'cmtmsgb00000000000000002',
+            direction: 'out',
+            content: 'segunda',
+            createdAt: '2026-08-27T10:02:00.000Z',
+            seq: 2,
+          },
+          {
+            id: 'cmtmsga00000000000000001',
+            direction: 'in',
+            content: 'primeira',
+            createdAt: '2026-08-27T10:01:00.000Z',
+            seq: 1,
+          },
+          {
+            id: 'cmtmsgnote00000000000003',
+            direction: 'out',
+            type: 'note',
+            content: 'interna',
+            createdAt: '2026-08-27T10:03:00.000Z',
+          },
+          {
+            id: 'cmtmsgc00000000000000003',
+            direction: 'in',
+            content: 'terceira',
+            createdAt: '2026-08-27T10:00:00.000Z',
+            seq: 0,
+          },
+        ],
+      }),
+  })
+  try {
+    const listed = await listConversationMessages(
+      { EDUIT_BASE_URL: 'https://eduit.test', EDUIT_API_KEY: 'k' },
+      'cmtconvhist0000000000001',
+      { limit: 30 },
+    )
+    expect('listConversationMessages ok', listed.ok === true)
+    expect('listConversationMessages filtra note', listed.messages.length === 3)
+    expect(
+      'listConversationMessages ordem crescente',
+      listed.messages.map((m) => m.content).join('|') === 'terceira|primeira|segunda',
+    )
+    expect(
+      'listConversationMessages at number',
+      listed.messages.every((m) => typeof m.at === 'number'),
+    )
+  } finally {
+    globalThis.fetch = prevFetch
+  }
+
+  const badId = await listConversationMessages(
+    { EDUIT_BASE_URL: 'https://eduit.test', EDUIT_API_KEY: 'k' },
+    '25',
+  )
+  expect('listConversationMessages rejeita numero', badId.ok === false && badId.code === 'MISSING_CONVERSATION_ID')
+}
+
+// --- loadCrmRecentMessages ---
+{
+  const kommo = await loadCrmRecentMessages({ CRM_BACKEND: 'kommo' }, { telefone: '5511999999999' })
+  expect('loadCrm kommo skip', kommo.ok === true && kommo.source === 'kommo_skip' && kommo.messages.length === 0)
+
+  const prevFetch = globalThis.fetch
+  const nowIso = new Date().toISOString()
+  const oldIso = new Date(Date.now() - 100 * 3600 * 1000).toISOString()
+  globalThis.fetch = async (url) => {
+    const u = String(url)
+    if (/\/messages/.test(u)) {
+      return {
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify([
+            { id: 'cmtmsgold000000000000001', direction: 'in', content: 'velha', createdAt: oldIso },
+            { id: 'cmtmsgnew000000000000001', direction: 'in', content: 'nova', createdAt: nowIso },
+          ]),
+      }
+    }
+    return { ok: true, status: 200, text: async () => JSON.stringify({}) }
+  }
+  try {
+    const env = {
+      CRM_BACKEND: 'eduit',
+      EDUIT_BASE_URL: 'https://eduit.test',
+      EDUIT_API_KEY: 'k',
+      AGENT_EDUIT_HISTORY_MAX_AGE_HOURS: '72',
+    }
+    const loaded = await loadCrmRecentMessages(env, {
+      telefone: '5511999999999',
+      conversationId: 'cmtconvload0000000000001',
+    })
+    expect('loadCrm eduit ok', loaded.ok === true && loaded.source === 'eduit')
+    expect('loadCrm conversationId string cuid', loaded.conversationId === 'cmtconvload0000000000001')
+    expect('loadCrm filtra idade 72h', loaded.messages.length === 1 && loaded.messages[0].content === 'nova')
+  } finally {
+    globalThis.fetch = prevFetch
+  }
+
+  const missing = await loadCrmRecentMessages(
+    { CRM_BACKEND: 'eduit', EDUIT_BASE_URL: 'https://eduit.test', EDUIT_API_KEY: 'k' },
+    { telefone: '' },
+  )
+  expect(
+    'loadCrm sem conversa nao lanca',
+    missing.ok === true && missing.messages.length === 0 && missing.conversationId == null,
+  )
+}
+
+// --- mergeCrmAndSupabaseHistories ---
+{
+  const n8n = [
+    { role: 'user', content: 'oi n8n' },
+    { role: 'assistant', content: 'ola n8n' },
+  ]
+  const chat = [
+    { role: 'user', content: 'oi chat', at: Date.parse('2026-08-20T10:00:00Z') },
+    { role: 'assistant', content: 'ola chat', at: Date.parse('2026-08-20T10:01:00Z') },
+  ]
+  const noCrm = mergeCrmAndSupabaseHistories({ crmMsgs: [], chatMsgs: chat, n8nMsgs: n8n })
+  expect('merge sem CRM exclusive false', noCrm.exclusiveEduit === false)
+  expect(
+    'merge sem CRM = n8n+chat dedupe',
+    noCrm.messages.map((m) => m.content).join('|') ===
+      mergeHistoriesDedupe(n8n, chat).map((m) => m.content).join('|'),
+  )
+
+  const crmDense = [
+    { role: 'user', content: 'u1', at: 1 },
+    { role: 'assistant', content: 'a1', at: 2 },
+    { role: 'user', content: 'u2', at: 3 },
+    { role: 'assistant', content: 'a2', at: 4 },
+  ]
+  const exclusive = mergeCrmAndSupabaseHistories(
+    { crmMsgs: crmDense, chatMsgs: chat, n8nMsgs: n8n },
+    { minExclusiveTurns: 4, maxTail: 16 },
+  )
+  expect('merge CRM denso exclusiveEduit', exclusive.exclusiveEduit === true)
+  expect(
+    'merge CRM denso so CRM',
+    exclusive.messages.length === 4 && exclusive.messages.every((m) => !String(m.content).includes('n8n')),
+  )
+
+  const crmThin = [
+    { role: 'user', content: 'crm agora', at: Date.parse('2026-08-27T12:00:00Z') },
+    { role: 'assistant', content: 'crm resp', at: Date.parse('2026-08-27T12:01:00Z') },
+  ]
+  const chatMixed = [
+    { role: 'user', content: 'antes', at: Date.parse('2026-08-26T10:00:00Z') },
+    { role: 'user', content: 'crm agora', at: Date.parse('2026-08-27T12:00:00Z') }, // dup CRM
+    { role: 'user', content: 'depois chat', at: Date.parse('2026-08-27T13:00:00Z') },
+  ]
+  const n8nThin = [
+    { role: 'assistant', content: 'n8n sem ts' },
+    { role: 'user', content: 'crm agora' }, // perde pro CRM
+  ]
+  const thin = mergeCrmAndSupabaseHistories(
+    { crmMsgs: crmThin, chatMsgs: chatMixed, n8nMsgs: n8nThin },
+    { minExclusiveTurns: 4 },
+  )
+  expect('merge CRM thin exclusive false', thin.exclusiveEduit === false)
+  const thinContents = thin.messages.map((m) => m.content)
+  expect('merge thin mantem chat anterior', thinContents.includes('antes'))
+  expect('merge thin drop chat posterior', !thinContents.includes('depois chat'))
+  expect('merge thin dedupe CRM>chat', thinContents.filter((c) => c === 'crm agora').length === 1)
+  expect('merge thin n8n sem ts inedito', thinContents.includes('n8n sem ts'))
+  expect('merge thin CRM presente', thinContents.includes('crm resp'))
+  expect('trimHistoryTail intacto', trimHistoryTail([1, 2, 3, 4], 2).length === 2)
+}
+
+// --- courseStateDrift (troca/stale vs snapshot CRM) ---
+{
+  const {
+    normalizeCourseKey,
+    detectCourseSwitchAgainstCrmState,
+    extractCourseMention,
+  } = await import('../libShared/courseStateDrift.js')
+
+  expect(
+    'normalize Pedagogia EAD == Semipresencial',
+    normalizeCourseKey('Pedagogia EAD') === normalizeCourseKey('Pedagogia Semipresencial'),
+  )
+  expect(
+    'normalize Psicopedagogia != Pedagogia',
+    normalizeCourseKey('Psicopedagogia') !== normalizeCourseKey('Pedagogia'),
+  )
+  expect(
+    'normalize Gestão de RH alias',
+    normalizeCourseKey('Gestão de RH') === normalizeCourseKey('Recursos Humanos') ||
+      normalizeCourseKey('Gestão de RH') === 'recursos humanos',
+  )
+  expect(
+    'extract Gestão de RH',
+    /gest[aã]o de rh|recursos humanos/i.test(extractCourseMention('Quero Gestão de RH')),
+  )
+  expect('extract Psicopedagogia', extractCourseMention('Psicopedagogia') === 'Psicopedagogia')
+  expect('extract Biomedicina', extractCourseMention('curso de Biomedicina') === 'Biomedicina')
+  expect('extract Pedagogia', extractCourseMention('Pedagogia licenciatura') === 'Pedagogia')
+
+  // 1) snap Pedagogia + user+assistant Biomedicina + "Sim" => switched high
+  {
+    const r = detectCourseSwitchAgainstCrmState({
+      snapshotCurso: 'Pedagogia',
+      inscricaoStage: 'aguardando_aceite_contrato',
+      userMessage: 'Sim',
+      historyMessages: [
+        { role: 'user', content: 'Me fala mais sobre o curso de biomedicina' },
+        {
+          role: 'assistant',
+          content: 'O curso de Biomedicina na Sumaré é EAD. Deseja seguir com a inscrição?',
+        },
+      ],
+    })
+    expect('drift1 switched', r.switched === true)
+    expect('drift1 not stale', r.staleUnknown === false)
+    expect('drift1 confidence high', r.confidence === 'high')
+    expect('drift1 previous Pedagogia', normalizeCourseKey(r.previous) === 'pedagogia')
+    expect('drift1 current Biomedicina', normalizeCourseKey(r.current) === 'biomedicina')
+    expect('drift1 stage', r.stageAtSwitch === 'aguardando_aceite_contrato')
+  }
+
+  // 2) snap Pedagogia + histórico só genérico/Sim => staleUnknown
+  {
+    const r = detectCourseSwitchAgainstCrmState({
+      snapshotCurso: 'Pedagogia',
+      inscricaoStage: 'aguardando_aceite_contrato',
+      userMessage: 'Sim',
+      historyMessages: [
+        { role: 'assistant', content: 'Olá! Em que posso ajudar?' },
+        { role: 'user', content: 'Ok' },
+        { role: 'assistant', content: 'Deseja seguir com a inscrição?' },
+      ],
+    })
+    expect('drift2 staleUnknown', r.staleUnknown === true)
+    expect('drift2 not switched', r.switched === false)
+    expect('drift2 current null', r.current == null)
+    expect('drift2 previous Pedagogia', normalizeCourseKey(r.previous) === 'pedagogia')
+  }
+
+  // 3) snap ausente + Biomedicina => current, sem switch
+  {
+    const r = detectCourseSwitchAgainstCrmState({
+      snapshotCurso: null,
+      inscricaoStage: null,
+      userMessage: 'Quero Biomedicina',
+      historyMessages: [],
+    })
+    expect('drift3 not switched', r.switched === false)
+    expect('drift3 not stale', r.staleUnknown === false)
+    expect('drift3 current Biomedicina', normalizeCourseKey(r.current) === 'biomedicina')
+    expect('drift3 confidence low', r.confidence === 'low')
+  }
+
+  // 4) snap Pedagogia EAD + histórico Pedagogia Semipresencial => sem switch
+  {
+    const r = detectCourseSwitchAgainstCrmState({
+      snapshotCurso: 'Pedagogia EAD',
+      inscricaoStage: 'aguardando_form_sumar',
+      userMessage: 'quero seguir',
+      historyMessages: [
+        { role: 'user', content: 'Pedagogia Semipresencial' },
+        {
+          role: 'assistant',
+          content: 'Perfeito, Pedagogia Semipresencial. Posso seguir com a matrícula?',
+        },
+      ],
+    })
+    expect('drift4 not switched', r.switched === false)
+    expect('drift4 not stale', r.staleUnknown === false)
+    expect('drift4 same key', normalizeCourseKey(r.previous) === normalizeCourseKey(r.current))
+  }
+
+  // 5) Psicopedagogia vs Pedagogia => switched (não substring)
+  {
+    const r = detectCourseSwitchAgainstCrmState({
+      snapshotCurso: 'Pedagogia',
+      inscricaoStage: 'aguardando_form_sumar',
+      userMessage: 'Psicopedagogia',
+      historyMessages: [
+        { role: 'assistant', content: 'Temos pós em Psicopedagogia. Quer detalhes?' },
+      ],
+    })
+    expect('drift5 switched', r.switched === true)
+    expect('drift5 keys differ', normalizeCourseKey(r.previous) !== normalizeCourseKey(r.current))
+    expect('drift5 current Psicopedagogia', normalizeCourseKey(r.current) === 'psicopedagogia')
+  }
+
+  // 6) histórico antigo Pedagogia + diálogo atual Biomedicina => current Biomedicina
+  {
+    const r = detectCourseSwitchAgainstCrmState({
+      snapshotCurso: 'Pedagogia',
+      inscricaoStage: 'aguardando_aceite_contrato',
+      userMessage: 'Sim',
+      historyMessages: [
+        { role: 'user', content: 'Quero Pedagogia' },
+        { role: 'assistant', content: 'Pedagogia EAD, mensalidade a partir de R$ 199.' },
+        { role: 'user', content: 'Na verdade quero Biomedicina' },
+        {
+          role: 'assistant',
+          content: 'Claro! Biomedicina é EAD. Deseja seguir com a inscrição?',
+        },
+      ],
+    })
+    expect('drift6 switched', r.switched === true)
+    expect('drift6 current Biomedicina', normalizeCourseKey(r.current) === 'biomedicina')
+    expect('drift6 confidence high', r.confidence === 'high')
+  }
+}
+
+// --- agentRunner: flags histórico EduIT + drift guards (etapa 3) ---
+{
+  const {
+    resolveEduitHistoryMode,
+    isPhoneInEduitHistoryCanary,
+    shouldFetchEduitCrmHistory,
+    isEduitCourseDriftEnabled,
+    shouldBlockStaleEnrollmentActions,
+    shouldSkipRegressiveSumCurso,
+    buildCourseDriftSystemHints,
+    summarizeCourseSwitchForSnapshot,
+  } = await import('../server/ai/agentRunner.js')
+  const { detectCourseSwitchAgainstCrmState, normalizeCourseKey } = await import(
+    '../libShared/courseStateDrift.js'
+  )
+
+  // Kommo: zero EduIT
+  const kommoMode = resolveEduitHistoryMode({ CRM_BACKEND: 'kommo', AGENT_EDUIT_HISTORY_ENABLED: 'true' }, '5511999999999')
+  expect('kommo history mode loadCrm false', kommoMode.loadCrm === false)
+  expect('kommo history mode injectCrm false', kommoMode.injectCrm === false)
+  expect('kommo drift disabled', isEduitCourseDriftEnabled({ CRM_BACKEND: 'kommo' }) === false)
+
+  // Defaults EduIT: history off, drift on
+  expect(
+    'eduit history default off',
+    resolveEduitHistoryMode({ CRM_BACKEND: 'eduit' }, '5511999999999').loadCrm === false,
+  )
+  expect('eduit drift default on', isEduitCourseDriftEnabled({ CRM_BACKEND: 'eduit' }) === true)
+  expect(
+    'eduit drift kill switch',
+    isEduitCourseDriftEnabled({ CRM_BACKEND: 'eduit', AGENT_EDUIT_COURSE_DRIFT_ENABLED: 'false' }) === false,
+  )
+
+  // Canary
+  expect('canary vazio = global', isPhoneInEduitHistoryCanary({ AGENT_EDUIT_HISTORY_CANARY_PHONES: '' }, '5511888777666'))
+  expect(
+    'canary match',
+    isPhoneInEduitHistoryCanary({ AGENT_EDUIT_HISTORY_CANARY_PHONES: '5511999,888777666' }, '5511888777666'),
+  )
+  expect(
+    'canary miss',
+    !isPhoneInEduitHistoryCanary({ AGENT_EDUIT_HISTORY_CANARY_PHONES: '55119990000' }, '5511888777666'),
+  )
+  const canaryMissMode = resolveEduitHistoryMode(
+    {
+      CRM_BACKEND: 'eduit',
+      AGENT_EDUIT_HISTORY_ENABLED: 'true',
+      AGENT_EDUIT_HISTORY_CANARY_PHONES: '5511000000000',
+    },
+    '5511888777666',
+  )
+  expect('canary miss nao carrega', canaryMissMode.loadCrm === false)
+
+  // Shadow: carrega mas não injeta
+  const shadowMode = resolveEduitHistoryMode(
+    {
+      CRM_BACKEND: 'eduit',
+      AGENT_EDUIT_HISTORY_ENABLED: 'true',
+      AGENT_EDUIT_HISTORY_SHADOW: 'true',
+    },
+    '5511999999999',
+  )
+  expect('shadow loadCrm', shadowMode.loadCrm === true)
+  expect('shadow nao injeta', shadowMode.injectCrm === false)
+  expect('shadow flag', shadowMode.shadow === true)
+
+  const injectMode = resolveEduitHistoryMode(
+    { CRM_BACKEND: 'eduit', AGENT_EDUIT_HISTORY_ENABLED: 'true' },
+    '5511999999999',
+  )
+  expect('enabled injeta', injectMode.injectCrm === true)
+
+  // Pause: não busca CRM
+  expect(
+    'pause hold bloqueia CRM',
+    shouldFetchEduitCrmHistory({ pauseHold: true, mode: injectMode }) === false,
+  )
+  expect(
+    'sem pause permite CRM',
+    shouldFetchEduitCrmHistory({ pauseHold: false, mode: injectMode }) === true,
+  )
+
+  // Tier exclusive (já coberto em merge) + William replay ponta a ponta lógica
+  const williamCrm = [
+    { role: 'user', content: 'Quero algo na área da saúde', at: 1000 },
+    { role: 'assistant', content: 'Temos Biomedicina EAD. Quer detalhes?', at: 1001 },
+    { role: 'user', content: 'Sim, me fala mais de Biomedicina', at: 1002 },
+    { role: 'assistant', content: 'Biomedicina: duração e mensalidade. Deseja seguir com a inscrição?', at: 1003 },
+    { role: 'user', content: 'Sim', at: 1004 },
+  ]
+  const williamChat = [
+    { role: 'user', content: 'Quero Pedagogia', at: 100 },
+    { role: 'assistant', content: 'Pedagogia no polo Tatuapé. Formulário enviado; aguardando aceite.', at: 101 },
+  ]
+  const williamMerged = mergeCrmAndSupabaseHistories(
+    { crmMsgs: williamCrm, chatMsgs: williamChat, n8nMsgs: [] },
+    { minExclusiveTurns: 4, maxTail: 20 },
+  )
+  expect('william exclusive EduIT', williamMerged.exclusiveEduit === true)
+  expect(
+    'william prioriza Biomedicina nao Pedagogia no hist',
+    williamMerged.messages.some((m) => /biomedicina/i.test(m.content)) &&
+      !williamMerged.messages.some((m) => /pedagogia/i.test(m.content)),
+  )
+
+  const williamDrift = detectCourseSwitchAgainstCrmState({
+    historyMessages: williamMerged.messages.slice(0, -1), // sem o Sim final (vai em userMessage)
+    snapshotCurso: 'Pedagogia',
+    inscricaoStage: 'aguardando_aceite_contrato',
+    userMessage: 'Sim',
+  })
+  expect('william switched', williamDrift.switched === true)
+  expect('william current Biomedicina', normalizeCourseKey(williamDrift.current) === 'biomedicina')
+  expect('william block stale', shouldBlockStaleEnrollmentActions(williamDrift) === true)
+  expect(
+    'william skip sum_curso regressivo Pedagogia',
+    shouldSkipRegressiveSumCurso(williamDrift, 'Pedagogia') === true,
+  )
+  expect(
+    'william permite sum_curso Biomedicina',
+    shouldSkipRegressiveSumCurso(williamDrift, 'Biomedicina') === false,
+  )
+
+  const williamHints = buildCourseDriftSystemHints(williamDrift)
+  expect('william suppress form hints', williamHints.suppressStaleFormHints === true)
+  expect(
+    'william drift hint obsoleto',
+    /OBSOLET|obsolet/i.test(williamHints.driftHint?.content || ''),
+  )
+  expect(
+    'william drift hint nao afirma form enviado como verdade',
+    /PROIBIDO afirmar que formulário/i.test(williamHints.driftHint?.content || ''),
+  )
+  expect(
+    'william drift pede confirmacao/esclarecimento',
+    /confirmação explícita|esclareça/i.test(williamHints.driftHint?.content || ''),
+  )
+
+  const snap = summarizeCourseSwitchForSnapshot(williamDrift)
+  expect('snapshot courseSwitch switched', snap?.switched === true)
+  expect('snapshot previousKey pedagogia', snap?.previousKey === 'pedagogia')
+  expect('snapshot currentKey biomedicina', snap?.currentKey === 'biomedicina')
+
+  const staleHints = buildCourseDriftSystemHints({
+    switched: false,
+    staleUnknown: true,
+    previous: 'Pedagogia',
+    current: null,
+    confidence: 'medium',
+  })
+  expect('stale suppress hints', staleHints.suppressStaleFormHints === true)
+  expect('stale pede clarificacao', /clarifica/i.test(staleHints.driftHint?.content || ''))
 }
 
 console.log(`\n${stats.passed}/${stats.total} passed`)

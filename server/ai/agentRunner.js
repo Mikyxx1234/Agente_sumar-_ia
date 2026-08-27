@@ -11,7 +11,12 @@ import { getToolDefinitions, isActionTool } from './toolDefinitions.js'
 import { buildToolExecutors } from './toolExecutorsServer.js'
 import { runBuscarHistorico } from '../memoryTool.js'
 import { readChatMessages } from '../historyStore.js'
-import { mergeHistoriesDedupe, trimHistoryTail } from '../../libShared/historyMerge.js'
+import { mergeHistoriesDedupe, trimHistoryTail, mergeCrmAndSupabaseHistories } from '../../libShared/historyMerge.js'
+import {
+  detectCourseSwitchAgainstCrmState,
+  normalizeCourseKey,
+} from '../../libShared/courseStateDrift.js'
+import { isEduitBackend, loadCrmRecentMessages, normalizeCrmLeadId } from '../crmAdapter.js'
 import { fetchLeadFormSnapshot } from '../inscricaoKommoFields.js'
 import { generateExecutionId } from './executionTelemetry.js'
 import { resolveModel } from './modelRegistry.js'
@@ -140,6 +145,128 @@ function resolveHistoryLimit(env) {
   return Number.isFinite(n) && n > 0 ? Math.min(50, Math.floor(n)) : 8
 }
 
+function envFlagBool(env, key, defaultValue = false) {
+  const raw = env?.[key]
+  if (raw == null || String(raw).trim() === '') return defaultValue
+  const s = String(raw).trim().toLowerCase()
+  if (['1', 'true', 'yes', 'on'].includes(s)) return true
+  if (['0', 'false', 'no', 'off'].includes(s)) return false
+  return defaultValue
+}
+
+function phoneDigits(value) {
+  return String(value || '').replace(/\D/g, '')
+}
+
+/** Canary vazio = global; preenchido = só telefones listados (match por dígitos/sufixo). */
+export function isPhoneInEduitHistoryCanary(env, telefone) {
+  const raw = String(env?.AGENT_EDUIT_HISTORY_CANARY_PHONES || '').trim()
+  if (!raw) return true
+  const digits = phoneDigits(telefone)
+  if (!digits) return false
+  const allowed = raw
+    .split(',')
+    .map((p) => phoneDigits(p))
+    .filter(Boolean)
+  if (!allowed.length) return true
+  return allowed.some((c) => digits === c || digits.endsWith(c) || c.endsWith(digits))
+}
+
+/**
+ * Flags de histórico EduIT (somente backend eduit).
+ * Shadow: busca/loga CRM mas não injeta. Enabled+!shadow: injeta via merge.
+ */
+export function resolveEduitHistoryMode(env, telefone) {
+  if (!isEduitBackend(env)) {
+    return { loadCrm: false, injectCrm: false, shadow: false, eligible: false }
+  }
+  const enabled = envFlagBool(env, 'AGENT_EDUIT_HISTORY_ENABLED', false)
+  const shadow = envFlagBool(env, 'AGENT_EDUIT_HISTORY_SHADOW', false)
+  if (!enabled && !shadow) {
+    return { loadCrm: false, injectCrm: false, shadow: false, eligible: false }
+  }
+  if (!isPhoneInEduitHistoryCanary(env, telefone)) {
+    return { loadCrm: false, injectCrm: false, shadow: false, eligible: false }
+  }
+  return {
+    eligible: true,
+    loadCrm: true,
+    injectCrm: Boolean(enabled) && !shadow,
+    shadow: Boolean(shadow),
+  }
+}
+
+/** Pause hold nunca carrega CRM EduIT neste turno. */
+export function shouldFetchEduitCrmHistory({ pauseHold, mode } = {}) {
+  if (pauseHold) return false
+  return Boolean(mode?.loadCrm)
+}
+
+export function isEduitCourseDriftEnabled(env) {
+  if (!isEduitBackend(env)) return false
+  return envFlagBool(env, 'AGENT_EDUIT_COURSE_DRIFT_ENABLED', true)
+}
+
+export function shouldBlockStaleEnrollmentActions(courseSwitch) {
+  return Boolean(courseSwitch?.switched || courseSwitch?.staleUnknown)
+}
+
+/** Impede SUM_CURSO_UPDATE regressivo para o curso `previous` após troca. */
+export function shouldSkipRegressiveSumCurso(courseSwitch, cursoConfirmado) {
+  if (!courseSwitch?.switched || !courseSwitch?.previous) return false
+  const confirmedKey = normalizeCourseKey(cursoConfirmado)
+  const previousKey = normalizeCourseKey(courseSwitch.previous)
+  if (!confirmedKey || !previousKey) return false
+  return confirmedKey === previousKey
+}
+
+export function buildCourseDriftSystemHints(courseSwitch) {
+  if (!courseSwitch) return { driftHint: null, suppressStaleFormHints: false }
+  if (courseSwitch.switched) {
+    const prev = courseSwitch.previous || 'anterior'
+    const curr = courseSwitch.current || 'atual em discussão'
+    return {
+      suppressStaleFormHints: true,
+      driftHint: {
+        role: 'system',
+        content:
+          `TROCA DE CURSO DETECTADA: inscrição/polo/formulário/link do curso anterior (${prev}) estão OBSOLETOS. ` +
+          `Responda sobre o curso atual (${curr}). OBRIGATÓRIO: buscar_conhecimento e/ou buscar_precos do curso atual. ` +
+          'Peça confirmação explícita do lead antes de qualquer novo formulário/polo/link. ' +
+          'PROIBIDO afirmar que formulário, matrícula ou link já foram enviados/processados com base no estado antigo. ' +
+          'Se a mensagem for só "sim"/confirmação curta, esclareça o que está sendo confirmado (curso atual) antes de avançar inscrição.',
+      },
+    }
+  }
+  if (courseSwitch.staleUnknown) {
+    return {
+      suppressStaleFormHints: true,
+      driftHint: {
+        role: 'system',
+        content:
+          'ESTADO DE CURSO INCERTO: o card/CRM tem um curso, mas o histórico recente não confirma o mesmo tema. ' +
+          'PROIBIDO afirmar automaticamente que formulário/link já foram enviados. ' +
+          'Peça clarificação contextual (qual curso ou o que o "sim" confirma) antes de polo/formulário/link.',
+      },
+    }
+  }
+  return { driftHint: null, suppressStaleFormHints: false }
+}
+
+export function summarizeCourseSwitchForSnapshot(courseSwitch) {
+  if (!courseSwitch) return null
+  return {
+    switched: Boolean(courseSwitch.switched),
+    staleUnknown: Boolean(courseSwitch.staleUnknown),
+    confidence: courseSwitch.confidence || null,
+    previous: courseSwitch.previous || null,
+    current: courseSwitch.current || null,
+    previousKey: normalizeCourseKey(courseSwitch.previous) || null,
+    currentKey: normalizeCourseKey(courseSwitch.current) || null,
+    stageAtSwitch: courseSwitch.stageAtSwitch || null,
+  }
+}
+
 /**
  * Carrega histórico recente da conversa.
  *
@@ -149,17 +276,32 @@ function resolveHistoryLimit(env) {
  * existe mas não está em n8n_chat_histories" (n8n antigo, falha
  * silenciosa do appendChatMemory etc).
  *
- * Sem isso, a IA ficava sem contexto e alucinava cursos quando o lead
- * mandava só "Sim"/"Ok" — caso real visto em EX-260506-1702-057.
+ * No backend EduIT (flags/canary), opcionalmente busca CRM e faz merge
+ * priorizado (`mergeCrmAndSupabaseHistories`). Shadow só observa.
  *
- * Retorna { messages, source } pra dar visibilidade no debug.
+ * Retorna { messages, source, sourceDetail } pra logs/ctxSnapshot.
  */
 function sanitizeHistoryMessages(messages) {
   return filterHistoryMessagesForAgent(messages)
 }
 
-async function loadRecentHistoryMessages(env, telefone) {
-  if (!telefone) return { messages: [], source: 'none' }
+function supabaseHistorySource(n8nMsgs, chatMsgs, mergedLen) {
+  if (!mergedLen) return 'empty'
+  if (n8nMsgs.length && chatMsgs.length) return 'merged_n8n_chat'
+  if (n8nMsgs.length) return 'n8n_chat_histories'
+  return 'chat_messages_fallback'
+}
+
+async function loadRecentHistoryMessages(env, telefone, { pauseHold = false } = {}) {
+  const emptyDetail = {
+    supabaseSource: 'none',
+    crmLoaded: false,
+    crmInjected: false,
+    exclusiveEduit: false,
+    shadow: false,
+    counts: { n8n: 0, chat: 0, crm: 0, merged: 0 },
+  }
+  if (!telefone) return { messages: [], source: 'none', sourceDetail: emptyDetail }
   const limit = resolveHistoryLimit(env)
   const maxTail = Math.max(limit * 2, 16)
 
@@ -188,16 +330,99 @@ async function loadRecentHistoryMessages(env, telefone) {
     console.warn('[agentRunner] histórico (chat_messages fallback) indisponível:', err.message)
   }
 
-  const merged = trimHistoryTail(mergeHistoriesDedupe(n8nMsgs, chatMsgs), maxTail)
-  if (merged.length > 0) {
-    let source = 'empty'
-    if (n8nMsgs.length && chatMsgs.length) source = 'merged_n8n_chat'
-    else if (n8nMsgs.length) source = 'n8n_chat_histories'
-    else source = 'chat_messages_fallback'
-    return { messages: merged, source }
+  const supabaseMerged = trimHistoryTail(mergeHistoriesDedupe(n8nMsgs, chatMsgs), maxTail)
+  const supabaseSource = supabaseHistorySource(n8nMsgs, chatMsgs, supabaseMerged.length)
+  const mode = resolveEduitHistoryMode(env, telefone)
+  const sourceDetail = {
+    supabaseSource,
+    crmLoaded: false,
+    crmInjected: false,
+    exclusiveEduit: false,
+    shadow: Boolean(mode.shadow),
+    counts: {
+      n8n: n8nMsgs.length,
+      chat: chatMsgs.length,
+      crm: 0,
+      merged: supabaseMerged.length,
+    },
   }
 
-  return { messages: [], source: 'empty' }
+  const baseReturn = () => ({
+    messages: supabaseMerged,
+    source: supabaseSource,
+    sourceDetail,
+  })
+
+  if (!shouldFetchEduitCrmHistory({ pauseHold, mode })) {
+    return baseReturn()
+  }
+
+  const eduitLimitRaw = Number(env?.AGENT_EDUIT_HISTORY_LIMIT)
+  const eduitLimit =
+    Number.isFinite(eduitLimitRaw) && eduitLimitRaw > 0
+      ? Math.min(100, Math.floor(eduitLimitRaw))
+      : 20
+  const minExclusiveRaw = Number(env?.AGENT_EDUIT_HISTORY_MIN_EXCLUSIVE_TURNS)
+  const minExclusive =
+    Number.isFinite(minExclusiveRaw) && minExclusiveRaw > 0
+      ? Math.floor(minExclusiveRaw)
+      : 4
+
+  let crmMsgs = []
+  let crmMeta = { ok: false, source: null, code: null }
+  try {
+    const crm = await loadCrmRecentMessages(env, { telefone, limit: eduitLimit })
+    sourceDetail.crmLoaded = true
+    crmMeta = { ok: Boolean(crm?.ok), source: crm?.source || null, code: crm?.code || null }
+    sourceDetail.crmOk = crmMeta.ok
+    sourceDetail.crmSource = crmMeta.source
+    sourceDetail.crmCode = crmMeta.code
+    if (crm?.ok && Array.isArray(crm.messages)) {
+      crmMsgs = sanitizeHistoryMessages(crm.messages)
+    }
+  } catch (err) {
+    sourceDetail.crmLoaded = true
+    sourceDetail.crmOk = false
+    sourceDetail.crmError = String(err?.message || err).slice(0, 120)
+    console.warn('[agentRunner] histórico EduIT (CRM) indisponível — degradando:', err.message)
+  }
+
+  sourceDetail.counts.crm = crmMsgs.length
+  console.log(
+    `[agentRunner] EDUIT_HISTORY load ok=${crmMeta.ok} inject=${mode.injectCrm} shadow=${mode.shadow} ` +
+      `counts n8n=${n8nMsgs.length} chat=${chatMsgs.length} crm=${crmMsgs.length} exclusiveMin=${minExclusive}`,
+  )
+
+  // Shadow ou falha/vazio: não injeta CRM; mantém histórico anterior.
+  if (!mode.injectCrm || !crmMsgs.length || crmMeta.ok === false) {
+    return baseReturn()
+  }
+
+  try {
+    const mergedCrm = mergeCrmAndSupabaseHistories(
+      { crmMsgs, chatMsgs, n8nMsgs },
+      { minExclusiveTurns: minExclusive, maxTail },
+    )
+    sourceDetail.crmInjected = true
+    sourceDetail.exclusiveEduit = Boolean(mergedCrm.exclusiveEduit)
+    sourceDetail.counts = {
+      n8n: n8nMsgs.length,
+      chat: chatMsgs.length,
+      crm: crmMsgs.length,
+      merged: mergedCrm.messages.length,
+      ...(mergedCrm.counts || {}),
+    }
+    const source = mergedCrm.exclusiveEduit ? 'eduit_exclusive' : 'eduit_merged'
+    console.log(
+      `[agentRunner] EDUIT_HISTORY injected source=${source} exclusive=${sourceDetail.exclusiveEduit} ` +
+        `merged=${mergedCrm.messages.length}`,
+    )
+    return { messages: mergedCrm.messages, source, sourceDetail }
+  } catch (err) {
+    console.warn('[agentRunner] merge CRM+Supabase falhou — degradando:', err.message)
+    sourceDetail.crmInjected = false
+    return baseReturn()
+  }
 }
 
 /** "sim" após inscrição: recupera curso do Kommo se o histórico veio incompleto. */
@@ -376,29 +601,35 @@ export async function runAgent(env, input) {
   if (!userMessage) return { ok: false, error: 'Mensagem vazia', executionId, model, aiMeta: ctx.toAiMeta() }
 
   const formFlowCtx = { telefone, userMessage, historyMessages: [], executionId, model, leadId, pushName: input?.pushName, t0 }
+  const eduitHistoryMode = resolveEduitHistoryMode(env, telefone)
+  // Com injeção EduIT habilitada, adia aceite/captação até após histórico+drift
+  // (estado Supabase antigo não pode capturar "Sim" do curso novo).
+  const deferStateEarlyHandlers = Boolean(eduitHistoryMode.injectCrm)
 
   if (telefone) {
-    const inscricaoExistenteFlow = await tryHandleCaptacaoInscricaoExistenteFlow(env, formFlowCtx)
-    if (inscricaoExistenteFlow?.handled) {
-      console.log(
-        `[${executionId}] CAPTACAO_INSCRICAO_EXISTENTE status=${inscricaoExistenteFlow.result?.ctxSnapshot?.inscricaoForm ?? 'n/a'}`,
-      )
-      return {
-        ...inscricaoExistenteFlow.result,
-        historyLoaded: 0,
-        aiMeta: ctx.toAiMeta(),
+    if (!deferStateEarlyHandlers) {
+      const inscricaoExistenteFlow = await tryHandleCaptacaoInscricaoExistenteFlow(env, formFlowCtx)
+      if (inscricaoExistenteFlow?.handled) {
+        console.log(
+          `[${executionId}] CAPTACAO_INSCRICAO_EXISTENTE status=${inscricaoExistenteFlow.result?.ctxSnapshot?.inscricaoForm ?? 'n/a'}`,
+        )
+        return {
+          ...inscricaoExistenteFlow.result,
+          historyLoaded: 0,
+          aiMeta: ctx.toAiMeta(),
+        }
       }
-    }
 
-    const aceiteFlow = await tryHandleMatriculaAceitePagamentoFlow(env, formFlowCtx)
-    if (aceiteFlow?.handled) {
-      console.log(
-        `[${executionId}] MATRICULA_ACEITE_PAGAMENTO step=${aceiteFlow.result?.ctxSnapshot?.inscricaoForm ?? 'n/a'}`,
-      )
-      return {
-        ...aceiteFlow.result,
-        historyLoaded: 0,
-        aiMeta: ctx.toAiMeta(),
+      const aceiteFlow = await tryHandleMatriculaAceitePagamentoFlow(env, formFlowCtx)
+      if (aceiteFlow?.handled) {
+        console.log(
+          `[${executionId}] MATRICULA_ACEITE_PAGAMENTO step=${aceiteFlow.result?.ctxSnapshot?.inscricaoForm ?? 'n/a'}`,
+        )
+        return {
+          ...aceiteFlow.result,
+          historyLoaded: 0,
+          aiMeta: ctx.toAiMeta(),
+        }
       }
     }
 
@@ -486,8 +717,65 @@ export async function runAgent(env, input) {
   ])
   let historyMessages = historyResult.messages
   const historySource = historyResult.source
+  const historySourceDetail = historyResult.sourceDetail || null
 
-  if (telefone && leadId) {
+  let courseSwitch = null
+  let blockStaleEnrollment = false
+  let suppressStaleFormHints = false
+  let courseDriftHint = null
+
+  if (telefone && isEduitCourseDriftEnabled(env)) {
+    try {
+      let snapshotCurso = null
+      let inscricaoStageForDrift = null
+      try {
+        const driftRow = await fetchDadosClienteByTelefone(
+          env,
+          telefone,
+          'inscricao_form_status,kommo_curso,polo_inscricao_escolhido',
+        )
+        inscricaoStageForDrift = driftRow?.inscricao_form_status ?? null
+        snapshotCurso = String(driftRow?.kommo_curso || '').trim() || null
+      } catch {
+        /* stage/curso opcional */
+      }
+      const snapLeadId = normalizeCrmLeadId(input?.leadId, env) || leadId
+      if (snapLeadId) {
+        try {
+          const snapRes = await fetchLeadFormSnapshot(env, snapLeadId)
+          const snap = snapRes?.snapshot
+          const fromCard = String(
+            snap?.curso_inscricao || snap?.sum_curso || snap?.curso || '',
+          ).trim()
+          if (fromCard) snapshotCurso = fromCard
+        } catch {
+          /* card opcional */
+        }
+      }
+      courseSwitch = detectCourseSwitchAgainstCrmState({
+        historyMessages,
+        snapshotCurso,
+        inscricaoStage: inscricaoStageForDrift,
+        userMessage,
+      })
+      blockStaleEnrollment = shouldBlockStaleEnrollmentActions(courseSwitch)
+      const driftHints = buildCourseDriftSystemHints(courseSwitch)
+      suppressStaleFormHints = driftHints.suppressStaleFormHints
+      courseDriftHint = driftHints.driftHint
+      console.log(
+        `[${executionId}] COURSE_DRIFT switched=${Boolean(courseSwitch?.switched)} ` +
+          `staleUnknown=${Boolean(courseSwitch?.staleUnknown)} confidence=${courseSwitch?.confidence || 'n/a'} ` +
+          `previousKey=${normalizeCourseKey(courseSwitch?.previous) || 'n/a'} ` +
+          `currentKey=${normalizeCourseKey(courseSwitch?.current) || 'n/a'} ` +
+          `stage=${courseSwitch?.stageAtSwitch || 'n/a'} ` +
+          `exclusiveEduit=${Boolean(historySourceDetail?.exclusiveEduit)}`,
+      )
+    } catch (err) {
+      console.warn(`[${executionId}] COURSE_DRIFT erro:`, err?.message || err)
+    }
+  }
+
+  if (telefone && leadId && !blockStaleEnrollment) {
     const enriched = await enrichHistoryForShortEnrollmentConfirm(
       env,
       leadId,
@@ -510,7 +798,9 @@ export async function runAgent(env, input) {
     content: String(m.content || '').slice(0, 200),
   }))
   console.log(
-    `[${executionId}] CARREGOU_HISTORICO msgs=${historyMessages.length} source=${historySource} telefone=${telefone || 'n/a'}`,
+    `[${executionId}] CARREGOU_HISTORICO msgs=${historyMessages.length} source=${historySource} ` +
+      `crmInjected=${Boolean(historySourceDetail?.crmInjected)} exclusive=${Boolean(historySourceDetail?.exclusiveEduit)} ` +
+      `telefone=${telefone || 'n/a'}`,
   )
   console.log(
     `[${executionId}] history loaded: ${historyMessages.length} msgs from ${historySource} (telefone=${telefone || 'n/a'})`,
@@ -523,10 +813,44 @@ export async function runAgent(env, input) {
   ctx.recordHistorySnapshot?.({
     count: historyMessages.length,
     source: historySource,
+    sourceDetail: historySourceDetail,
     preview: historyPreview,
   })
 
   formFlowCtx.historyMessages = historyMessages
+  formFlowCtx.courseSwitch = courseSwitch
+  formFlowCtx.blockStaleEnrollment = blockStaleEnrollment
+
+  // Handlers adiados: só rodam se drift NÃO indicar estado antigo capturando o turno.
+  if (telefone && deferStateEarlyHandlers && !blockStaleEnrollment) {
+    const inscricaoExistenteFlow = await tryHandleCaptacaoInscricaoExistenteFlow(env, formFlowCtx)
+    if (inscricaoExistenteFlow?.handled) {
+      console.log(
+        `[${executionId}] CAPTACAO_INSCRICAO_EXISTENTE status=${inscricaoExistenteFlow.result?.ctxSnapshot?.inscricaoForm ?? 'n/a'}`,
+      )
+      return {
+        ...inscricaoExistenteFlow.result,
+        historyLoaded: historyMessages.length,
+        aiMeta: ctx.toAiMeta(),
+      }
+    }
+
+    const aceiteFlow = await tryHandleMatriculaAceitePagamentoFlow(env, formFlowCtx)
+    if (aceiteFlow?.handled) {
+      console.log(
+        `[${executionId}] MATRICULA_ACEITE_PAGAMENTO step=${aceiteFlow.result?.ctxSnapshot?.inscricaoForm ?? 'n/a'}`,
+      )
+      return {
+        ...aceiteFlow.result,
+        historyLoaded: historyMessages.length,
+        aiMeta: ctx.toAiMeta(),
+      }
+    }
+  } else if (telefone && deferStateEarlyHandlers && blockStaleEnrollment) {
+    console.log(
+      `[${executionId}] STALE_STATE_GUARD skip_aceite_captacao switched=${Boolean(courseSwitch?.switched)} staleUnknown=${Boolean(courseSwitch?.staleUnknown)}`,
+    )
+  }
 
   if (telefone) {
     const gradePdfFlow = await tryHandleGradePdfRequest(env, formFlowCtx)
@@ -615,7 +939,7 @@ export async function runAgent(env, input) {
     }
   }
 
-  if (telefone) {
+  if (telefone && !blockStaleEnrollment) {
     let earlyInscricaoStage = null
     try {
       const earlyRow = await fetchDadosClienteByTelefone(env, telefone, 'inscricao_form_status')
@@ -643,6 +967,7 @@ export async function runAgent(env, input) {
 
   if (
     telefone &&
+    !blockStaleEnrollment &&
     !userMessageLooksLikePoloChoice(userMessage) &&
     !conversationAlreadyAuthorizedMatricula(historyMessages)
   ) {
@@ -734,47 +1059,53 @@ export async function runAgent(env, input) {
     // usando dados pré-preenchidos no card Sumaré Comercial. Cobre:
     //   1) lead pediu matrícula + card completo → pergunta confirma polo
     //   2) lead respondeu a confirmação → executa captação direto
-    const kommoCardFlow = await tryHandleInscricaoFromKommoCard(env, formFlowCtx)
-    if (kommoCardFlow?.handled) {
-      const snap = kommoCardFlow.result?.ctxSnapshot || {}
-      console.log(
-        `[${executionId}] KOMMO_CARD_EXPRESS stage=${snap.inscricaoForm ?? 'n/a'} ` +
-          `polo=${snap.poloId ?? snap.poloNome ?? 'n/a'} fail=${Boolean(snap.kommoCardExpressFail)}`,
-      )
-      return {
-        ...kommoCardFlow.result,
-        historyLoaded: historyMessages.length,
-        aiMeta: ctx.toAiMeta(),
+    if (!blockStaleEnrollment) {
+      const kommoCardFlow = await tryHandleInscricaoFromKommoCard(env, formFlowCtx)
+      if (kommoCardFlow?.handled) {
+        const snap = kommoCardFlow.result?.ctxSnapshot || {}
+        console.log(
+          `[${executionId}] KOMMO_CARD_EXPRESS stage=${snap.inscricaoForm ?? 'n/a'} ` +
+            `polo=${snap.poloId ?? snap.poloNome ?? 'n/a'} fail=${Boolean(snap.kommoCardExpressFail)}`,
+        )
+        return {
+          ...kommoCardFlow.result,
+          historyLoaded: historyMessages.length,
+          aiMeta: ctx.toAiMeta(),
+        }
       }
-    }
 
-    const poloPreFlow = await tryHandlePoloPreFormFlow(env, formFlowCtx)
-    if (poloPreFlow?.handled) {
-      console.log(
-        `[${executionId}] POLO_PRE_FORM polo=${poloPreFlow.result?.ctxSnapshot?.poloId ?? 'n/a'} form_ok=${poloPreFlow.result?.toolCalls?.[0]?.ok ?? 'n/a'}`,
-      )
-      return {
-        ...poloPreFlow.result,
-        historyLoaded: historyMessages.length,
-        aiMeta: ctx.toAiMeta(),
+      const poloPreFlow = await tryHandlePoloPreFormFlow(env, formFlowCtx)
+      if (poloPreFlow?.handled) {
+        console.log(
+          `[${executionId}] POLO_PRE_FORM polo=${poloPreFlow.result?.ctxSnapshot?.poloId ?? 'n/a'} form_ok=${poloPreFlow.result?.toolCalls?.[0]?.ok ?? 'n/a'}`,
+        )
+        return {
+          ...poloPreFlow.result,
+          historyLoaded: historyMessages.length,
+          aiMeta: ctx.toAiMeta(),
+        }
       }
-    }
 
-    const poloFlow = await tryHandlePoloEscolhaFlow(env, formFlowCtx)
-    if (poloFlow?.handled) {
-      console.log(
-        `[${executionId}] POLO_ESCOLHA polo=${poloFlow.result?.ctxSnapshot?.poloId ?? 'n/a'} unidade=${poloFlow.result?.ctxSnapshot?.unidade ?? 'n/a'}`,
-      )
-      return {
-        ...poloFlow.result,
-        historyLoaded: historyMessages.length,
-        aiMeta: ctx.toAiMeta(),
+      const poloFlow = await tryHandlePoloEscolhaFlow(env, formFlowCtx)
+      if (poloFlow?.handled) {
+        console.log(
+          `[${executionId}] POLO_ESCOLHA polo=${poloFlow.result?.ctxSnapshot?.poloId ?? 'n/a'} unidade=${poloFlow.result?.ctxSnapshot?.unidade ?? 'n/a'}`,
+        )
+        return {
+          ...poloFlow.result,
+          historyLoaded: historyMessages.length,
+          aiMeta: ctx.toAiMeta(),
+        }
       }
+    } else {
+      console.log(
+        `[${executionId}] STALE_STATE_GUARD skip_form_polo_card switched=${Boolean(courseSwitch?.switched)}`,
+      )
     }
   }
 
   // "sim" / "ok" após pergunta de inscrição → Form Sumar (antes de cair no orquestrador sem contexto).
-  if (telefone && isShortEnrollmentConfirmation(userMessage)) {
+  if (telefone && !blockStaleEnrollment && isShortEnrollmentConfirmation(userMessage)) {
     if (messageConfirmsProceedToInscricaoForm(userMessage, historyMessages)) {
       const formEarly = await tryHandleInscricaoFormStart(env, formFlowCtx)
       if (formEarly?.handled) {
@@ -849,10 +1180,14 @@ export async function runAgent(env, input) {
   if (telefone) {
     try {
       const cursoConfirmado = detectCursoConfirmadoPeloLead(userMessage, historyMessages)
-      if (cursoConfirmado) {
+      if (cursoConfirmado && !shouldSkipRegressiveSumCurso(courseSwitch, cursoConfirmado)) {
         const r = await setSumCursoOnLead(env, { leadId, telefone, cursoNome: cursoConfirmado })
         console.log(
           `[${executionId}] SUM_CURSO_UPDATE curso="${cursoConfirmado}" ok=${r.ok} skipped=${Boolean(r.skipped)} code=${r.code || 'n/a'} previous="${r.previous || ''}"`,
+        )
+      } else if (cursoConfirmado && shouldSkipRegressiveSumCurso(courseSwitch, cursoConfirmado)) {
+        console.log(
+          `[${executionId}] SUM_CURSO_UPDATE skipped_regressive curso="${cursoConfirmado}" previous="${courseSwitch?.previous || ''}"`,
         )
       }
     } catch (err) {
@@ -969,12 +1304,18 @@ export async function runAgent(env, input) {
       )
       return { ...formDone.result, historyLoaded: historyMessages.length, aiMeta: ctx.toAiMeta() }
     }
-    const formStart = await tryHandleInscricaoFormStart(env, formFlowCtx)
-    if (formStart?.handled) {
+    if (!blockStaleEnrollment) {
+      const formStart = await tryHandleInscricaoFormStart(env, formFlowCtx)
+      if (formStart?.handled) {
+        console.log(
+          `[${executionId}] INSCRICAO_FORM_START salesbot=${formStart.result?.ctxSnapshot?.salesbotId ?? formStart.result?.toolCalls?.[0]?.ok ?? 'n/a'}`,
+        )
+        return { ...formStart.result, historyLoaded: historyMessages.length, aiMeta: ctx.toAiMeta() }
+      }
+    } else {
       console.log(
-        `[${executionId}] INSCRICAO_FORM_START salesbot=${formStart.result?.ctxSnapshot?.salesbotId ?? formStart.result?.toolCalls?.[0]?.ok ?? 'n/a'}`,
+        `[${executionId}] STALE_STATE_GUARD skip_form_start switched=${Boolean(courseSwitch?.switched)} staleUnknown=${Boolean(courseSwitch?.staleUnknown)}`,
       )
-      return { ...formStart.result, historyLoaded: historyMessages.length, aiMeta: ctx.toAiMeta() }
     }
 
     const courseLevel = await tryHandleUnsupportedCourseLevelInquiry(env, {
@@ -1156,7 +1497,12 @@ export async function runAgent(env, input) {
       formFlowCtx.stageBefore = stage
       if (stage) {
         let descr = stage
-        if (stage === 'aguardando_escolha_polo_pre_form') {
+        if (courseSwitch?.switched) {
+          descr +=
+            ` (OBSOLETO após troca de curso — não use form/polo/link deste estágio; curso atual: ${courseSwitch.current || 'em discussão'})`
+        } else if (suppressStaleFormHints) {
+          descr += ' (estado possivelmente desatualizado — NÃO afirmar form/link já enviados; peça clarificação)'
+        } else if (stage === 'aguardando_escolha_polo_pre_form') {
           descr += ' (lead confirmou matrícula — chame registrar_polo_inscricao com o polo que ele responder)'
         } else if (stage === 'aguardando_form_sumar') {
           descr += ' (Form Sumar já enviado — quando o lead disser "pronto" / "preenchi", chame confirmar_recebimento_formulario)'
@@ -1271,6 +1617,7 @@ export async function runAgent(env, input) {
       : null
 
   const enrollmentConfirmHint =
+    !suppressStaleFormHints &&
     enrollmentContinuation &&
     !messageAsksCoursePrice(userMessage) &&
     !transferenciaCtx &&
@@ -1320,7 +1667,9 @@ export async function runAgent(env, input) {
           '- registrar_polo_inscricao(telefone, polo_id): chame quando o lead responde polo (1-5 ou nome). polo_id ∈ {sao_miguel, barra_funda, tatuape, santana, pinheiros}.\n' +
           '- registrar_transferencia(telefone, curso_origem, semestre_concluido, curso_desejado[, polo_id]): chame para ingresso por transferência/aproveitamento de matérias, depois de confirmar com o lead o curso de origem, o último semestre concluído e o curso desejado (regra 31).\n' +
           '- confirmar_recebimento_formulario(telefone): chame quando o lead diz "pronto", "preenchi", "feito", "ok" após o estado aguardando_form_sumar.\n' +
-          (inscricaoStage === INSCRICAO_FORM_STATUS_AGUARDANDO
+          (suppressStaleFormHints
+            ? 'ESTADO DE CURSO EM REVISÃO: NÃO use estágios antigos (form/link/polo) como verdade; peça confirmação do curso atual antes de tools de inscrição.\n'
+            : inscricaoStage === INSCRICAO_FORM_STATUS_AGUARDANDO
             ? 'ESTADO ATUAL: aguardando_form_sumar — PROIBIDO chamar enviar_form_sumar_inscricao de novo; só oriente o lead a preencher o formulário já enviado.\n'
             : inscricaoStage === INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE
               ? 'ESTADO ATUAL: aguardando_aceite_contrato — PROIBIDO reenviar formulário; só link de pagamento se o lead pedir.\n'
@@ -1330,7 +1679,9 @@ export async function runAgent(env, input) {
       : null
 
   const poloStageGuardHint =
-    inscricaoStage === INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM
+    suppressStaleFormHints
+      ? null
+      : inscricaoStage === INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM
       ? {
           role: 'system',
           content:
@@ -1348,6 +1699,7 @@ export async function runAgent(env, input) {
         : null
 
   const matriculaAuthGuardHint =
+    !suppressStaleFormHints &&
     conversationAlreadyAuthorizedMatricula(historyMessages) &&
     inscricaoStage !== INSCRICAO_FORM_STATUS_AGUARDANDO &&
     inscricaoStage !== INSCRICAO_FORM_STATUS_AGUARDANDO_ACEITE &&
@@ -1376,10 +1728,12 @@ export async function runAgent(env, input) {
     ? {
         role: 'system',
         content:
-          'PERGUNTA SOBRE FORMA/DATAS DE PAGAMENTO: o lead quer entender quando/como pagar a mensalidade (dias, vencimento, desconto por pagamento antecipado, pagamento no prazo). ' +
-          'OBRIGATÓRIO neste turno: chame buscar_conhecimento com query sobre pagamento da mensalidade (ex.: "pagamento da mensalidade quais dias pagar dia de vencimento desconto por pagamento antecipado") e responda com o PLANO DE PAGAMENTO da base. ' +
+          'PERGUNTA SOBRE FORMA/DATAS DE PAGAMENTO DA MENSALIDADE: o lead quer entender quando/como pagar a mensalidade (dias, vencimento, desconto por pagamento antecipado, pagamento no prazo) OU quais são as formas de pagamento aceitas (boleto, PIX, cartão de crédito). ' +
+          'OBRIGATÓRIO neste turno: chame buscar_conhecimento com query sobre pagamento da mensalidade (ex.: "formas de pagamento da mensalidade boleto PIX cartão Portal do Aluno" ou "pagamento da mensalidade quais dias pagar dia de vencimento desconto por pagamento antecipado", conforme a dúvida) e responda com os dados da base. ' +
+          'Se a dúvida for sobre QUAIS formas de pagamento existem: responda que o pagamento das mensalidades pode ser feito por boleto bancário, PIX ou cartão de crédito, e que é possível escolher/alterar a forma de pagamento no Portal do Aluno sempre que a mensalidade estiver disponível. ' +
           'Se o lead perguntar se o desconto vale só na 1ª mensalidade ou em todas: explique que pagando no 1º dia de cada mês o desconto máximo (70%) é aplicado na mensalidade daquele mês — ou seja, mantendo o pagamento no dia 1, o benefício se repete todo mês. ' +
-          'PROIBIDO neste turno: encaminhar para consultor/humano apenas porque o lead perguntou sobre datas/forma de pagamento, ou recusa LGPD — essa informação É institucional e está na base.',
+          'PROIBIDO neste turno: encaminhar para consultor/humano apenas porque o lead perguntou sobre datas/forma de pagamento, ou recusa LGPD — essa informação É institucional e está na base. ' +
+          'PROIBIDO confundir com pagamento da MATRÍCULA/taxa de inscrição ou link do contrato — se a dúvida for sobre isso, NÃO use este texto; siga o fluxo de inscrição/captação (link de contrato com suas próprias opções de pagamento).',
       }
     : null
 
@@ -1548,6 +1902,7 @@ export async function runAgent(env, input) {
     { role: 'system', content: systemMessage },
     ...(contextPreamble ? [{ role: 'system', content: contextPreamble }] : []),
     lgpdHint,
+    ...(courseDriftHint ? [courseDriftHint] : []),
     ...(inscricaoToolsHint ? [inscricaoToolsHint] : []),
     ...(poloStageGuardHint ? [poloStageGuardHint] : []),
     ...(matriculaAuthGuardHint ? [matriculaAuthGuardHint] : []),
@@ -1598,6 +1953,8 @@ export async function runAgent(env, input) {
     contextPreamble: contextPreamble || null,
     historyCount: historyMessages.length,
     historySource,
+    historySourceDetail,
+    courseSwitch: summarizeCourseSwitchForSnapshot(courseSwitch),
     noContextWarning: ambiguousNoContext,
     toolsAvailable: toolDefinitions.map((t) => t.function?.name).filter(Boolean),
     userMessage,
@@ -1744,44 +2101,46 @@ export async function runAgent(env, input) {
       }
 
       let reply = msg.content || 'Sem resposta.'
-      const formAfter = await tryEnsureInscricaoFormSent(env, {
-        ...formFlowCtx,
-        llmReply: reply,
-      })
-      if (formAfter?.handled) {
-        console.log(
-          `[${executionId}] INSCRICAO_FORM_AFTER_LLM template_ok=${formAfter.result?.toolCalls?.[0]?.ok ?? false}`,
-        )
-        return {
-          ...formAfter.result,
-          toolCalls: [...(formAfter.result.toolCalls || []), ...toolTrace],
-          orchestratorSteps,
-          historyLoaded: historyMessages.length,
-          aiMeta: ctx.toAiMeta(),
-        }
-      }
-      if (llmReplyImpliesPendingFormSend(reply)) {
-        console.warn(
-          `[${executionId}] LLM prometeu formulário sem entrega — substituindo resposta por fluxo servidor`,
-        )
-        const retryPolo = await tryHandlePoloPreFormFlow(env, formFlowCtx)
-        if (retryPolo?.handled) {
+      if (!blockStaleEnrollment) {
+        const formAfter = await tryEnsureInscricaoFormSent(env, {
+          ...formFlowCtx,
+          llmReply: reply,
+        })
+        if (formAfter?.handled) {
+          console.log(
+            `[${executionId}] INSCRICAO_FORM_AFTER_LLM template_ok=${formAfter.result?.toolCalls?.[0]?.ok ?? false}`,
+          )
           return {
-            ...retryPolo.result,
-            toolCalls: [...(retryPolo.result.toolCalls || []), ...toolTrace],
+            ...formAfter.result,
+            toolCalls: [...(formAfter.result.toolCalls || []), ...toolTrace],
             orchestratorSteps,
             historyLoaded: historyMessages.length,
             aiMeta: ctx.toAiMeta(),
           }
         }
-        const retryForm = await tryHandleInscricaoFormStart(env, formFlowCtx)
-        if (retryForm?.handled) {
-          return {
-            ...retryForm.result,
-            toolCalls: [...(retryForm.result.toolCalls || []), ...toolTrace],
-            orchestratorSteps,
-            historyLoaded: historyMessages.length,
-            aiMeta: ctx.toAiMeta(),
+        if (llmReplyImpliesPendingFormSend(reply)) {
+          console.warn(
+            `[${executionId}] LLM prometeu formulário sem entrega — substituindo resposta por fluxo servidor`,
+          )
+          const retryPolo = await tryHandlePoloPreFormFlow(env, formFlowCtx)
+          if (retryPolo?.handled) {
+            return {
+              ...retryPolo.result,
+              toolCalls: [...(retryPolo.result.toolCalls || []), ...toolTrace],
+              orchestratorSteps,
+              historyLoaded: historyMessages.length,
+              aiMeta: ctx.toAiMeta(),
+            }
+          }
+          const retryForm = await tryHandleInscricaoFormStart(env, formFlowCtx)
+          if (retryForm?.handled) {
+            return {
+              ...retryForm.result,
+              toolCalls: [...(retryForm.result.toolCalls || []), ...toolTrace],
+              orchestratorSteps,
+              historyLoaded: historyMessages.length,
+              aiMeta: ctx.toAiMeta(),
+            }
           }
         }
       }

@@ -28,6 +28,7 @@ import {
   listDealsByStageId,
   listDealsByContactId,
   listConversationsByContactId,
+  listConversationMessages,
   sendConversationText,
   resolveEduitEntitiesByPhone,
   resolveEduitStages,
@@ -69,6 +70,7 @@ export function dealToAgentLead(deal, env = process.env) {
   if (!deal || typeof deal !== 'object') return null
   const stages = resolveEduitStages(env)
   const stageId = String(deal.stageId || deal.stage_id || '')
+  const phone = String(deal.contact?.phone || deal.phone || '').replace(/[^0-9]/g, '') || null
   return {
     id: String(deal.id),
     stageId,
@@ -76,7 +78,8 @@ export function dealToAgentLead(deal, env = process.env) {
     pipeline_id: String(deal.pipelineId || deal.pipeline_id || stages.pipelineId || ''),
     number: deal.number ?? null,
     title: deal.title || deal.name || null,
-    contactId: deal.contactId || deal.contact_id || null,
+    contactId: deal.contactId || deal.contact_id || deal.contact?.id || null,
+    phone,
     _backend: 'eduit',
     _raw: deal,
   }
@@ -185,7 +188,11 @@ export async function listLeadsInAgentQueue(env) {
     const { listLeadsInAgentQueue: kommoList } = await import('./kommoAgentFunnel.js')
     return kommoList(env)
   }
-  const stageIds = eduitAgentStageIds(env)
+  const stages = resolveEduitStages(env)
+  const stageIds = [...eduitAgentStageIds(env)]
+  if (stages.entrada && !stageIds.includes(stages.entrada)) {
+    stageIds.push(stages.entrada)
+  }
   const byId = new Map()
   let lastError = null
   let lastStatus = null
@@ -476,6 +483,115 @@ export async function assertLeadInAgentFunnel(env, input = {}) {
   }
 
   return { ok: false, reason: 'missing_lead_or_phone' }
+}
+
+/**
+ * Histórico recente do CRM para o agente.
+ * Kommo: skip vazio (não chama Amojo nesta fatia).
+ * EduIT: resolve conversationId → GET messages → filtra idade.
+ *
+ * @returns {Promise<{ ok:boolean, messages:Array, source:string, conversationId:string|null, error?:string, code?:string }>}
+ */
+export async function loadCrmRecentMessages(env, { telefone, conversationId, limit } = {}) {
+  if (!isEduitBackend(env)) {
+    return {
+      ok: true,
+      messages: [],
+      source: 'kommo_skip',
+      conversationId: null,
+    }
+  }
+
+  const lim = Math.min(100, Math.max(1, Number(limit) || 30))
+  let convId = conversationId ? String(conversationId).trim() : ''
+  if (convId && !isEduitCuid(convId)) {
+    convId = ''
+  }
+
+  const digits = String(telefone || '').replace(/[^0-9]/g, '')
+
+  if (!convId && digits) {
+    try {
+      const row = await fetchDadosClienteByTelefone(env, digits, 'eduit_conversation_id')
+      const cached = row?.eduit_conversation_id ? String(row.eduit_conversation_id).trim() : ''
+      if (cached && isEduitCuid(cached)) convId = cached
+    } catch {
+      // segue para resolve
+    }
+  }
+
+  if (!convId && digits) {
+    try {
+      const ids = await resolveAndPersistEduitIds(env, digits)
+      if (ids?.conversationId && isEduitCuid(String(ids.conversationId))) {
+        convId = String(ids.conversationId).trim()
+      }
+    } catch (e) {
+      return {
+        ok: false,
+        messages: [],
+        source: 'eduit',
+        conversationId: null,
+        code: 'EDUIT_RESOLVE_FAILED',
+        error: e?.message || 'falha ao resolver conversationId',
+      }
+    }
+  }
+
+  if (!convId) {
+    return {
+      ok: true,
+      messages: [],
+      source: 'eduit',
+      conversationId: null,
+      code: 'EDUIT_CONVERSATION_MISSING',
+      error: 'conversationId não encontrado',
+    }
+  }
+
+  let listed
+  try {
+    listed = await listConversationMessages(env, convId, { limit: lim })
+  } catch (e) {
+    return {
+      ok: false,
+      messages: [],
+      source: 'eduit',
+      conversationId: convId,
+      code: 'EDUIT_MESSAGES_FAILED',
+      error: e?.message || 'falha ao listar mensagens',
+    }
+  }
+
+  if (!listed.ok) {
+    return {
+      ok: false,
+      messages: [],
+      source: 'eduit',
+      conversationId: convId,
+      code: listed.code || 'EDUIT_ERROR',
+      error: listed.error,
+      status: listed.status,
+    }
+  }
+
+  const maxAgeHoursRaw = Number(env?.AGENT_EDUIT_HISTORY_MAX_AGE_HOURS)
+  const maxAgeHours =
+    Number.isFinite(maxAgeHoursRaw) && maxAgeHoursRaw > 0 ? maxAgeHoursRaw : 72
+  const cutoffMs = Date.now() - maxAgeHours * 3600 * 1000
+  const messages = (listed.messages || []).filter((m) => {
+    if (m?.at == null) return true
+    const t = Number(m.at)
+    if (!Number.isFinite(t)) return true
+    return t >= cutoffMs
+  })
+
+  return {
+    ok: true,
+    messages,
+    source: 'eduit',
+    conversationId: convId,
+  }
 }
 
 /**

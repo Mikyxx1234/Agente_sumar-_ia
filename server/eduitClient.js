@@ -2,7 +2,7 @@
  * Cliente mínimo da API EduIT CRM — contratos homologados (Sprint A).
  *
  * Env:
- *   EDUIT_BASE_URL   ex: https://frontend-front.v74knz.easypanel.host
+ *   EDUIT_BASE_URL   ex: https://sumare-ead.bwipo.com
  *   EDUIT_API_KEY    Bearer (nunca hardcode / nunca logar)
  *
  * Stages (defaults homologados; override via EDUIT_STAGE_*):
@@ -114,12 +114,106 @@ function asItemList(data) {
   if (!data) return []
   if (Array.isArray(data)) return data
   if (Array.isArray(data.items)) return data.items
+  if (Array.isArray(data.messages)) return data.messages
   if (Array.isArray(data.data)) return data.data
   if (Array.isArray(data.contacts)) return data.contacts
   if (Array.isArray(data.deals)) return data.deals
   if (Array.isArray(data.conversations)) return data.conversations
   if (data.id) return [data]
   return []
+}
+
+/** Tipos de mensagem EduIT excluídos do histórico do agente. */
+const EDUIT_HISTORY_SKIP_TYPES = new Set([
+  'note',
+  'system',
+  'activity',
+  'event',
+  'call',
+  'tag_event',
+  'template_event',
+])
+
+/**
+ * Timestamp utilizável em ms (número). Aceita ISO / Date / epoch s|ms.
+ * @param {any} raw
+ * @returns {number|null}
+ */
+export function parseEduitMessageAt(raw) {
+  if (raw == null || raw === '') return null
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    // epoch segundos (< 1e12) → ms
+    return raw < 1e12 ? Math.round(raw * 1000) : Math.round(raw)
+  }
+  if (raw instanceof Date) {
+    const t = raw.getTime()
+    return Number.isFinite(t) ? t : null
+  }
+  const s = String(raw).trim()
+  if (!s) return null
+  if (/^\d+$/.test(s)) {
+    const n = Number(s)
+    if (!Number.isFinite(n)) return null
+    return n < 1e12 ? Math.round(n * 1000) : Math.round(n)
+  }
+  const t = Date.parse(s)
+  return Number.isFinite(t) ? t : null
+}
+
+/**
+ * Direção / role → user | assistant | null.
+ * @param {any} m
+ * @returns {'user'|'assistant'|null}
+ */
+export function resolveEduitMessageRole(m) {
+  if (!m || typeof m !== 'object') return null
+  const dir = String(m.direction || m.dir || '').trim().toLowerCase()
+  if (dir === 'in' || dir === 'inbound') return 'user'
+  if (dir === 'out' || dir === 'outbound') return 'assistant'
+  const role = String(m.role || m.authorRole || m.senderRole || '').trim().toLowerCase()
+  if (role === 'user' || role === 'lead' || role === 'contact' || role === 'customer') return 'user'
+  if (role === 'assistant' || role === 'agent' || role === 'bot' || role === 'operator' || role === 'human') {
+    return 'assistant'
+  }
+  return null
+}
+
+function eduitMessageContent(m) {
+  if (!m || typeof m !== 'object') return ''
+  const c = m.content ?? m.text ?? m.body ?? m.message
+  if (typeof c === 'string') return c
+  if (c && typeof c === 'object' && typeof c.text === 'string') return c.text
+  return ''
+}
+
+/**
+ * Normaliza item cru da API → shape do agente, ou null se filtrado.
+ * `at` é sempre epoch ms (número) quando disponível.
+ * @param {any} raw
+ * @param {number} index
+ * @returns {{id:string|null,role:string,content:string,at:number|null,seq:number|null,source:'eduit'}|null}
+ */
+export function normalizeEduitConversationMessage(raw, index = 0) {
+  if (!raw || typeof raw !== 'object') return null
+  if (raw.isPrivate === true || raw.private === true || raw.is_private === true) return null
+  const type = String(raw.messageType || raw.type || raw.kind || '').trim().toLowerCase()
+  if (type && EDUIT_HISTORY_SKIP_TYPES.has(type)) return null
+  const role = resolveEduitMessageRole(raw)
+  const content = String(eduitMessageContent(raw) || '').trim()
+  if (!role || !content) return null
+
+  const idRaw = raw.id ?? raw.messageId ?? raw.message_id
+  const id = idRaw != null && String(idRaw).trim() ? String(idRaw).trim() : null
+  const at = parseEduitMessageAt(
+    raw.at ?? raw.timestamp ?? raw.createdAt ?? raw.created_at ?? raw.sentAt ?? raw.sent_at ?? raw.date,
+  )
+  let seq = null
+  if (raw.seq != null && Number.isFinite(Number(raw.seq))) seq = Number(raw.seq)
+  else if (raw.sequence != null && Number.isFinite(Number(raw.sequence))) seq = Number(raw.sequence)
+  else if (raw.order != null && Number.isFinite(Number(raw.order))) seq = Number(raw.order)
+  else seq = index
+
+  return { id, role, content, at, seq, source: 'eduit' }
 }
 
 /**
@@ -477,6 +571,55 @@ export async function listConversationsByContactId(env, contactId) {
     pickReason: reason,
     status: r.status,
   }
+}
+
+/**
+ * GET /api/conversations/{cuid}/messages?limit=N
+ * Normaliza para histórico do agente (user/assistant), filtra ruído interno.
+ * `at` = epoch ms (número) quando parseável.
+ *
+ * @returns {Promise<{ ok:boolean, messages:Array, status?:number, error?:string, code?:string }>}
+ */
+export async function listConversationMessages(env, conversationId, { limit = 30 } = {}) {
+  const id = String(conversationId || '').trim()
+  if (!id || !isEduitCuid(id)) {
+    return {
+      ok: false,
+      code: 'MISSING_CONVERSATION_ID',
+      error: 'conversationId CUID inválido',
+      messages: [],
+    }
+  }
+  const lim = Math.min(100, Math.max(1, Number(limit) || 30))
+  const r = await eduitFetch(
+    env,
+    `/api/conversations/${encodeURIComponent(id)}/messages?limit=${encodeURIComponent(String(lim))}`,
+  )
+  if (!r.ok) {
+    return {
+      ok: false,
+      code: r.code || 'EDUIT_ERROR',
+      status: r.status,
+      error: summarizeError(r),
+      messages: [],
+    }
+  }
+  const rawList = asItemList(r.data)
+  const normalized = []
+  for (let i = 0; i < rawList.length; i++) {
+    const m = normalizeEduitConversationMessage(rawList[i], i)
+    if (m) normalized.push(m)
+  }
+  normalized.sort((a, b) => {
+    const ta = a.at == null ? Number.POSITIVE_INFINITY : a.at
+    const tb = b.at == null ? Number.POSITIVE_INFINITY : b.at
+    if (ta !== tb) return ta - tb
+    const sa = a.seq == null ? 0 : a.seq
+    const sb = b.seq == null ? 0 : b.seq
+    if (sa !== sb) return sa - sb
+    return String(a.id || '').localeCompare(String(b.id || ''))
+  })
+  return { ok: true, messages: normalized, status: r.status }
 }
 
 /** POST /api/conversations/{conversationCuid}/messages { type:'text', content } */

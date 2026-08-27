@@ -12,6 +12,34 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-08-27 - Histórico EduIT + course drift no caminho quente (`agentRunner`)
+- **Modelo usado**: Cursor Grok 4.5 Executor (sob decisão Opus Strategist)
+- **Decisão**: No backend EduIT, `loadRecentHistoryMessages` passa a poder buscar `loadCrmRecentMessages` e fundir com Supabase via `mergeCrmAndSupabaseHistories` (tier exclusive quando CRM ≥ limiar). Rollout por flags: `AGENT_EDUIT_HISTORY_ENABLED` (default false), `AGENT_EDUIT_HISTORY_SHADOW` (busca/loga sem injetar), `AGENT_EDUIT_HISTORY_CANARY_PHONES` (CSV; vazio = global), `AGENT_EDUIT_HISTORY_LIMIT` (20), `AGENT_EDUIT_HISTORY_MIN_EXCLUSIVE_TURNS` (4). Após o histórico, `detectCourseSwitchAgainstCrmState` (kill switch `AGENT_EDUIT_COURSE_DRIFT_ENABLED`, default true no EduIT) bloqueia enriquecimento/form/polo/aceite/hints de estado antigo em `switched`/`staleUnknown`, impede `SUM_CURSO_UPDATE` regressivo para `previous`, e injeta instrução de prompt. Gate `atendimento_ia=pause` permanece antes do load (não carrega EduIT nem responde). Kommo inalterado. Falha EduIT degrada ao histórico anterior. Observabilidade: counts/source/exclusive + `COURSE_DRIFT` sem conteúdo integral; `ctxSnapshot.historySourceDetail` e `courseSwitch`.
+- **Contexto**: Caso William — EduIT recente (saúde→Biomedicina→"Sim") vs Supabase antigo (Pedagogia/aguardando_aceite/Tatuapé) capturava confirmação curta com form/link/curso errados.
+- **Alternativas descartadas**: Persistir histórico EduIT no Supabase como fonte única (acoplamento e atraso); só resetar estado de inscrição no drift (apaga evidência operacional e exige escrita arriscada no hot path).
+- **Impacto**: Rollout shadow → canary → global. Sem env novas ligadas, comportamento = pré-fatia. Não limpa estado automaticamente no drift.
+
+### 2026-08-27 - CRM EduIT na VPS Bwipo (`sumare-ead.bwipo.com`)
+- **Modelo usado**: Cursor Grok 4.6
+- **Decisão**: Apontar `EDUIT_BASE_URL` para `https://sumare-ead.bwipo.com` e usar a API key da nova instalação. Pipeline e etapas CUID permaneceram as mesmas (`Pipeline Principal`, Lead de Entrada / Atendimento / Inscrição).
+- **Contexto**: Host antigo `frontend-front.v74knz.easypanel.host` passou a responder 503. Token antigo na URL nova dava 401.
+- **Alternativas descartadas**: Manter o host EasyPanel; reaproveitar a key antiga.
+- **Impacto**: Local já autentica (deals/conversas/filas). Produção (EasyPanel do agente) precisa das mesmas duas envs e restart. Não commitar a key.
+
+### 2026-08-26 - Scheduler EduIT inclui Lead de Entrada e telefone do contato
+- **Modelo usado**: Cursor Grok 4.6
+- **Decisão**: A fila automática da IA no EduIT passa a listar Lead de Entrada além de Atendimento e Inscrição. O telefone do contato no card vale quando ainda não há linha em `dados_cliente_sum`. O gate continua movendo Entrada → Atendimento no flush. `eduitAgentStageIds` não inclui Entrada (evitar pular o move).
+- **Contexto**: Meta só bufferiza; o scheduler é quem responde. Sem Entrada na listagem e sem telefone no Supabase, a caixa de entrada ficava parada.
+- **Alternativas descartadas**: Tratar Entrada como etapa da IA sem mover; depender só de flush manual.
+- **Impacto**: Inbox com mensagem pendente na janela 24h entra no tick. Produção precisa do deploy deste código.
+
+### 2026-08-26 - Migração de cards Kommo → EduIT preserva valores existentes
+- **Modelo usado**: Auto (Opus, versão não confirmada), com Strategist isolado.
+- **Decisão**: Sincronizar negócios existentes por telefone exato, somente quando houver um único lead correspondente no pipeline Kommo. Preencher apenas campos vazios no EduIT, validar opções SELECT e datas, aplicar a partir de dry-run auditável e confirmar cada PUT por releitura do card.
+- **Contexto**: Migração executada em 205 negócios EduIT; 156 matches seguros receberam 825 campos verificados. Conflitos, telefones sem correspondência, múltiplos candidatos e valores inválidos foram preservados no relatório sem escrita.
+- **Alternativas descartadas**: Sobrescrever valores existentes no EduIT; aceitar match aproximado de telefone; confiar apenas no HTTP 200 do PUT; aplicar candidatos ambíguos.
+- **Impacto**: Reexecução é idempotente (`fill-empty-only`). Relatórios em `data/sync-eduit-fields-from-kommo-*.json` documentam dry-run, piloto e aplicação completa.
+
 ### 2026-08-26 - Cutover env: CRM_BACKEND=eduit (inbound Meta, outbound EduIT)
 - **Decisão**: Produção liga o CRM EduIT com `CRM_BACKEND=eduit`, `EDUIT_BASE_URL` e `EDUIT_API_KEY`. Variáveis Kommo permanecem no EasyPanel só para rollback (`CRM_BACKEND=kommo`). Inbound permanece no webhook Meta. Outbound, com backend eduit, ignora `WHATSAPP_OUTBOUND_MODE` e envia só `POST /api/conversations/{id}/messages`. Scheduler continua ligado (`KOMMO_SCHEDULER_ENABLED=true`); no backend eduit ele lista Atendimento+Inscrição no EduIT.
 - **Contexto**: Fatia 1 (cliente/adapter/gate/backfill) já no código. Default do código continua kommo até o env de produção ser alterado e o serviço reiniciado.
