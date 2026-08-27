@@ -75,8 +75,13 @@ import {
   matriculaPosFormAlreadyProcessed,
   inscricaoFormAlreadyFilled,
   buildComprovantePagamentoRecebidoReply,
+  buildPosMatriculaAguardandoFinalizacaoReply,
+  messageRelatesToComprovanteEmConferencia,
 } from '../libShared/inscricaoFormHeuristics.js'
-import { resolvePosMatriculaTarget } from '../server/inscricaoAceitePagamentoFlow.js'
+import {
+  resolvePosMatriculaTarget,
+  tryHandleMatriculaAceitePagamentoFlow,
+} from '../server/inscricaoAceitePagamentoFlow.js'
 import { resolveDesistenciaTarget } from '../server/inscricaoDesistenciaFlow.js'
 import {
   messageExpressesEnrollmentDecline,
@@ -1641,6 +1646,136 @@ section('29 — resolveCursoOfertaFromDb: match parcial por token (não por subs
   } finally {
     restoreFetch()
     invalidateCaptacaoCursoCache()
+  }
+}
+
+section('30 — Atalho comprovante_pagamento_recebido: recência + relevância + anti-repetição')
+
+{
+  const hojeIso = new Date().toISOString()
+  const sessentaDiasIso = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString()
+  const baseInput = {
+    telefone: '5511932327154',
+    executionId: 'EX-TEST-COMPROV',
+    model: 'gpt-4.1-mini',
+    pushName: 'Samuel',
+    t0: Date.now(),
+    historyMessages: [],
+  }
+
+  assert(
+    messageRelatesToComprovanteEmConferencia('e agora, quando começo?'),
+    '30.0 relevância: follow-up pós-matrícula',
+  )
+  assert(messageRelatesToComprovanteEmConferencia('ok'), '30.0b relevância: ack curto')
+  assert(
+    !messageRelatesToComprovanteEmConferencia('Preciso trancar esse curso'),
+    '30.0c relevância: trancar curso é off-topic',
+  )
+  assert(
+    !messageRelatesToComprovanteEmConferencia('quanto custa pedagogia?'),
+    '30.0d relevância: preço genérico é off-topic',
+  )
+
+  async function runComprovanteShortcut({ comprovanteAt, userMessage, historyMessages = [] }) {
+    const row = {
+      id: 41,
+      id_lead: 999001,
+      inscricao_form_status: INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO,
+      captacao_comprovante_at: comprovanteAt,
+    }
+    installFetchStub(defaultSupabaseStub({ dadosClienteRow: row }))
+    try {
+      return await tryHandleMatriculaAceitePagamentoFlow(env, {
+        ...baseInput,
+        userMessage,
+        historyMessages,
+      })
+    } finally {
+      restoreFetch()
+    }
+  }
+
+  // 30.1 comprovante de hoje + follow-up → dispara (follow-up)
+  {
+    const r = await runComprovanteShortcut({
+      comprovanteAt: hojeIso,
+      userMessage: 'e agora, quando começo?',
+    })
+    assert(r?.handled === true, '30.1 atalho dispara (follow-up)')
+    assertEqual(
+      r?.result?.orchestratorSteps?.[0]?.type,
+      'pos_matricula_follow_up',
+      '30.1b step=pos_matricula_follow_up',
+    )
+    assert(
+      /aguardar a matr[ií]cula ser finalizada/i.test(r?.result?.reply || ''),
+      '30.1c reply de finalização pós-matrícula',
+    )
+  }
+
+  // 30.2 comprovante de hoje + "ok" → dispara
+  {
+    const r = await runComprovanteShortcut({ comprovanteAt: hojeIso, userMessage: 'ok' })
+    assert(r?.handled === true, '30.2 atalho dispara para ack "ok"')
+    assertEqual(
+      r?.result?.orchestratorSteps?.[0]?.type,
+      'pos_matricula_follow_up',
+      '30.2b step=pos_matricula_follow_up (ack curto)',
+    )
+  }
+
+  // 30.3 comprovante de hoje + "Preciso trancar esse curso" → NÃO dispara
+  {
+    const r = await runComprovanteShortcut({
+      comprovanteAt: hojeIso,
+      userMessage: 'Preciso trancar esse curso',
+    })
+    assertEqual(r, null, '30.3 off-topic NÃO dispara atalho')
+  }
+
+  // 30.4 comprovante de 60 dias + "Lembra de conferir denovo" → NÃO dispara (janela)
+  {
+    const r = await runComprovanteShortcut({
+      comprovanteAt: sessentaDiasIso,
+      userMessage: 'Lembra de conferir denovo',
+    })
+    assertEqual(r, null, '30.4 comprovante stale (60d) NÃO dispara mesmo com menção a conferir')
+  }
+
+  // 30.5 comprovante sem timestamp + "já recebeu meu comprovante?" → dispara
+  {
+    const r = await runComprovanteShortcut({
+      comprovanteAt: null,
+      userMessage: 'já recebeu meu comprovante?',
+    })
+    assert(r?.handled === true, '30.5 sem timestamp conta como dentro da janela e dispara')
+    assertEqual(
+      r?.result?.orchestratorSteps?.[0]?.type,
+      'comprovante_already_received',
+      '30.5b step=comprovante_already_received (não é follow-up curto)',
+    )
+    assert(/j[aá] recebemos seu comprovante/i.test(r?.result?.reply || ''), '30.5c reply padrão de comprovante')
+  }
+
+  // 30.6 última resposta do assistente igual à do atalho → NÃO dispara
+  {
+    const expectedReply = buildPosMatriculaAguardandoFinalizacaoReply({ pushName: 'Samuel' })
+    const r = await runComprovanteShortcut({
+      comprovanteAt: hojeIso,
+      userMessage: 'ok',
+      historyMessages: [{ role: 'assistant', content: expectedReply }],
+    })
+    assertEqual(r, null, '30.6 anti-repetição: mesma reply do assistente → null')
+  }
+
+  // 30.7 curso/preço genérico com status comprovante → NÃO dispara
+  {
+    const r = await runComprovanteShortcut({
+      comprovanteAt: hojeIso,
+      userMessage: 'quanto custa pedagogia?',
+    })
+    assertEqual(r, null, '30.7 pergunta de preço genérica NÃO dispara atalho')
   }
 }
 

@@ -757,6 +757,30 @@ export function messageLooksLikePosMatriculaFollowUp(text) {
   )
 }
 
+/** Ack curto típico após o agente avisar que o comprovante está em conferência. */
+export function messageIsComprovanteShortcutAck(text) {
+  return /^\s*(ok|obrigad[oa]|certo|entendi|beleza|perfeito)[!.?\s]*$/i.test(
+    String(text || '').trim(),
+  )
+}
+
+/**
+ * Mensagem plausivelmente ligada ao contexto "comprovante em conferência"
+ * (atalho pós `comprovante_pagamento_recebido`). Fora disso o agente normal responde.
+ */
+export function messageRelatesToComprovanteEmConferencia(text) {
+  if (messageLooksLikePosMatriculaFollowUp(text)) return true
+  if (messageIsComprovanteShortcutAck(text)) return true
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (!t) return false
+  return (
+    /\b(comprovante|pagamento|matr[ií]cula)\b/i.test(t) ||
+    /\b(confer[eê]ncia|conferir)\b/i.test(t) ||
+    /\b(acesso|e-?mail\s+de\s+acesso)\b/i.test(t) ||
+    /\b(in[ií]cio\s+(do\s+)?curso|come[cç]ar\s+(o\s+)?curso)\b/i.test(t)
+  )
+}
+
 /** Mensagem padrão após comprovante de pagamento (aguardar finalização + e-mail de acesso). */
 export function buildPosMatriculaAguardandoFinalizacaoReply(opts = {}) {
   const raw = opts.pushName ? String(opts.pushName).trim().split(/\s+/)[0] : ''

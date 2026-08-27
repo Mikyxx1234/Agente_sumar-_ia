@@ -13,6 +13,9 @@ import {
   buildComprovantePagamentoRecebidoReply,
   buildPosMatriculaAguardandoFinalizacaoReply,
   messageLooksLikePosMatriculaFollowUp,
+  messageIsComprovanteShortcutAck,
+  messageRelatesToComprovanteEmConferencia,
+  lastAssistantText,
 } from '../libShared/inscricaoFormHeuristics.js'
 import { messageIsInboundMediaPlaceholder } from '../libShared/scopeHeuristics.js'
 import { buildFacultyContactRedirectReply } from '../libShared/humanHandoffHeuristics.js'
@@ -42,6 +45,23 @@ export function resolvePosMatriculaTarget(env = process.env) {
   const statusId =
     Number(env?.KOMMO_POS_MATRICULA_STATUS_ID) || POS_MATRICULA_STATUS_DEFAULT
   return { pipelineId, statusId }
+}
+
+/** Janela de recência do atalho pós-comprovante (default 7 dias). Ausente/inválido = dentro. */
+export function isComprovanteWithinShortcutWindow(captacaoComprovanteAt, env = process.env) {
+  const raw = Number(env?.INSCRICAO_COMPROVANTE_SHORTCUT_MAX_AGE_DAYS)
+  const maxDays = Number.isFinite(raw) && raw > 0 ? raw : 7
+  if (captacaoComprovanteAt == null || String(captacaoComprovanteAt).trim() === '') return true
+  const ts = Date.parse(String(captacaoComprovanteAt))
+  if (!Number.isFinite(ts)) return true
+  return Date.now() - ts <= maxDays * 24 * 60 * 60 * 1000
+}
+
+function normalizeReplyCompare(text) {
+  return String(text || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
 }
 
 function buildAgentReturn({ executionId, model, t0, reply, steps, toolCalls, ctxSnapshot, ok = true }) {
@@ -107,12 +127,34 @@ export async function tryHandleMatriculaAceitePagamentoFlow(env, input) {
   const candidatoId = String(row?.captacao_candidato_id || '').trim()
 
   if (status === INSCRICAO_FORM_STATUS_COMPROVANTE_RECEBIDO) {
+    if (!isComprovanteWithinShortcutWindow(row?.captacao_comprovante_at, env)) {
+      console.log(
+        `[inscricaoAceite] telefone=${telefone} comprovante_shortcut_skip reason=stale_comprovante`,
+      )
+      return null
+    }
+    if (!messageRelatesToComprovanteEmConferencia(userMessage)) {
+      console.log(
+        `[inscricaoAceite] telefone=${telefone} comprovante_shortcut_skip reason=off_topic`,
+      )
+      return null
+    }
     const followUp =
       messageLooksLikePosMatriculaFollowUp(userMessage) ||
-      /^\s*(ok|obrigad[oa]|certo|entendi|beleza|perfeito)[!.?\s]*$/i.test(String(userMessage || '').trim())
+      messageIsComprovanteShortcutAck(userMessage)
     const reply = followUp
       ? buildPosMatriculaAguardandoFinalizacaoReply({ pushName })
       : 'Já recebemos seu comprovante! Nossa equipe está conferindo e em breve você recebe as orientações por aqui, tudo bem?'
+    const lastAssist = lastAssistantText(input.historyMessages || [])
+    if (
+      lastAssist &&
+      normalizeReplyCompare(lastAssist) === normalizeReplyCompare(reply)
+    ) {
+      console.log(
+        `[inscricaoAceite] telefone=${telefone} comprovante_shortcut_skip reason=repeat_reply`,
+      )
+      return null
+    }
     return {
       handled: true,
       result: buildAgentReturn({
