@@ -17,9 +17,11 @@ import {
   assistantAskedExitChannelConfirm,
   messageConfirmsChannelExit,
   messageDeclinesChannelExit,
+  messageRequestsNewAttendance,
   SUMARE_ATENDIMENTO_URL,
   SUMARE_OUVIDORIA_URL,
 } from '../libShared/humanHandoffHeuristics.js'
+import { messageExpressesRenewedInscricaoInterest } from '../libShared/inscricaoDesistenciaHeuristics.js'
 import {
   buildAcademicAffairsRedirectReply,
   historyHasAcademicAffairsTopic,
@@ -160,17 +162,65 @@ async function finalizeChannelExit(env, { telefone, idLead, executionId, pushNam
   }
 }
 
+function normalizeReplyCompare(text) {
+  return String(text || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+}
+
+/** Reabre atendimento após saída de canal quando o lead demonstra interesse renovado. */
+async function reopenSaidaCanalForRenewedInterest(env, { telefone, userMessage, leadIdHint }) {
+  await ensureDadosClienteRow(env, {
+    telefone,
+    idLead: leadIdHint,
+    fields: {
+      [FORM_STATUS_FIELD]: null,
+      atendimento_ia: null,
+    },
+  }).catch(() => {})
+  await updateDadosCliente(env, {
+    telefone,
+    fields: {
+      [FORM_STATUS_FIELD]: null,
+      atendimento_ia: null,
+    },
+  }).catch(() => {})
+
+  console.log(
+    `[saidaCanal] REOPEN interesse_renovado telefone=${telefone} msg="${String(userMessage || '')
+      .slice(0, 100)
+      .replace(/\n/g, ' ')}"`,
+  )
+}
+
 /**
  * Handler "early" — roda ANTES do gate `atendimento_ia=pause`. Se o lead já
  * foi encaminhado (links enviados) e voltar a falar, reapresenta os links em
- * vez de ficar em silêncio.
+ * vez de ficar em silêncio — exceto retomada de contato (reabre) ou anti-repetição.
  */
 export async function tryHandleSaidaCanalJaEncerrada(env, input) {
-  const { telefone, userMessage, executionId, model, pushName, t0 } = input || {}
+  const { telefone, userMessage, executionId, model, pushName, t0, leadId: leadIdHint } = input || {}
   if (!telefone || !String(userMessage || '').trim()) return null
 
   const row = await fetchDadosClienteByTelefone(env, telefone, FORM_STATUS_FIELD).catch(() => null)
   if (row?.[FORM_STATUS_FIELD] !== HANDOFF_STATUS_LINKS_ENVIADOS) return null
+
+  if (
+    messageExpressesRenewedInscricaoInterest(userMessage) ||
+    messageRequestsNewAttendance(userMessage)
+  ) {
+    await reopenSaidaCanalForRenewedInterest(env, { telefone, userMessage, leadIdHint }).catch(
+      () => {},
+    )
+    return null
+  }
+
+  const reply = buildExitChannelAlreadyDoneReply({ pushName })
+  const lastAssist = lastAssistantText(input.historyMessages || [])
+  if (lastAssist && normalizeReplyCompare(lastAssist) === normalizeReplyCompare(reply)) {
+    return null
+  }
 
   return {
     handled: true,
@@ -178,7 +228,7 @@ export async function tryHandleSaidaCanalJaEncerrada(env, input) {
       executionId,
       model,
       t0,
-      reply: buildExitChannelAlreadyDoneReply({ pushName }),
+      reply,
       steps: [{ type: 'saida_canal_ja_encerrada' }],
       ctxSnapshot: { saidaCanal: HANDOFF_STATUS_LINKS_ENVIADOS },
     }),

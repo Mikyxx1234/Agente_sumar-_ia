@@ -134,3 +134,54 @@ export function messageDeclinesChannelExit(text) {
   if (/\bn[ãa]o\s+precisa\s+(encerrar|finalizar|encaminhar)\b/i.test(t)) return true
   return false
 }
+
+/**
+ * Após saída de canal concluída: lead pede atendimento novo ou abre dúvida.
+ * Usado para reabrir o fluxo em vez de repetir a resposta canônica de encerrado.
+ */
+export function messageRequestsNewAttendance(text) {
+  const raw = String(text || '').trim()
+  const t = normalizeMessageForScope(text).toLowerCase().trim()
+  if (!t) return false
+
+  if (
+    /\b(novo\s+atendimento|quero\s+(um\s+)?atendimento|preciso\s+de\s+(um\s+)?atendimento)\b/i.test(
+      t,
+    )
+  ) {
+    return true
+  }
+  if (
+    /\b(posso\s+tirar\s+uma\s+d[uú]vida|tenho\s+uma\s+d[uú]vida|me\s+ajuda|gostaria\s+de\s+informa[cç][oõ]es)\b/i.test(
+      t,
+    )
+  ) {
+    return true
+  }
+  if (/\bquero\s+saber(\s+mais)?\s+sobre\b/i.test(t)) return true
+
+  // Pergunta / menção substantiva a curso, valor, matrícula, boleto ou pagamento.
+  if (
+    /\b(curso|valores?|pre[cç]o|mensalidade|matr[ií]cula|inscri[cç][aã]o|boleto|pagamento)\b/i.test(
+      t,
+    )
+  ) {
+    if (/\?/.test(raw)) return true
+    if (
+      /\b(quero|sobre|quanto|como|quando|qual|pode|preciso|fiz|paguei|pagar|saber|tirar)\b/i.test(t)
+    ) {
+      return true
+    }
+  }
+
+  // Mensagem terminada em "?" com conteúdo substantivo (mais de 3 palavras).
+  if (/\?\s*$/.test(raw)) {
+    const words = t
+      .replace(/[?!.,;:…]+/g, ' ')
+      .split(/\s+/)
+      .filter(Boolean)
+    if (words.length > 3) return true
+  }
+
+  return false
+}

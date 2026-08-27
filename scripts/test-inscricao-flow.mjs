@@ -100,10 +100,14 @@ import {
 } from '../libShared/inscricaoFormHeuristics.js'
 import {
   buildFacultyContactRedirectReply,
+  buildExitChannelAlreadyDoneReply,
   replyLooksLikeFacultyContactRedirect,
+  messageRequestsNewAttendance,
+  HANDOFF_STATUS_LINKS_ENVIADOS,
   SUMARE_ATENDIMENTO_URL,
   SUMARE_OUVIDORIA_URL,
 } from '../libShared/humanHandoffHeuristics.js'
+import { tryHandleSaidaCanalJaEncerrada } from '../server/humanHandoffFlow.js'
 import { buildHumanHandoffReply } from '../libShared/scopeHeuristics.js'
 import { messageAsksAcademicAffairsSupportInText } from '../libShared/academicAffairsHeuristics.js'
 
@@ -1776,6 +1780,119 @@ section('30 — Atalho comprovante_pagamento_recebido: recência + relevância +
       userMessage: 'quanto custa pedagogia?',
     })
     assertEqual(r, null, '30.7 pergunta de preço genérica NÃO dispara atalho')
+  }
+}
+
+section('31 — Saída de canal já encerrada: reabertura + anti-repetição')
+
+{
+  assert(messageRequestsNewAttendance('novo atendimento'), '31.0 heurística: novo atendimento')
+  assert(
+    messageRequestsNewAttendance('quero saber mais sobre engenharia mecanica'),
+    '31.0b heurística: quero saber mais sobre',
+  )
+  assert(
+    messageRequestsNewAttendance('posso tirar uma duvida com vc ?'),
+    '31.0c heurística: tirar dúvida',
+  )
+  assert(!messageRequestsNewAttendance('Sim'), '31.0d heurística: Sim NÃO é retomada')
+  assert(!messageRequestsNewAttendance('Ok, obrigado'), '31.0e heurística: Ok obrigado NÃO é retomada')
+
+  const baseInput = {
+    telefone: '5511973511809',
+    executionId: 'EX-TEST-SAIDA',
+    model: 'gpt-4.1-mini',
+    pushName: 'Julio',
+    t0: Date.now(),
+    leadId: 999002,
+    historyMessages: [],
+  }
+  const rowEncerrada = {
+    id: 42,
+    id_lead: 999002,
+    inscricao_form_status: HANDOFF_STATUS_LINKS_ENVIADOS,
+    atendimento_ia: 'pause',
+  }
+
+  async function runSaidaShortcut({ userMessage, historyMessages = [], row = rowEncerrada }) {
+    installFetchStub(defaultSupabaseStub({ dadosClienteRow: row }))
+    try {
+      return await tryHandleSaidaCanalJaEncerrada(env, {
+        ...baseInput,
+        userMessage,
+        historyMessages,
+      })
+    } finally {
+      restoreFetch()
+    }
+  }
+
+  // 31.1 status saida_canal_concluida + "novo atendimento" → reabre (null)
+  {
+    const r = await runSaidaShortcut({ userMessage: 'novo atendimento' })
+    assertEqual(r, null, '31.1 "novo atendimento" reabre (não canônico)')
+  }
+
+  // 31.2 mesmo status + "quero saber mais sobre engenharia mecanica" → reabre
+  {
+    const r = await runSaidaShortcut({
+      userMessage: 'quero saber mais sobre engenharia mecanica',
+    })
+    assertEqual(r, null, '31.2 pergunta de curso reabre')
+  }
+
+  // 31.3 mesmo status + "posso tirar uma duvida com vc ?" → reabre
+  {
+    const r = await runSaidaShortcut({ userMessage: 'posso tirar uma duvida com vc ?' })
+    assertEqual(r, null, '31.3 tirar dúvida reabre')
+  }
+
+  // 31.4 mesmo status + "Sim" → resposta canônica
+  {
+    const r = await runSaidaShortcut({ userMessage: 'Sim' })
+    assert(r?.handled === true, '31.4 "Sim" dispara canônico')
+    assertEqual(
+      r?.result?.orchestratorSteps?.[0]?.type,
+      'saida_canal_ja_encerrada',
+      '31.4b step=saida_canal_ja_encerrada',
+    )
+    assert(
+      /atendimento por aqui foi encerrado conforme combinamos/i.test(r?.result?.reply || ''),
+      '31.4c reply canônica de canal encerrado',
+    )
+  }
+
+  // 31.5 mesmo status + "Ok, obrigado" → resposta canônica
+  {
+    const r = await runSaidaShortcut({ userMessage: 'Ok, obrigado' })
+    assert(r?.handled === true, '31.5 "Ok, obrigado" dispara canônico')
+    assert(
+      /atendimento por aqui foi encerrado conforme combinamos/i.test(r?.result?.reply || ''),
+      '31.5b reply canônica',
+    )
+  }
+
+  // 31.6 última resposta do assistente igual à canônica → NÃO repete
+  {
+    const expectedReply = buildExitChannelAlreadyDoneReply({ pushName: 'Julio' })
+    const r = await runSaidaShortcut({
+      userMessage: 'Sim',
+      historyMessages: [{ role: 'assistant', content: expectedReply }],
+    })
+    assertEqual(r, null, '31.6 anti-repetição: mesma reply do assistente → null')
+  }
+
+  // 31.7 status diferente → handler continua devolvendo null
+  {
+    const r = await runSaidaShortcut({
+      userMessage: 'Sim',
+      row: {
+        id: 43,
+        id_lead: 999002,
+        inscricao_form_status: 'aguardando_confirm_saida_canal',
+      },
+    })
+    assertEqual(r, null, '31.7 status diferente → null')
   }
 }
 
