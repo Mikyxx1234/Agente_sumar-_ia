@@ -12,6 +12,13 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-08-31 - API EduIT via `integrations.bwipo.com`
+- **Modelo usado**: Grok 4.6
+- **Decisão**: O agente passa a usar `EDUIT_BASE_URL=https://integrations.bwipo.com` (token Bearer `EDUIT_API_KEY`, sem hardcode no git). Homologado no negócio #25: health, deal, tags, conversa e mensagens 200. O CRM de UI (`sumare-ead.bwipo.com`) permanece para operadores; o agente fala com o host de integrações.
+- **Contexto**: Mudança no modo de uso do token — a key nova só autentica em `integrations.bwipo.com`.
+- **Alternativas descartadas**: Manter `sumare-ead.bwipo.com` com a key nova (não é o contrato atual); versionar o token no repositório (segredo).
+- **Impacto**: Produção (EasyPanel) precisa das duas variáveis atualizadas no restart. Sem o token novo no painel o deploy da URL sozinha não autentica.
+
 ### 2026-08-31 - Formulário de inscrição via tag EduIT "Formulario"
 - **Modelo usado**: Grok 4.6
 - **Decisão**: No backend EduIT, `deliverInscricaoForm` aplica a tag `Formulario` (`POST /api/deals/{dealId}/tags` `{ tagId: cmth9k8ne129wqm01rd7d464s }`). A automação do CRM escuta essa tag e envia o WhatsApp Flow "Candidato". Override `EDUIT_TAG_FORMULARIO_ID`. Sucesso move o deal para Inscrição e registra nota. Kommo inalterado. `POST /api/automations/{id}/run` fica no cliente mas não é o caminho quente (API key 401 + `allowManualRun: false`).

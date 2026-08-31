@@ -2,7 +2,7 @@
  * Cliente mínimo da API EduIT CRM — contratos homologados (Sprint A).
  *
  * Env:
- *   EDUIT_BASE_URL   ex: https://sumare-ead.bwipo.com
+ *   EDUIT_BASE_URL   ex: https://integrations.bwipo.com
  *   EDUIT_API_KEY    Bearer (nunca hardcode / nunca logar)
  *
  * Stages (defaults homologados; override via EDUIT_STAGE_*):
