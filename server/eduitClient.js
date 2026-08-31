@@ -24,6 +24,24 @@ export const EDUIT_DEFAULT_STAGES = {
   perdido: 'cmt38aydx01qbrw01sd97lahm',
 }
 
+/** Automação EduIT que envia o formulário (legado; o disparo atual é pela tag). */
+export const EDUIT_DEFAULT_FORMULARIO_AUTOMATION_ID = 'cmtbpgc9909ato701am40ffww'
+
+/** Tag EduIT "Formulario" — adicionar no deal dispara o WhatsApp Flow. */
+export const EDUIT_DEFAULT_FORMULARIO_TAG_ID = 'cmth9k8ne129wqm01rd7d464s'
+
+export function resolveEduitFormularioAutomationId(env = process.env) {
+  const fromEnv = String(env?.EDUIT_AUTOMATION_FORMULARIO_SUM_ID || '').trim()
+  if (fromEnv && isEduitCuid(fromEnv)) return fromEnv
+  return EDUIT_DEFAULT_FORMULARIO_AUTOMATION_ID
+}
+
+export function resolveEduitFormularioTagId(env = process.env) {
+  const fromEnv = String(env?.EDUIT_TAG_FORMULARIO_ID || '').trim()
+  if (fromEnv && isEduitCuid(fromEnv)) return fromEnv
+  return EDUIT_DEFAULT_FORMULARIO_TAG_ID
+}
+
 export function getEduitConfig(env = process.env) {
   return {
     base: String(env.EDUIT_BASE_URL || '').replace(/\/$/, ''),
@@ -544,6 +562,85 @@ export async function createDealNote(env, dealId, content) {
     return { ok: false, code: r.code || 'EDUIT_ERROR', status: r.status, error: summarizeError(r) }
   }
   return { ok: true, status: r.status, data: r.data, noteId: r.data?.id || null }
+}
+
+/**
+ * POST /api/deals/{cuid}/tags { tagId }
+ * Acrescenta a tag sem remover as existentes.
+ */
+export async function addDealTag(env, dealId, tagId) {
+  const id = String(dealId || '').trim()
+  const tag = String(tagId || '').trim()
+  if (!id || !isEduitCuid(id)) {
+    return { ok: false, code: 'MISSING_DEAL_ID', error: 'dealId CUID inválido' }
+  }
+  if (!tag || !isEduitCuid(tag)) {
+    return { ok: false, code: 'MISSING_TAG_ID', error: 'tagId CUID inválido' }
+  }
+  const r = await eduitFetch(env, `/api/deals/${encodeURIComponent(id)}/tags`, {
+    method: 'POST',
+    body: { tagId: tag },
+  })
+  if (!r.ok) {
+    return {
+      ok: false,
+      code: r.code || 'EDUIT_ERROR',
+      status: r.status,
+      error: summarizeError(r),
+      data: r.data,
+      dealId: id,
+      tagId: tag,
+    }
+  }
+  return {
+    ok: true,
+    status: r.status,
+    data: r.data,
+    dealId: id,
+    tagId: tag,
+  }
+}
+
+/**
+ * POST /api/automations/{cuid}/run { dealId }
+ * Dispara uma automação no negócio (substituto EduIT do salesbot Formulario_Sum).
+ */
+export async function runEduitAutomation(env, automationId, { dealId } = {}) {
+  const autoId = String(automationId || '').trim()
+  const id = String(dealId || '').trim()
+  if (!autoId || !isEduitCuid(autoId)) {
+    return { ok: false, code: 'MISSING_AUTOMATION_ID', error: 'automationId CUID inválido' }
+  }
+  if (!id || !isEduitCuid(id)) {
+    return { ok: false, code: 'MISSING_DEAL_ID', error: 'dealId CUID inválido' }
+  }
+  const r = await eduitFetch(env, `/api/automations/${encodeURIComponent(autoId)}/run`, {
+    method: 'POST',
+    body: { dealId: id },
+  })
+  if (!r.ok) {
+    const code =
+      r.status === 401 || r.status === 403
+        ? 'EDUIT_AUTOMATION_FORBIDDEN'
+        : r.code || 'EDUIT_ERROR'
+    return {
+      ok: false,
+      code,
+      status: r.status,
+      error: summarizeError(r),
+      data: r.data,
+      automationId: autoId,
+      dealId: id,
+    }
+  }
+  return {
+    ok: true,
+    status: r.status,
+    data: r.data,
+    runId: r.data?.id || r.data?.runId || null,
+    automationId: autoId,
+    dealId: id,
+  }
 }
 
 /** GET /api/conversations?contactId=<cuid> */

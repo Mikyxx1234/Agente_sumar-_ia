@@ -5,18 +5,24 @@
 
 import {
   EDUIT_DEFAULT_STAGES,
+  EDUIT_DEFAULT_FORMULARIO_AUTOMATION_ID,
+  EDUIT_DEFAULT_FORMULARIO_TAG_ID,
   isEduitCuid,
   pickPreferredDeal,
   pickPreferredContact,
   pickPreferredConversation,
   extractMessageId,
   resolveEduitStages,
+  resolveEduitFormularioAutomationId,
+  resolveEduitFormularioTagId,
   eduitAgentStageIds,
   getDealById,
   contactPhoneDigits,
   listConversationMessages,
   normalizeEduitConversationMessage,
   parseEduitMessageAt,
+  runEduitAutomation,
+  addDealTag,
 } from '../server/eduitClient.js'
 import {
   getCrmBackend,
@@ -928,6 +934,126 @@ expect('extractMessageId {}', extractMessageId({}) == null)
   })
   expect('stale suppress hints', staleHints.suppressStaleFormHints === true)
   expect('stale pede clarificacao', /clarifica/i.test(staleHints.driftHint?.content || ''))
+}
+
+{
+  expect(
+    'form automation default id',
+    resolveEduitFormularioAutomationId({}) === EDUIT_DEFAULT_FORMULARIO_AUTOMATION_ID,
+  )
+  expect(
+    'form automation env override',
+    resolveEduitFormularioAutomationId({
+      EDUIT_AUTOMATION_FORMULARIO_SUM_ID: 'cmtbpgc9909ato701am40ffww',
+    }) === 'cmtbpgc9909ato701am40ffww',
+  )
+  expect(
+    'form automation ignora override invalido',
+    resolveEduitFormularioAutomationId({ EDUIT_AUTOMATION_FORMULARIO_SUM_ID: '25' }) ===
+      EDUIT_DEFAULT_FORMULARIO_AUTOMATION_ID,
+  )
+
+  const missingDeal = await runEduitAutomation(
+    { EDUIT_BASE_URL: 'https://example.invalid', EDUIT_API_KEY: 'x' },
+    EDUIT_DEFAULT_FORMULARIO_AUTOMATION_ID,
+    { dealId: '25' },
+  )
+  expect('run automation rejeita deal numerico', missingDeal.code === 'MISSING_DEAL_ID')
+
+  const missingAuto = await runEduitAutomation(
+    { EDUIT_BASE_URL: 'https://example.invalid', EDUIT_API_KEY: 'x' },
+    '25',
+    { dealId: EDUIT_DEFAULT_STAGES.atendimento },
+  )
+  expect('run automation rejeita automation numerica', missingAuto.code === 'MISSING_AUTOMATION_ID')
+
+  const origFetch = globalThis.fetch
+  let captured = null
+  globalThis.fetch = async (url, opts) => {
+    captured = { url: String(url), method: opts?.method, body: opts?.body }
+    return new Response(JSON.stringify({ id: 'run_ok' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+  try {
+    const okRun = await runEduitAutomation(
+      { EDUIT_BASE_URL: 'https://crm.example', EDUIT_API_KEY: 'token' },
+      EDUIT_DEFAULT_FORMULARIO_AUTOMATION_ID,
+      { dealId: 'cmt4gmynp08xrlw01flba25la' },
+    )
+    expect('run automation ok mock', okRun.ok === true && okRun.runId === 'run_ok')
+    expect(
+      'run automation path',
+      captured?.url ===
+        `https://crm.example/api/automations/${EDUIT_DEFAULT_FORMULARIO_AUTOMATION_ID}/run`,
+    )
+    expect('run automation method post', captured?.method === 'POST')
+    expect(
+      'run automation body dealId',
+      JSON.parse(captured?.body || '{}').dealId === 'cmt4gmynp08xrlw01flba25la',
+    )
+  } finally {
+    globalThis.fetch = origFetch
+  }
+}
+
+{
+  expect(
+    'form tag default id',
+    resolveEduitFormularioTagId({}) === EDUIT_DEFAULT_FORMULARIO_TAG_ID,
+  )
+  expect(
+    'form tag env override',
+    resolveEduitFormularioTagId({ EDUIT_TAG_FORMULARIO_ID: EDUIT_DEFAULT_FORMULARIO_TAG_ID }) ===
+      EDUIT_DEFAULT_FORMULARIO_TAG_ID,
+  )
+  expect(
+    'form tag ignora override invalido',
+    resolveEduitFormularioTagId({ EDUIT_TAG_FORMULARIO_ID: 'Formulario' }) ===
+      EDUIT_DEFAULT_FORMULARIO_TAG_ID,
+  )
+  const missingTagDeal = await addDealTag(
+    { EDUIT_BASE_URL: 'https://example.invalid', EDUIT_API_KEY: 'x' },
+    '25',
+    EDUIT_DEFAULT_FORMULARIO_TAG_ID,
+  )
+  expect('add tag rejeita deal numerico', missingTagDeal.code === 'MISSING_DEAL_ID')
+  const missingTag = await addDealTag(
+    { EDUIT_BASE_URL: 'https://example.invalid', EDUIT_API_KEY: 'x' },
+    'cmt4gmynp08xrlw01flba25la',
+    'Formulario',
+  )
+  expect('add tag rejeita tag invalida', missingTag.code === 'MISSING_TAG_ID')
+
+  const origFetch = globalThis.fetch
+  let captured = null
+  globalThis.fetch = async (url, opts) => {
+    captured = { url: String(url), method: opts?.method, body: opts?.body }
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+  try {
+    const tagged = await addDealTag(
+      { EDUIT_BASE_URL: 'https://crm.example', EDUIT_API_KEY: 'token' },
+      'cmt4gmynp08xrlw01flba25la',
+      EDUIT_DEFAULT_FORMULARIO_TAG_ID,
+    )
+    expect('add tag ok mock', tagged.ok === true)
+    expect(
+      'add tag path',
+      captured?.url === 'https://crm.example/api/deals/cmt4gmynp08xrlw01flba25la/tags',
+    )
+    expect('add tag method post', captured?.method === 'POST')
+    expect(
+      'add tag body tagId',
+      JSON.parse(captured?.body || '{}').tagId === EDUIT_DEFAULT_FORMULARIO_TAG_ID,
+    )
+  } finally {
+    globalThis.fetch = origFetch
+  }
 }
 
 console.log(`\n${stats.passed}/${stats.total} passed`)

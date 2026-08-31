@@ -32,6 +32,15 @@ import {
 import { fetchLeadFormSnapshot } from './inscricaoKommoFields.js'
 import { sendFormSumarTemplate } from './whatsappTemplateSender.js'
 import { runKommoSalesbot } from './kommoSalesbot.js'
+import { isEduitBackend } from './crmAdapter.js'
+import {
+  addDealTag,
+  createDealNote as createEduitDealNote,
+  isEduitCuid,
+  resolveEduitFormularioTagId,
+  resolveEduitStages,
+  updateDealStage,
+} from './eduitClient.js'
 import { tryHandlePoloPreFormFlow } from './inscricaoPoloFlow.js'
 import { findLeadByPhone } from './kommoClient.js'
 import {
@@ -203,7 +212,57 @@ async function resolvePoloEscolhidoParaForm(env, telefone, leadId) {
   return { ok: false }
 }
 
-/** Dispara salesbot Formulario_Sum ou template Meta (fallback legado). */
+async function resolveEduitDealIdForForm(env, { leadId, telefone }) {
+  if (isEduitCuid(leadId)) return String(leadId).trim()
+  if (!telefone) return null
+  const row = await fetchDadosClienteByTelefone(env, telefone, 'eduit_deal_id,id_lead')
+  const fromRow = row?.eduit_deal_id || row?.id_lead
+  return isEduitCuid(fromRow) ? String(fromRow).trim() : null
+}
+
+async function deliverInscricaoFormViaEduitTag(env, { telefone, leadId, executionId }) {
+  const dealId = await resolveEduitDealIdForForm(env, { leadId, telefone })
+  if (!dealId) {
+    return {
+      delivery: 'eduit_tag',
+      result: {
+        ok: false,
+        code: 'LEAD_NOT_FOUND',
+        error: 'Deal EduIT não localizado — necessário para aplicar a tag Formulario.',
+      },
+    }
+  }
+
+  const tagId = resolveEduitFormularioTagId(env)
+  const tagged = await addDealTag(env, dealId, tagId)
+  const sendOk = Boolean(tagged.ok)
+  if (sendOk) {
+    const stages = resolveEduitStages(env)
+    if (stages.inscricao) {
+      await updateDealStage(env, dealId, stages.inscricao).catch(() => {})
+    }
+    const note = `Tag Formulario aplicada (${tagId}) — ${executionId || ''}`.trim()
+    await createEduitDealNote(env, dealId, note).catch(() => {})
+  } else {
+    console.warn(
+      `[inscricaoForm] eduit tag failed deal=${dealId} tag=${tagId} code=${tagged.code || 'n/a'} status=${tagged.status || 'n/a'}`,
+    )
+  }
+  return {
+    delivery: 'eduit_tag',
+    result: {
+      ok: sendOk,
+      skipped: false,
+      code: tagged.code || (sendOk ? 'FORMULARIO_TAG_APPLIED' : 'FORMULARIO_TAG_FAILED'),
+      tagId,
+      dealId,
+      status: tagged.status,
+      error: tagged.error || null,
+    },
+  }
+}
+
+/** Dispara salesbot Formulario_Sum, automação EduIT ou template Meta (fallback legado). */
 export async function deliverInscricaoForm(env, { telefone, leadId, executionId, forceResend = false }) {
   if (!forceResend && telefone) {
     const guardRow = await fetchDadosClienteByTelefone(env, telefone, DADOS_CLIENTE_FORM_GUARD_SELECT)
@@ -229,6 +288,10 @@ export async function deliverInscricaoForm(env, { telefone, leadId, executionId,
       await moveLeadToInscricaoIfNeeded(env, leadId, { reason: 'formulario_sum_template' }).catch(() => {})
     }
     return { delivery: 'whatsapp_template', result }
+  }
+
+  if (isEduitBackend(env)) {
+    return deliverInscricaoFormViaEduitTag(env, { telefone, leadId, executionId })
   }
 
   if (leadId == null) {

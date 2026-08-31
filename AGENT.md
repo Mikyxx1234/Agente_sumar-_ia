@@ -12,6 +12,20 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-08-31 - Formulário de inscrição via tag EduIT "Formulario"
+- **Modelo usado**: Grok 4.6
+- **Decisão**: No backend EduIT, `deliverInscricaoForm` aplica a tag `Formulario` (`POST /api/deals/{dealId}/tags` `{ tagId: cmth9k8ne129wqm01rd7d464s }`). A automação do CRM escuta essa tag e envia o WhatsApp Flow "Candidato". Override `EDUIT_TAG_FORMULARIO_ID`. Sucesso move o deal para Inscrição e registra nota. Kommo inalterado. `POST /api/automations/{id}/run` fica no cliente mas não é o caminho quente (API key 401 + `allowManualRun: false`).
+- **Contexto**: Gatilho manual da automação foi trocado para tag. Teste no negócio #25 aplicou a tag e o Flow saiu no WhatsApp às 13:21 UTC.
+- **Alternativas descartadas**: Continuar no `/run` da automação (401 na API key); salesbot Kommo.
+- **Impacto**: A tag `BV_sumare` permanece; o POST só acrescenta. Reaplicar a tag reenvia o Flow.
+
+### 2026-08-31 - Formulário de inscrição via automação EduIT
+- **Modelo usado**: Grok 4.6
+- **Decisão**: No backend EduIT, `deliverInscricaoForm` dispara `POST /api/automations/{id}/run` com `{ dealId }` em vez do salesbot Kommo Formulario_Sum. ID padrão `cmtbpgc9909ato701am40ffww`, override `EDUIT_AUTOMATION_FORMULARIO_SUM_ID`. Sucesso move o deal para a etapa Inscrição e registra nota. Kommo inalterado.
+- **Contexto**: CRM EduIT não tem salesbot; a automação do CRM é o canal que envia o formulário no WhatsApp.
+- **Alternativas descartadas**: Continuar no salesbot Kommo (IDs numéricos quebram no EduIT); enviar o form por texto do agente (não abre o fluxo nativo de captação).
+- **Impacto**: A API key precisa de permissão em `/api/automations`. Sem isso o disparo retorna 401 e o agente não afirma que o formulário foi enviado.
+
 ### 2026-08-27 - Atalhos de estado terminal exigem recência, relevância e não-repetição
 - **Modelo usado**: Opus (principal), implementação Cursor Grok 4.5 Executor
 - **Decisão**: Atalhos "early" que respondem só pelo `inscricao_form_status` deixam de capturar o turno incondicionalmente. (1) `comprovante_pagamento_recebido` em `inscricaoAceitePagamentoFlow`: só dispara com `captacao_comprovante_at` dentro de `INSCRICAO_COMPROVANTE_SHORTCUT_MAX_AGE_DAYS` (default 7; ausente/inválido = dentro), mensagem aprovada por `messageRelatesToComprovanteEmConferencia` e resposta diferente da última do assistente; caso contrário retorna `null`. (2) `saida_canal_concluida` em `humanHandoffFlow`: retomada de contato (`messageExpressesRenewedInscricaoInterest` ou `messageRequestsNewAttendance`) limpa `inscricao_form_status`/`atendimento_ia` e devolve o turno ao fluxo normal, com a mesma guarda anti-repetição. `desistencia_concluida` fica inalterado (já tem revogação por interesse renovado e zero disparos em 72h).
