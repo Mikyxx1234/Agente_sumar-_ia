@@ -12,6 +12,7 @@ const ALLOWED_URL_RX = [
   /\/atendimento\/?/i,
   /\/ouvidoria/i,
   /\/vem-pra-sumare\/vestibular\/contrato/i,
+  /matricula\.sumare\.edu\.br\/vestibular\/(?:pagamento|termo-contrato)/i,
   /api-captacao\.sumare\.edu\.br/i,
 ]
 

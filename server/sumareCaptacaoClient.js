@@ -1,12 +1,15 @@
 /**
- * API Captação Sumaré — espelha o fluxo n8n:
- *   gerar candidato → status → aceite contrato → link portal
+ * API Captação Sumaré — vestibular agora vai pelo portal novo
+ * (matricula.sumare.edu.br / Softsy + api-inscricao-educsy).
+ * O GET /api-ingresso/candidato/gerar fica só para transferência ou
+ * SUMARE_INSCRICAO_PATH=legacy.
  *
  * Env:
  *   SUMARE_CAPTACAO_ENABLED=true
  *   SUMARE_CAPTACAO_BASE_URL=https://api-captacao.sumare.edu.br
  *   SUMARE_CAPTACAO_TOKEN=Bearer ...
- *   SUMARE_CONTRATO_PORTAL_URL=https://sumare.edu.br/vem-pra-sumare/vestibular/contrato
+ *   SUMARE_SOFTSY_LOGIN / SUMARE_SOFTSY_PASSWORD
+ *   SUMARE_MATRICULA_PORTAL_URL=https://matricula.sumare.edu.br
  */
 
 import { getDefaultTipoIngresso } from './inscricaoConfig.js'
@@ -21,6 +24,11 @@ import {
   parseGerarCandidatoPayload,
   classifyGerarCandidatoOutcome,
 } from '../libShared/captacaoGerarOutcome.js'
+import {
+  isSumareEducsyEnabled,
+  runEducsyInscricaoWorkflow,
+  buildMatriculaPagamentoUrl,
+} from './sumareMatriculaEducsyClient.js'
 
 export { parseGerarCandidatoPayload, classifyGerarCandidatoOutcome } from '../libShared/captacaoGerarOutcome.js'
 
@@ -427,22 +435,16 @@ export function statusImpliesPagamentoPhase(statusStr) {
 /**
  * URL do portal a enviar ao candidato.
  *
- * SEMPRE devolve o link de `/contrato` — a página "Termos de Contrato" com
- * "Clique para abrir", "Li e concordo" e "ASSINAR CONTRATO". Mesmo quando a
- * API Sumaré reporta o candidato em fase de pagamento, mandamos a tela de
- * contrato porque ela já redireciona para pagamento quando o aceite está OK
- * (UX melhor: tela única coberta para qualquer estado do candidato).
- *
- * O campo `phase` é mantido para telemetria/log: indica se a API estava em
- * pagamento ou contrato, mas a URL devolvida é sempre `/contrato`.
+ * Portal oficial: matricula.sumare.edu.br/Vestibular/pagamento?cpf=&utm_campaign=
+ * (HAR 2026-09-01). O CPF é a chave; o código 2026… sozinho não abre o cadastro.
  *
  * @returns {{ url: string, phase: 'contrato'|'pagamento' }}
  */
-export function resolvePortalUrlForCandidato(env, candidatoId, statusStr) {
-  const id = String(candidatoId || '').trim()
-  if (!id) return { url: '', phase: 'contrato' }
+export function resolvePortalUrlForCandidato(env, candidatoId, statusStr, extras = {}) {
   const phase = statusImpliesPagamentoPhase(statusStr) ? 'pagamento' : 'contrato'
-  return { url: buildContratoPortalUrl(env, id), phase }
+  const cpf = normalizeCpf(extras.cpf || extras.snapshot?.cpf)
+  if (cpf) return { url: buildMatriculaPagamentoUrl(env, { cpf }), phase: 'pagamento' }
+  return { url: '', phase }
 }
 
 function extractUrlFromPayload(payload) {
@@ -656,6 +658,30 @@ export async function runCaptacaoContratoWorkflow(env, { snapshot, telefone, cap
     }
   }
 
+  const inscricaoPath = String(env.SUMARE_INSCRICAO_PATH || 'educsy').trim().toLowerCase()
+  const forceLegacy =
+    inscricaoPath === 'legacy' || inscricaoPath === 'captacao' || inscricaoPath === 'gerar'
+  if (!forceLegacy && !isTransferenciaSnapshot(snapshot)) {
+    if (!isSumareEducsyEnabled(env)) {
+      return {
+        ok: false,
+        code: 'SOFTSY_NOT_CONFIGURED',
+        steps,
+        error:
+          'Inscrição do portal novo exige SUMARE_SOFTSY_LOGIN e SUMARE_SOFTSY_PASSWORD',
+        requestedCurso,
+      }
+    }
+    if (!useCandidatoId) {
+      const educsy = await runEducsyInscricaoWorkflow(env, { snapshot, params, telefone })
+      return {
+        ...educsy,
+        requestedCurso: educsy.requestedCurso || requestedCurso,
+        gerarOutcome: educsy.gerarOutcome || null,
+      }
+    }
+  }
+
   let candidatoId = useCandidatoId || null
   let gerar = { ok: true, data: null, status: null, skipped: Boolean(useCandidatoId) }
 
@@ -770,15 +796,12 @@ export async function runCaptacaoContratoWorkflow(env, { snapshot, telefone, cap
     apiStatus: statusStrFinal,
   })
 
-  const portalResolved = resolvePortalUrlForCandidato(env, candidatoId, statusStrFinal)
+  const portalResolved = resolvePortalUrlForCandidato(env, candidatoId, statusStrFinal, {
+    cpf: params.cpf,
+  })
   let contractUrl = extractUrlFromPayload(aceite.data)
-  if (!contractUrl || !/^https?:\/\//i.test(contractUrl)) {
-    contractUrl = portalResolved.url
-  } else if (/meiopagamento/i.test(contractUrl)) {
-    // Política: enviar SEMPRE o link `/contrato` (tela "ASSINAR CONTRATO"),
-    // mesmo quando a API devolveu `/meioPagamento`. A tela de contrato já
-    // redireciona pro pagamento quando o aceite está OK.
-    contractUrl = portalResolved.url
+  if (!contractUrl || !/^https?:\/\//i.test(contractUrl) || /sumare\.edu\.br\/vem-pra-sumare/i.test(contractUrl) || /meiopagamento/i.test(contractUrl)) {
+    contractUrl = portalResolved.url || buildMatriculaPagamentoUrl(env, { cpf: params.cpf })
   }
 
   if (!aceite.ok && !aceite.skipped) {

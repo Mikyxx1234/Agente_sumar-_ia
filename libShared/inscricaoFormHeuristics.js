@@ -682,7 +682,10 @@ export function buildContratoAceiteLinkReply(opts = {}) {
   if (!link) return buildInscricaoFormCompleteReply({ pushName: opts.pushName, ok: false })
 
   const phase =
-    opts.portalPhase === 'pagamento' || /meiopagamento/i.test(link) ? 'pagamento' : 'contrato'
+    opts.portalPhase === 'pagamento' ||
+    /meiopagamento|matricula\.sumare\.edu\.br\/vestibular\/pagamento/i.test(link)
+      ? 'pagamento'
+      : 'contrato'
 
   if (phase === 'pagamento') {
     return (
@@ -718,7 +721,10 @@ export function buildContratoLinkResendReply(opts = {}) {
     )
   }
   const phase =
-    opts.portalPhase === 'pagamento' || /meiopagamento/i.test(link) ? 'pagamento' : 'contrato'
+    opts.portalPhase === 'pagamento' ||
+    /meiopagamento|matricula\.sumare\.edu\.br\/vestibular\/pagamento/i.test(link)
+      ? 'pagamento'
+      : 'contrato'
   if (phase === 'pagamento') {
     return (
       `Sem problema${nameBit}! Segue novamente o link para *pagamento da matrícula* (PIX, boleto ou cartão):\n\n` +

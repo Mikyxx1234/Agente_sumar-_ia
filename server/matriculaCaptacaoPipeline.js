@@ -327,7 +327,9 @@ export async function finalizeCaptacaoForCandidato(env, ctx) {
   const { telefone, leadId, pushName, executionId, candidatoId, snapshot } = ctx
   const statusRes = await consultarStatusCandidato(env, candidatoId)
   const statusStr = extractCandidatoStatusString(statusRes.data)
-  const portal = resolvePortalUrlForCandidato(env, candidatoId, statusStr)
+  const portal = resolvePortalUrlForCandidato(env, candidatoId, statusStr, {
+    cpf: snapshot?.cpf,
+  })
 
   await persistCaptacaoResult(env, telefone, {
     captacao_candidato_id: String(candidatoId),

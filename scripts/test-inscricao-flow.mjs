@@ -62,6 +62,10 @@ import {
   kommoDataNascLooksInvalid,
 } from '../server/sumareCaptacaoClient.js'
 import {
+  buildMatriculaPagamentoUrl,
+  normalizeEducsyTurno,
+} from '../server/sumareMatriculaEducsyClient.js'
+import {
   evaluateKommoExpressReadiness,
 } from '../server/kommoCardMirror.js'
 import {
@@ -496,38 +500,40 @@ section('8. Auto-sync de inscricao_form_status pelo reply do LLM (Fix 1)')
   )
 }
 
-section('9. Link de contrato sempre na tela "ASSINAR CONTRATO" (/contrato)')
+section('9. Link do portal novo (matricula.sumare.edu.br / pagamento?cpf=)')
 
 {
   const envPortal = {
-    SUMARE_CONTRATO_PORTAL_URL: 'https://sumare.edu.br/vem-pra-sumare/vestibular/contrato',
+    SUMARE_MATRICULA_PORTAL_URL: 'https://matricula.sumare.edu.br',
+    SUMARE_MATRICULA_UTM_CAMPAIGN: 'sumareeadpolos',
   }
   const id = '2026700000005585'
+  const cpf = '22449122800'
 
-  // Status sem fase de pagamento → contrato
-  const r1 = resolvePortalUrlForCandidato(envPortal, id, 'aceite_contrato')
-  assertEqual(r1.url, `https://sumare.edu.br/vem-pra-sumare/vestibular/contrato?id=${id}`, '9.1 status contrato → URL /contrato')
-  assertEqual(r1.phase, 'contrato', '9.1b phase=contrato')
-
-  // Status "meioPagamento" → MESMO ASSIM /contrato (UX: tela única)
-  const r2 = resolvePortalUrlForCandidato(envPortal, id, 'meioPagamento')
-  assertEqual(r2.url, `https://sumare.edu.br/vem-pra-sumare/vestibular/contrato?id=${id}`, '9.2 status meioPagamento → URL /contrato (forçado)')
-  assertEqual(r2.phase, 'pagamento', '9.2b phase=pagamento (telemetria preservada)')
-
-  // Status "pagamento" → também /contrato
-  const r3 = resolvePortalUrlForCandidato(envPortal, id, 'pagamento')
-  assertEqual(r3.url, `https://sumare.edu.br/vem-pra-sumare/vestibular/contrato?id=${id}`, '9.3 status pagamento → URL /contrato')
-
-  // candidatoId vazio → url vazio
-  const r4 = resolvePortalUrlForCandidato(envPortal, '', 'aceite_contrato')
-  assertEqual(r4.url, '', '9.4 candidatoId vazio → url vazio')
-
-  // Sem env explícito → usa default oficial Sumaré
-  const r5 = resolvePortalUrlForCandidato({}, id, null)
-  assert(
-    r5.url.startsWith('https://sumare.edu.br/vem-pra-sumare/vestibular/contrato?id='),
-    '9.5 default env → URL canônica /contrato',
+  const r1 = resolvePortalUrlForCandidato(envPortal, id, 'aceite_contrato', { cpf })
+  assertEqual(
+    r1.url,
+    `https://matricula.sumare.edu.br/Vestibular/pagamento?cpf=${cpf}&utm_campaign=sumareeadpolos`,
+    '9.1 com CPF → /Vestibular/pagamento',
   )
+  assertEqual(r1.phase, 'pagamento', '9.1b phase=pagamento')
+
+  const r2 = resolvePortalUrlForCandidato(envPortal, id, 'meioPagamento', { cpf })
+  assertEqual(r2.url, r1.url, '9.2 status meioPagamento → mesmo link de pagamento')
+
+  const r3 = resolvePortalUrlForCandidato(envPortal, id, 'pagamento', { cpf: '224.491.228-00' })
+  assertEqual(r3.url, r1.url, '9.3 CPF mascarado normaliza para 11 dígitos')
+
+  const r4 = resolvePortalUrlForCandidato(envPortal, '', 'aceite_contrato')
+  assertEqual(r4.url, '', '9.4 sem CPF → url vazia (não cai no portal antigo)')
+
+  const r5 = buildMatriculaPagamentoUrl({}, { cpf })
+  assert(
+    r5.startsWith('https://matricula.sumare.edu.br/Vestibular/pagamento?cpf='),
+    '9.5 default env → portal matricula.sumare.edu.br',
+  )
+  assertEqual(normalizeEducsyTurno('SEMIPRESENCIAL'), 'SEMI', '9.6 turno antigo → SEMI')
+  assertEqual(normalizeEducsyTurno('EAD'), 'EAD', '9.7 turno EAD permanece')
 }
 
 section('10. Plano_Inscricao_CardKommo — fluxo express via card Sumaré Comercial')

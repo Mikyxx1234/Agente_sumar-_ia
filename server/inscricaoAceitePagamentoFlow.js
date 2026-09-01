@@ -83,7 +83,7 @@ async function getClienteRow(env, telefone) {
   return fetchDadosClienteByTelefone(
     env,
     telefone,
-    `${FORM_STATUS_FIELD},id_lead,captacao_contrato_link,captacao_candidato_id,captacao_comprovante_at`,
+    `${FORM_STATUS_FIELD},id_lead,captacao_contrato_link,captacao_candidato_id,captacao_comprovante_at,kommo_cpf`,
   )
 }
 
@@ -209,7 +209,9 @@ export async function tryHandleMatriculaAceitePagamentoFlow(env, input) {
     if (candidatoId) {
       const statusRes = await consultarStatusCandidato(env, candidatoId)
       const statusStr = extractCandidatoStatusString(statusRes.data)
-      const portal = resolvePortalUrlForCandidato(env, candidatoId, statusStr)
+      const portal = resolvePortalUrlForCandidato(env, candidatoId, statusStr, {
+        cpf: row?.kommo_cpf || row?.cpf,
+      })
       if (portal.url) contractUrl = portal.url
 
       const apiStatus = await fetchCandidatoStatus(env, candidatoId)

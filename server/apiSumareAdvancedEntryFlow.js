@@ -107,7 +107,9 @@ async function lookupCandidatoByGerar(env, snapshot, telefone) {
 async function persistCandidatoForPagamento(env, { telefone, leadId, candidatoId, snapshot }) {
   const statusRes = await consultarStatusCandidato(env, candidatoId)
   const statusStr = extractCandidatoStatusString(statusRes.data)
-  const portal = resolvePortalUrlForCandidato(env, candidatoId, statusStr)
+  const portal = resolvePortalUrlForCandidato(env, candidatoId, statusStr, {
+    cpf: snapshot?.cpf,
+  })
   await updateDadosCliente(env, {
     telefone,
     fields: {

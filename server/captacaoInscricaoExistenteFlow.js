@@ -56,6 +56,7 @@ async function getRow(env, telefone) {
       'captacao_curso_codigo',
       'captacao_curso_nome',
       'captacao_contrato_link',
+      'kommo_cpf',
     ].join(','),
   )
 }
@@ -147,7 +148,9 @@ export async function tryHandleCaptacaoInscricaoExistenteFlow(env, input) {
   if (messageDeclinesNovaInscricao(userMessage) && priorId) {
     const statusRes = await consultarStatusCandidato(env, priorId)
     const statusStr = extractCandidatoStatusString(statusRes.data)
-    const portal = resolvePortalUrlForCandidato(env, priorId, statusStr)
+    const portal = resolvePortalUrlForCandidato(env, priorId, statusStr, {
+      cpf: row?.kommo_cpf || row?.cpf,
+    })
     const reply = buildMantemInscricaoExistenteReply({
       pushName,
       contractUrl: portal.url,

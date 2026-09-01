@@ -12,6 +12,14 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-09-01 - Inscrição no portal novo (matricula.sumare.edu.br / Softsy + educsy)
+
+- **Modelo usado**: Cursor Grok 4.6
+- **Decisão**: O vestibular deixa de usar `GET /api-ingresso/candidato/gerar` + link `sumare.edu.br/vem-pra-sumare/vestibular/contrato?id=`. O caminho oficial (HAR do site) é: login Softsy → oferta (`turnos/cursos/escolas/infoValor`) → `POST /candidato/v1/pessoa-candidato` → `POST /api-inscricao-educsy/inscricao` → `assinar-sem-token` → link `https://matricula.sumare.edu.br/Vestibular/pagamento?cpf={cpf}&utm_campaign=sumareeadpolos`. `GET /gerar` fica só para transferência ou `SUMARE_INSCRICAO_PATH=legacy`. Sem `SUMARE_SOFTSY_LOGIN/PASSWORD` a inscrição vestibular falha (`SOFTSY_NOT_CONFIGURED`) em vez de cair no portal antigo.
+- **Contexto**: Cadastro da Alessandra #23868 nasceu no portal antigo (`meioPagamento?cobranca=&id=`). O negócio confirmou que a tela correta é a de `matricula.sumare.edu.br/Vestibular/pagamento`.
+- **Alternativas descartadas**: Só trocar a URL mantendo `/gerar` (o candidato continua no funil antigo); fallback silencioso para `/gerar` quando Softsy não está no env (repetiria o erro).
+- **Impacto**: Produção precisa de `SUMARE_SOFTSY_LOGIN` e `SUMARE_SOFTSY_PASSWORD` no EasyPanel. O WhatsApp passa a mandar o link com CPF, não com o código 2026.
+
 ### 2026-08-31 - API EduIT via `integrations.bwipo.com`
 - **Modelo usado**: Grok 4.6
 - **Decisão**: O agente passa a usar `EDUIT_BASE_URL=https://integrations.bwipo.com` (token Bearer `EDUIT_API_KEY`, sem hardcode no git). Homologado no negócio #25: health, deal, tags, conversa e mensagens 200. O CRM de UI (`sumare-ead.bwipo.com`) permanece para operadores; o agente fala com o host de integrações.
@@ -32,6 +40,29 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 - **Contexto**: CRM EduIT não tem salesbot; a automação do CRM é o canal que envia o formulário no WhatsApp.
 - **Alternativas descartadas**: Continuar no salesbot Kommo (IDs numéricos quebram no EduIT); enviar o form por texto do agente (não abre o fluxo nativo de captação).
 - **Impacto**: A API key precisa de permissão em `/api/automations`. Sem isso o disparo retorna 401 e o agente não afirma que o formulário foi enviado.
+
+### 2026-08-29 - Flow Meta + nota na conversa EduIT (sem reenviar WhatsApp)
+- **Modelo usado**: Cursor Grok 4.6
+- **Decisão**: Enviar o Formulario Candidato pela Cloud API (`flow_id` `2505237399980312`). Em seguida gravar na conversa EduIT com `POST /api/conversations/{id}/messages` `{ messageType: "note", content }` — único shape que **não** dispara WhatsApp de novo. `POST` texto/interactive no EduIT reenvia o canal. A nota é `isPrivate` (aparece no thread do CRM; o histórico da IA ignora `isPrivate`).
+- **Contexto**: Envio Meta no #25 chegou no WhatsApp 09:10 e não no CRM, porque o Graph API não passa pelo EduIT. `POST …/flow` da API key ainda é 401.
+- **Alternativas descartadas**: Dual-write texto no EduIT (reenvia); esperar webhook Meta→EduIT (não espelhou outbound).
+- **Impacto**: `deliverInscricaoForm` no backend eduit usa Meta Flow + nota. Env `WHATSAPP_META_FLOW_FORMULARIO_ID`.
+
+### 2026-08-29 - Disparo do formulário EduIT = POST conversation/flow (não automations/run)
+- **Modelo usado**: Opus (principal)
+- **Decisão**: O envio real do Form Sumar no EduIT (UI → Network `flow`) é:
+  `POST /api/conversations/{conversationId}/flow` com body `{ "flowDefinitionId": "cmtbpc5zy08hqo701gwxfnjy2" }`.
+  Resposta de sucesso devolve `conversationId` + `message.id` (wamid). A automação de catálogo **`cmtbpgc9909ato701am40ffww`** é o rótulo/processo “formulário”; o ID operacional do Flow Meta no CRM é **`cmtbpc5zy08hqo701gwxfnjy2`**. Envs: `EDUIT_AUTOMATION_FORMULARIO_ID` (automação) + `EDUIT_FLOW_DEFINITION_FORMULARIO_ID` (flow). Após recebimento do form, a IA segue o atendimento.
+- **Contexto**: Homologação deal #25 (William, conv `cmt4gmymx08xplw01yrndq8pb`). `POST …/automations/{id}/run` e `POST …/conversations/{id}/flow` existem (OPTIONS POST) mas a API key Bearer atual retorna **401**. Na UI (sessão usuário) o flow envia e gera wamid.
+- **Alternativas descartadas**: Tratar GET `/automations/{id}?_rsc=` como disparo (é só página Next); enviar flow via `POST …/messages` com type genérico (vira texto ou “Mensagem vazia”).
+- **Impacto**: Agente deve chamar `…/flow` com `flowDefinitionId`. Bloqueio atual: escopo da API key. Deal #25 / conversationId já mapeados.
+
+### 2026-08-28 - Formulário de inscrição no EduIT via automação fixa
+- **Modelo usado**: Opus (principal)
+- **Decisão**: Com `CRM_BACKEND=eduit`, quando o agente precisar encaminhar o formulário ao candidato (mesmo momento em que no Kommo dispara o salesbot `Formulario_Sum` / `49815`), **não** usar salesbot Kommo nem template Meta como caminho primário. Acionar a automação EduIT **`cmtbpgc9909ato701am40ffww`** (formulário). Env canônico: `EDUIT_AUTOMATION_FORMULARIO_ID` (default desse CUID). Após o **recebimento** do formulário, a IA **continua o atendimento** no funil (pós-form / polo / aceite / captação já existentes no Supabase + etapas Inscrição); o submit do form **não** pausa a IA nem encerra o canal por si só.
+- **Contexto**: Cutover EduIT; Salesbot Kommo não existe no CRM novo. Automação de formulário já criada no EduIT com esse CUID.
+- **Alternativas descartadas**: Manter `runKommoSalesbot` com backend eduit (não opera); só `INSCRICAO_FORM_DELIVERY=whatsapp_template` como primário (bypass da automação oficial do CRM); pausar IA no submit (quebraria aceite/contrato/comprovante).
+- **Impacto**: Ver atualização 2026-08-31 — caminho quente é tag `Formulario` no deal.
 
 ### 2026-08-27 - Atalhos de estado terminal exigem recência, relevância e não-repetição
 - **Modelo usado**: Opus (principal), implementação Cursor Grok 4.5 Executor

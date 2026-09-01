@@ -130,7 +130,7 @@ async function lookupCandidatoFromSnapshot(snapshot, phone) {
   if (!candidatoId) return { ok: false, reason: 'candidato_nao_encontrado' }
   const statusRes = await consultarStatusCandidato(env, candidatoId)
   const statusStr = extractCandidatoStatusString(statusRes.data)
-  const portal = resolvePortalUrlForCandidato(env, candidatoId, statusStr)
+  const portal = resolvePortalUrlForCandidato(env, candidatoId, statusStr, { cpf })
   return { ok: true, candidatoId: String(candidatoId), portalUrl: portal.url || null }
 }
 

@@ -36,7 +36,14 @@ export function getCaptacaoDiagnose(env = process.env) {
     testEndpointsAllowed: testAllow,
     config: {
       baseUrl: env.SUMARE_CAPTACAO_BASE_URL || 'https://api-captacao.sumare.edu.br',
-      portalUrl: env.SUMARE_CONTRATO_PORTAL_URL || 'https://sumare.edu.br/vem-pra-sumare/vestibular/contrato',
+      portalUrl:
+        env.SUMARE_MATRICULA_PORTAL_URL || 'https://matricula.sumare.edu.br',
+      utmCampaign: env.SUMARE_MATRICULA_UTM_CAMPAIGN || 'sumareeadpolos',
+      softsyConfigured: Boolean(
+        String(env.SUMARE_SOFTSY_LOGIN || '').trim() &&
+          String(env.SUMARE_SOFTSY_PASSWORD || env.SUMARE_SOFTSY_SENHA || '').trim(),
+      ),
+      inscricaoPath: env.SUMARE_INSCRICAO_PATH || 'educsy',
       unidadeDefault: env.SUMARE_CAPTACAO_UNIDADE_DEFAULT || 'ED_SP_P5',
       turnoDefault: env.SUMARE_CAPTACAO_TURNO_DEFAULT || 'EAD',
       cursoDefault: env.SUMARE_CAPTACAO_CURSO_DEFAULT || '',
