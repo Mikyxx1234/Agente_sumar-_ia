@@ -142,7 +142,7 @@ export async function tryHandlePoloPreFormFlow(env, input) {
 
   // Polo já informado (Supabase ou histórico) — não reperguntar; segue para o formulário.
   if (
-    !matchPoloFromUserMessage(userMessage) &&
+    !matchPoloFromUserMessage(userMessage, historyMessages) &&
     (persistedPoloNome || historyPolo) &&
     status !== INSCRICAO_FORM_STATUS_AGUARDANDO
   ) {
@@ -195,7 +195,7 @@ export async function tryHandlePoloPreFormFlow(env, input) {
   // Só ativa se a mensagem do lead "parece polo" (número ou nome), para não
   // engatilhar em mensagens não relacionadas.
   let kommoFallbackUsed = false
-  if (!inPoloChoiceStep && !status && matchPoloFromUserMessage(userMessage)) {
+  if (!inPoloChoiceStep && !status && matchPoloFromUserMessage(userMessage, historyMessages)) {
     const leadIdForCheck = await resolveLeadId(env, telefone, leadIdHint)
     const recentlyAsked = await recentKommoNoteAskedPoloPreForm(env, leadIdForCheck)
     if (recentlyAsked) {
@@ -211,7 +211,7 @@ export async function tryHandlePoloPreFormFlow(env, input) {
   if (!inPoloChoiceStep) return null
 
   const idLead = await resolveLeadId(env, telefone, leadIdHint)
-  const polo = matchPoloFromUserMessage(userMessage)
+  const polo = matchPoloFromUserMessage(userMessage, historyMessages)
 
   if (!polo) {
     const reply = messageMentionsUnlistedPoloLocation(userMessage)
@@ -359,7 +359,7 @@ export async function tryHandlePoloPreFormFlow(env, input) {
  * Lead escolheu polo (status aguardando_escolha_polo pós-form) → grava e dispara captação.
  */
 export async function tryHandlePoloEscolhaFlow(env, input) {
-  const { telefone, userMessage, executionId, model, leadId: leadIdHint, pushName, t0 } = input
+  const { telefone, userMessage, historyMessages = [], executionId, model, leadId: leadIdHint, pushName, t0 } = input
   if (!telefone || !String(userMessage || '').trim()) return null
 
   const row = await fetchDadosClienteByTelefone(env, telefone, DADOS_CLIENTE_INSCRICAO_SELECT)
@@ -367,7 +367,7 @@ export async function tryHandlePoloEscolhaFlow(env, input) {
   if (status !== INSCRICAO_FORM_STATUS_AGUARDANDO_POLO) return null
 
   const idLead = await resolveLeadId(env, telefone, leadIdHint)
-  const polo = matchPoloFromUserMessage(userMessage)
+  const polo = matchPoloFromUserMessage(userMessage, historyMessages)
   if (!polo) {
     const reply = messageMentionsUnlistedPoloLocation(userMessage)
       ? buildPoloOutroLocalidadeReply()

@@ -35,7 +35,7 @@ import {
   extractCursoAreaFromText,
   messageIsBareCourseSelection,
 } from '../../libShared/cursoConfirmation.js'
-import { setSumCursoOnLead } from '../sumareLeadFields.js'
+import { setSumCursoOnLead, setSumPoloOnLead } from '../sumareLeadFields.js'
 import { tryHandleUnsupportedCourseLevelInquiry } from '../courseLevelInquiry.js'
 import {
   tryHandleInscricaoFormComplete,
@@ -131,7 +131,7 @@ import {
   messageAsksAcademicAffairsSupport,
 } from '../../libShared/academicAffairsHeuristics.js'
 import { messageAsksPriceUntilCourseEnd } from '../../libShared/priceDurationHeuristics.js'
-import { formatPoloListaNumerada, userMessageLooksLikePoloChoice } from '../../libShared/sumarePoloCatalog.js'
+import { formatPoloListaNumerada, matchPoloFromUserMessage, userMessageLooksLikePoloChoice } from '../../libShared/sumarePoloCatalog.js'
 import { userAsksCourseMoreDetails } from '../../libShared/courseMoreInfo.js'
 import { validateReplyBeforeSend } from '../replyGuard.js'
 import { buildLgpdSystemHint } from '../../libShared/lgpdCompliance.js'
@@ -822,6 +822,37 @@ export async function runAgent(env, input) {
   formFlowCtx.courseSwitch = courseSwitch
   formFlowCtx.blockStaleEnrollment = blockStaleEnrollment
 
+  // Antes dos early-return (resumo/form): "Sim" após o resumo não chegava
+  // no bloco antigo e o campo Curso do EduIT ficava vazio (Juliana #23881).
+  if (telefone) {
+    try {
+      const cursoConfirmado = detectCursoConfirmadoPeloLead(userMessage, historyMessages)
+      if (cursoConfirmado && !shouldSkipRegressiveSumCurso(courseSwitch, cursoConfirmado)) {
+        const r = await setSumCursoOnLead(env, { leadId, telefone, cursoNome: cursoConfirmado })
+        console.log(
+          `[${executionId}] SUM_CURSO_UPDATE curso="${cursoConfirmado}" ok=${r.ok} skipped=${Boolean(r.skipped)} code=${r.code || 'n/a'} previous="${r.previous || ''}"`,
+        )
+      } else if (cursoConfirmado && shouldSkipRegressiveSumCurso(courseSwitch, cursoConfirmado)) {
+        console.log(
+          `[${executionId}] SUM_CURSO_UPDATE skipped_regressive curso="${cursoConfirmado}" previous="${courseSwitch?.previous || ''}"`,
+        )
+      }
+    } catch (err) {
+      console.warn(`[${executionId}] SUM_CURSO_UPDATE erro: ${err.message}`)
+    }
+    try {
+      const poloConfirmado = matchPoloFromUserMessage(userMessage, historyMessages)
+      if (poloConfirmado) {
+        const r = await setSumPoloOnLead(env, { leadId, telefone, poloNome: poloConfirmado.nome })
+        console.log(
+          `[${executionId}] SUM_POLO_UPDATE polo="${poloConfirmado.nome}" ok=${r.ok} skipped=${Boolean(r.skipped)} code=${r.code || 'n/a'}`,
+        )
+      }
+    } catch (err) {
+      console.warn(`[${executionId}] SUM_POLO_UPDATE erro: ${err.message}`)
+    }
+  }
+
   // Handlers adiados: só rodam se drift NÃO indicar estado antigo capturando o turno.
   if (telefone && deferStateEarlyHandlers && !blockStaleEnrollment) {
     const inscricaoExistenteFlow = await tryHandleCaptacaoInscricaoExistenteFlow(env, formFlowCtx)
@@ -1172,27 +1203,6 @@ export async function runAgent(env, input) {
       executionId,
       model,
       aiMeta: ctx.toAiMeta(),
-    }
-  }
-
-  // Pré-preenchimento sum_Curso: assim que o lead confirma interesse num
-  // curso (mesmo antes de pedir inscrição), gravamos no Kommo. Função
-  // interna já trata dedupe (mesmo lead+curso em <6h) — log apenas.
-  if (telefone) {
-    try {
-      const cursoConfirmado = detectCursoConfirmadoPeloLead(userMessage, historyMessages)
-      if (cursoConfirmado && !shouldSkipRegressiveSumCurso(courseSwitch, cursoConfirmado)) {
-        const r = await setSumCursoOnLead(env, { leadId, telefone, cursoNome: cursoConfirmado })
-        console.log(
-          `[${executionId}] SUM_CURSO_UPDATE curso="${cursoConfirmado}" ok=${r.ok} skipped=${Boolean(r.skipped)} code=${r.code || 'n/a'} previous="${r.previous || ''}"`,
-        )
-      } else if (cursoConfirmado && shouldSkipRegressiveSumCurso(courseSwitch, cursoConfirmado)) {
-        console.log(
-          `[${executionId}] SUM_CURSO_UPDATE skipped_regressive curso="${cursoConfirmado}" previous="${courseSwitch?.previous || ''}"`,
-        )
-      }
-    } catch (err) {
-      console.warn(`[${executionId}] SUM_CURSO_UPDATE erro: ${err.message}`)
     }
   }
 

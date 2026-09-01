@@ -12,6 +12,14 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-09-01 - Curso confirmado na conversa grava no campo EduIT antes do formulário
+
+- **Modelo usado**: Cursor Grok 4.6
+- **Decisão**: `setSumCursoOnLead` e `setSumPoloOnLead` rodam assim que o histórico está pronto — antes dos early-return de resumo/form. O mesmo write acontece no resumo, no envio do Formulario e quando o lead responde 1–5/nome de polo. No EduIT o PUT usa `{ values: [{ fieldId, name, value }] }` e espelha `kommo_curso` / `kommo_polo` no Supabase.
+- **Contexto**: Juliana #23881 — Pedagogia no resumo e polo "4" (São Miguel) no chat, tag Formulario e CPF no Flow, mas Curso e Polo vazios no card. O write antigo só rodava depois desses handlers, ou falhava sem CUID.
+- **Alternativas descartadas**: Esperar o Flow mandar o curso (o formulário não tem esse campo); gravar só no Kommo.
+- **Impacto**: Próximos "Sim" após resumo preenchem Curso no card. Cards já vazios precisam de um turno novo ou backfill.
+
 ### 2026-09-01 - Lookup por telefone no backend EduIT não pode cair no Kommo
 
 - **Modelo usado**: Cursor Grok 4.6

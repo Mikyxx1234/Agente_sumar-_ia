@@ -1013,6 +1013,19 @@ section('16 — confirmação de matrícula antes do formulário')
   assert(/Mensalidades: R\$ 187,00/i.test(resumo), '16.1c mensalidade')
   assert(/taxa de matrícula é a primeira mensalidade/i.test(resumo), '16.1d taxa')
   assert(assistantAskedMatriculaAuthorization(resumo), '16.1e pergunta autorização detectável')
+  {
+    const { detectCursoConfirmadoPeloLead } = await import('../libShared/cursoConfirmation.js')
+    const pedagogiaResumo = buildMatriculaResumoReply({
+      cursoNome: 'Pedagogia',
+      duracao: '8 semestres',
+      mensalidade: 'R$ 117,00',
+    })
+    assertEqual(
+      detectCursoConfirmadoPeloLead('Sim', [{ role: 'assistant', content: pedagogiaResumo }]),
+      'Pedagogia',
+      '16.1f Sim após resumo confirma Pedagogia',
+    )
+  }
 
   const originalFetch = globalThis.fetch
   globalThis.fetch = async (url) => {
@@ -1069,6 +1082,18 @@ section('17 — anti-alucinação polo/matrícula (regressão)')
   assert(conversationAlreadyAuthorizedMatricula(histAuth), '17.1 histórico com sim após resumo')
   assert(!messageConfirmsProceedToInscricaoForm('1', histAuth), '17.2 "1" não é confirmação de matrícula')
   assert(userMessageLooksLikePoloChoice('1'), '17.3 "1" é escolha de polo')
+  {
+    const { matchPoloFromUserMessage, formatPoloListaNumerada } = await import(
+      '../libShared/sumarePoloCatalog.js'
+    )
+    assertEqual(matchPoloFromUserMessage('4')?.nome, 'São Miguel', '17.3b "4" no catálogo = São Miguel')
+    const lista = formatPoloListaNumerada()
+    assertEqual(
+      matchPoloFromUserMessage('4', [{ role: 'assistant', content: `em qual polo?\n${lista}` }])?.nome,
+      'São Miguel',
+      '17.3c "4" após lista do assistente = São Miguel',
+    )
+  }
   assert(
     MATRICULA_GATE_SKIP_RESUMO_STATUSES.has(INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM),
     '17.4 polo pre-form no skip set',

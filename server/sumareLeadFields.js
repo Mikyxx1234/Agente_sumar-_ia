@@ -12,6 +12,7 @@ import { listLeadCustomFields } from './kommoClient.js'
 import { kommoRawFetch } from './kommoRateLimiter.js'
 import { isEduitBackend, resolveCrmLeadId } from './crmAdapter.js'
 import { isEduitCuid, updateDealCustomFields } from './eduitClient.js'
+import { updateDadosCliente } from './dadosClienteStore.js'
 
 const SUM_CURSO_ALIASES = [
   'sum_curso',
@@ -291,6 +292,12 @@ export async function setSumCursoOnLead(env, { leadId, telefone, cursoNome }) {
       curso,
       'cmt4cxxs6gbxsow01pf26inmn',
     )
+    if (result.ok && telefone) {
+      await updateDadosCliente(env, {
+        telefone,
+        fields: { kommo_curso: curso },
+      }).catch(() => {})
+    }
     return { ...result, leadId: idLead, curso, via: 'eduit' }
   }
 
@@ -336,6 +343,12 @@ export async function setSumPoloOnLead(env, { leadId, telefone, poloNome }) {
       polo,
       'cmt4cyv21gbyiow016u7zjhl6',
     )
+    if (result.ok && telefone) {
+      await updateDadosCliente(env, {
+        telefone,
+        fields: { kommo_polo: polo, polo_inscricao_escolhido: polo },
+      }).catch(() => {})
+    }
     return { ...result, leadId: idLead, polo, via: 'eduit' }
   }
 

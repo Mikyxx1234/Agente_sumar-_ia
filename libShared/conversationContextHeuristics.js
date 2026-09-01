@@ -70,6 +70,13 @@ export function extractDiscussedCourseFromHistory(historyMessages) {
       if (canonical) return canonical
       if (name.length >= 3) return name
     }
+    const quoted = content.match(/curso\s+de\s+[“"']\s*([^"”']+?)\s*[”"']/i)
+    if (quoted?.[1]) {
+      const name = quoted[1].trim().replace(/\s+/g, ' ')
+      const canonical = extractCursoAreaFromText(name)
+      if (canonical) return canonical
+      if (name.length >= 3) return name
+    }
     // Fallback: varre SOMENTE a 1ª frase (o enunciado do tópico), não a
     // descrição inteira — evita casar uma palavra de curso citada
     // incidentalmente na descrição de OUTRO curso (ex.: "administração" dentro
@@ -77,6 +84,11 @@ export function extractDiscussedCourseFromHistory(historyMessages) {
     const firstSentence = content.split(/(?<=[.!?\n])\s+/)[0] || content
     const area = extractCursoAreaFromText(firstSentence)
     if (area) return area
+    // Resumo de matrícula: o curso está no bullet, não na 1ª frase ("Perfeito!").
+    if (/ingressar no curso de|autoriza a conclus[aã]o da matr[ií]cula/i.test(content)) {
+      const fromResumo = extractCursoAreaFromText(content)
+      if (fromResumo) return fromResumo
+    }
   }
   return ''
 }

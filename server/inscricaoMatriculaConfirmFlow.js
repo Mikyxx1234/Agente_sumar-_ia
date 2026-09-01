@@ -43,6 +43,7 @@ import {
   ensureDadosClienteRow,
 } from './dadosClienteStore.js'
 import { fetchLeadFormSnapshot } from './inscricaoKommoFields.js'
+import { setSumCursoOnLead } from './sumareLeadFields.js'
 
 const FORM_STATUS_FIELD = 'inscricao_form_status'
 
@@ -322,6 +323,11 @@ export async function gateMatriculaConfirmacaoBeforeForm(env, ctx) {
   }
 
   await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO_AUTORIZACAO, leadId)
+  await setSumCursoOnLead(env, {
+    leadId,
+    telefone,
+    cursoNome: resumo.cursoNome,
+  }).catch(() => {})
   return buildResumoHandledResult(env, ctx, resumo)
 }
 

@@ -87,13 +87,43 @@ export function resolvePoloUnidadeCode(poloId, env = process.env) {
  * Identifica polo a partir da mensagem do lead (número 1-5 ou nome).
  * @returns {SumarePoloEntry|null}
  */
-export function matchPoloFromUserMessage(text) {
+function matchPoloFromAssistantNumberedList(historyMessages, n) {
+  const assistants = (historyMessages || []).filter(
+    (m) => m.role === 'assistant' || m.role === 'assistente',
+  )
+  for (let i = assistants.length - 1; i >= 0; i--) {
+    const content = String(assistants[i]?.content || '')
+    const found = new Map()
+    const re = /(?:^|\n)\s*(\d)\.\s*\*?([^*\n—-]+)/g
+    let m
+    while ((m = re.exec(content)) !== null) {
+      const name = String(m[2] || '').replace(/\s*[—-].*$/, '').trim()
+      const polo = SUMARE_POLOS_EAD.find(
+        (p) => normalizePoloText(p.nome) === normalizePoloText(name) ||
+          p.aliases.some((a) => normalizePoloText(name).includes(a)),
+      )
+      if (polo) found.set(Number(m[1]), polo)
+    }
+    if (found.has(n)) return found.get(n)
+  }
+  return null
+}
+
+/**
+ * Identifica polo a partir da mensagem do lead (número 1-5 ou nome).
+ * Se houver histórico, o número casa com a última lista do assistente.
+ * @returns {SumarePoloEntry|null}
+ */
+export function matchPoloFromUserMessage(text, historyMessages) {
   const t = normalizePoloText(text)
   if (!t) return null
 
   const numMatch = t.match(/^\s*([1-5])\s*$/) || t.match(/\bop[cç][aã]o\s*([1-5])\b/)
   if (numMatch) {
-    const idx = Number(numMatch[1]) - 1
+    const n = Number(numMatch[1])
+    const fromList = matchPoloFromAssistantNumberedList(historyMessages, n)
+    if (fromList) return fromList
+    const idx = n - 1
     if (idx >= 0 && idx < SUMARE_POLOS_EAD.length) return SUMARE_POLOS_EAD[idx]
   }
 
@@ -181,6 +211,7 @@ export function assistantAskedPoloPreFormChoice(text) {
   if (/\bsomente\b[\s\S]{0,40}\bestes polos\b/i.test(a)) return true
   if (/\bresponda com o\b[\s\S]{0,30}\b(n[uú]mero|nome do polo)\b/i.test(a)) return true
   if (/1\.\s*\*?s[aã]o miguel/i.test(a) && /tatuap[eé]/i.test(a)) return true
+  if (/1\.\s*\*?barra funda/i.test(a) && /tatuap[eé]/i.test(a)) return true
   return false
 }
 

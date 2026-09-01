@@ -27,9 +27,13 @@ import { messageLooksLikeOperationalChat } from '../libShared/scopeHeuristics.js
 import { messageAsksCoursePrice, sanitizeLeadInboundMessage } from '../libShared/inboundMessageSanitize.js'
 import {
   buildPoloEscolhaPreFormMessage,
+  matchPoloFromUserMessage,
   resolvePoloFromKommoSnapshot,
 } from '../libShared/sumarePoloCatalog.js'
 import { fetchLeadFormSnapshot } from './inscricaoKommoFields.js'
+import { setSumCursoOnLead, syncSumPoloOnLeadQuiet } from './sumareLeadFields.js'
+import { detectCursoConfirmadoPeloLead } from '../libShared/cursoConfirmation.js'
+import { extractDiscussedCourseFromHistory } from '../libShared/conversationContextHeuristics.js'
 import { sendFormSumarTemplate } from './whatsappTemplateSender.js'
 import { runKommoSalesbot } from './kommoSalesbot.js'
 import { isEduitBackend, resolveCrmLeadId } from './crmAdapter.js'
@@ -182,6 +186,7 @@ async function resolvePoloEscolhidoParaForm(env, telefone, leadId) {
   const poloNome = String(row?.polo_inscricao_escolhido || '').trim()
   const unidade = String(row?.captacao_unidade || '').trim()
   if (poloNome && unidade) {
+    await syncSumPoloOnLeadQuiet(env, { leadId, telefone, poloNome })
     return { ok: true, poloNome, unidade, source: 'supabase' }
   }
   if (leadId != null) {
@@ -189,6 +194,7 @@ async function resolvePoloEscolhidoParaForm(env, telefone, leadId) {
     if (snapRes.ok && snapRes.snapshot) {
       const resolved = resolvePoloFromKommoSnapshot(snapRes.snapshot, env)
       if (resolved) {
+        await syncSumPoloOnLeadQuiet(env, { leadId, telefone, poloNome: resolved.polo.nome })
         return {
           ok: true,
           poloNome: resolved.polo.nome,
@@ -394,6 +400,30 @@ export async function tryHandleInscricaoFormStart(env, input) {
   }
 
   const idLead = await resolveLeadId(env, telefone, leadIdHint)
+  const cursoEscolhido =
+    detectCursoConfirmadoPeloLead(userMessage, historyMessages) ||
+    extractDiscussedCourseFromHistory(historyMessages)
+  if (cursoEscolhido) {
+    const cursoWrite = await setSumCursoOnLead(env, {
+      leadId: idLead,
+      telefone,
+      cursoNome: cursoEscolhido,
+    }).catch((err) => ({ ok: false, error: err.message }))
+    console.log(
+      `[inscricaoForm] SUM_CURSO curso="${cursoEscolhido}" ok=${cursoWrite?.ok} code=${cursoWrite?.code || cursoWrite?.error || 'n/a'} lead=${idLead ?? 'n/a'}`,
+    )
+  }
+  const poloEscolhido = matchPoloFromUserMessage(userMessage, historyMessages)
+  if (poloEscolhido) {
+    const poloWrite = await syncSumPoloOnLeadQuiet(env, {
+      leadId: idLead,
+      telefone,
+      poloNome: poloEscolhido.nome,
+    })
+    console.log(
+      `[inscricaoForm] SUM_POLO polo="${poloEscolhido.nome}" ok=${poloWrite?.ok} code=${poloWrite?.code || poloWrite?.error || 'n/a'} lead=${idLead ?? 'n/a'}`,
+    )
+  }
 
   if (!asksResend && (wantsForm || messageAsksForFormResend(userMessage))) {
     const poloOk = await resolvePoloEscolhidoParaForm(env, telefone, idLead)
