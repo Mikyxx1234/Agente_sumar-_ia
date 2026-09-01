@@ -45,9 +45,9 @@ import {
 import {
   ensureDadosClienteRow,
   fetchDadosClienteByTelefone,
-  getLeadIdByTelefone,
 } from './dadosClienteStore.js'
-import { findLeadByPhone, createLeadAuditNote } from './kommoClient.js'
+import { createLeadAuditNote } from './kommoClient.js'
+import { resolveCrmLeadId } from './crmAdapter.js'
 import { resolveTransferenciaCursoCodigo, suggestSimilarTransferenciaCursos } from './sumareCaptacaoClient.js'
 import { deliverInscricaoForm } from './inscricaoFormFlow.js'
 import {
@@ -72,16 +72,7 @@ function resolvePoloEntry(poloId) {
 }
 
 async function resolveLeadId(env, telefone, hint) {
-  if (Number.isFinite(Number(hint)) && Number(hint) > 0) return Number(hint)
-  const fromDb = await getLeadIdByTelefone(env, telefone)
-  if (fromDb != null) return Number(fromDb) || fromDb
-  try {
-    const lookup = await findLeadByPhone(env, telefone)
-    if (lookup.ok && lookup.lead?.id) return Number(lookup.lead.id)
-  } catch {
-    /* ignore */
-  }
-  return null
+  return resolveCrmLeadId(env, telefone, hint)
 }
 
 /**

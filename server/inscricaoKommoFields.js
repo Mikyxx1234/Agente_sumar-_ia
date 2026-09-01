@@ -8,6 +8,7 @@ import { parseFormDataNoteFields } from '../libShared/inscricaoFormHeuristics.js
 import { normalizeCpf, kommoDataNascLooksInvalid } from './sumareCaptacaoClient.js'
 import { isGarbageCursoInscricao } from '../libShared/captacaoSnapshotSanitize.js'
 import { contactPhoneDigits, getDealById, isEduitCuid } from './eduitClient.js'
+import { isEduitBackend } from './crmAdapter.js'
 
 const KOMMO_FIELD_NOME = 304628
 
@@ -215,6 +216,9 @@ export async function fetchLeadFormSnapshot(env, leadId) {
   const rawId = String(leadId ?? '').trim()
   if (isEduitCuid(rawId)) {
     return fetchEduitLeadFormSnapshot(env, rawId)
+  }
+  if (isEduitBackend(env)) {
+    return { ok: false, error: 'lead_id_invalido' }
   }
 
   const id = Number(leadId)

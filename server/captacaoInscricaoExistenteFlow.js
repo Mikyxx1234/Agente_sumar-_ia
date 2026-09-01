@@ -14,8 +14,8 @@ import {
 import {
   fetchDadosClienteByTelefone,
   updateDadosCliente,
-  getLeadIdByTelefone,
 } from './dadosClienteStore.js'
+import { resolveCrmLeadId } from './crmAdapter.js'
 import { fetchLeadFormSnapshot } from './inscricaoKommoFields.js'
 import {
   consultarStatusCandidato,
@@ -74,10 +74,7 @@ export async function tryHandleCaptacaoInscricaoExistenteFlow(env, input) {
 
   const priorId = String(row?.captacao_candidato_id || '').trim()
   const pendingId = String(row?.captacao_pending_candidato_id || '').trim()
-  const leadId =
-    Number.isFinite(Number(leadIdHint)) && Number(leadIdHint) > 0
-      ? Number(leadIdHint)
-      : await getLeadIdByTelefone(env, telefone)
+  const leadId = await resolveCrmLeadId(env, telefone, leadIdHint)
 
   if (messageConfirmsNovaInscricao(userMessage)) {
     const candidatoId = pendingId || priorId

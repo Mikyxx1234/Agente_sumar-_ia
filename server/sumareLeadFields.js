@@ -8,8 +8,10 @@
  * PATCHs redundantes a cada turno da conversa.
  */
 
-import { listLeadCustomFields, findLeadByPhone } from './kommoClient.js'
+import { listLeadCustomFields } from './kommoClient.js'
 import { kommoRawFetch } from './kommoRateLimiter.js'
+import { isEduitBackend, resolveCrmLeadId } from './crmAdapter.js'
+import { isEduitCuid, updateDealCustomFields } from './eduitClient.js'
 
 const SUM_CURSO_ALIASES = [
   'sum_curso',
@@ -260,16 +262,13 @@ async function getCurrentSumCurso(env, leadId, fieldId) {
 }
 
 async function resolveLeadIdInternal(env, { leadId, telefone }) {
-  const id = Number(leadId)
-  if (Number.isFinite(id) && id > 0) return id
-  if (!telefone) return null
-  try {
-    const lookup = await findLeadByPhone(env, telefone)
-    if (lookup.ok && lookup.lead?.id) return Number(lookup.lead.id)
-  } catch {
-    /* ignore */
-  }
-  return null
+  return resolveCrmLeadId(env, telefone, leadId)
+}
+
+async function writeEduitDealField(env, dealId, name, value, fieldId) {
+  return updateDealCustomFields(env, dealId, [
+    { fieldId, name, value },
+  ])
 }
 
 /**
@@ -284,6 +283,16 @@ export async function setSumCursoOnLead(env, { leadId, telefone, cursoNome }) {
 
   const idLead = await resolveLeadIdInternal(env, { leadId, telefone })
   if (!idLead) return { ok: false, code: 'LEAD_NOT_FOUND' }
+  if (isEduitBackend(env) || isEduitCuid(idLead)) {
+    const result = await writeEduitDealField(
+      env,
+      idLead,
+      'curso',
+      curso,
+      'cmt4cxxs6gbxsow01pf26inmn',
+    )
+    return { ...result, leadId: idLead, curso, via: 'eduit' }
+  }
 
   const dedupeKey = `${idLead}`
   const recent = recentUpdates.get(dedupeKey)
@@ -319,6 +328,16 @@ export async function setSumPoloOnLead(env, { leadId, telefone, poloNome }) {
 
   const idLead = await resolveLeadIdInternal(env, { leadId, telefone })
   if (!idLead) return { ok: false, code: 'LEAD_NOT_FOUND' }
+  if (isEduitBackend(env) || isEduitCuid(idLead)) {
+    const result = await writeEduitDealField(
+      env,
+      idLead,
+      'polo',
+      polo,
+      'cmt4cyv21gbyiow016u7zjhl6',
+    )
+    return { ...result, leadId: idLead, polo, via: 'eduit' }
+  }
 
   const dedupeKey = `${idLead}`
   const recent = recentPoloUpdates.get(dedupeKey)

@@ -40,12 +40,13 @@ import {
 import { extractCursoAreaFromText, messageIsBareCourseSelection } from '../libShared/cursoConfirmation.js'
 import { normalizeMessageForScope } from '../libShared/scopeHeuristics.js'
 import { runKommoSalesbot } from './kommoSalesbot.js'
-import { findLeadByPhone, listLeadNotes, listLeadEvents, createLeadAuditNote } from './kommoClient.js'
+import { listLeadNotes, listLeadEvents, createLeadAuditNote } from './kommoClient.js'
+import { isEduitBackend, resolveCrmLeadId } from './crmAdapter.js'
+import { isEduitCuid } from './eduitClient.js'
 import { moveLeadToInscricaoIfNeeded } from './kommoFunnelMoves.js'
 import {
   updateDadosCliente,
   marcarClienteIA,
-  getLeadIdByTelefone,
   normalizeTelefone,
   fetchDadosClienteByTelefone,
 } from './dadosClienteStore.js'
@@ -201,16 +202,7 @@ async function claimMatriculaPosFormExclusive(env, telefone, { leadId, userMessa
 }
 
 async function resolveLeadId(env, telefone, leadIdHint) {
-  if (Number.isFinite(leadIdHint) && leadIdHint > 0) return leadIdHint
-  const fromDb = await getLeadIdByTelefone(env, telefone)
-  if (fromDb != null) return Number(fromDb) || fromDb
-  try {
-    const lookup = await findLeadByPhone(env, telefone)
-    if (lookup.ok && lookup.lead?.id) return Number(lookup.lead.id)
-  } catch {
-    /* ignore */
-  }
-  return null
+  return resolveCrmLeadId(env, telefone, leadIdHint)
 }
 
 async function pauseAtendimentoIa(env, telefone) {
@@ -304,6 +296,24 @@ function eventCreatedMs(ev) {
  *   3) snapshot do lead no Kommo com campos obrigatórios preenchidos
  */
 export async function detectFormSumarRecebidoNoKommo(env, leadId, options = {}) {
+  const rawId = String(leadId ?? '').trim()
+  if (isEduitBackend(env) || isEduitCuid(rawId)) {
+    if (!isEduitCuid(rawId)) return { detected: false, reason: 'invalid_lead' }
+    const snapRes = await fetchLeadFormSnapshot(env, rawId)
+    if (!snapRes.ok || !snapRes.snapshot) {
+      return { detected: false, reason: 'eduit_snapshot_unavailable' }
+    }
+    const snap = validateFormSnapshot(env, snapRes.snapshot)
+    if (snap.valid) {
+      return {
+        detected: true,
+        source: 'eduit_snapshot',
+        sample: String(snapRes.snapshot.cpf || snapRes.snapshot.nome || '').slice(0, 120),
+      }
+    }
+    return { detected: false, reason: 'eduit_snapshot_incomplete', missing: snap.missingFields }
+  }
+
   const id = Number(leadId)
   if (!Number.isFinite(id) || id <= 0) return { detected: false, reason: 'invalid_lead' }
 

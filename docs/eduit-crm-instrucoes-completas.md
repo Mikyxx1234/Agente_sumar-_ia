@@ -233,11 +233,13 @@ POST /api/deals/{id}/actions/distribute-consultant
 POST /api/deals/{id}/actions/start-enrollment
 ```
 
+**Formulário (decisão 2026-08-28):** automação EduIT oficial do form = **`cmtbpgc9909ato701am40ffww`** (`EDUIT_AUTOMATION_FORMULARIO_ID`). Quando o agente precisar encaminhar o formulário ao candidato, aciona essa automação (no deal do contato). Após o recebimento do formulário, a IA **segue o atendimento** (não pausa só por causa do submit).
+
 Comportamento:
 
-1. **send-form** — dispara o WhatsApp Flow / formulário de dados (o que hoje é bot Formulario_Sum / 49815). Resposta: `{ ok, formSentAt, provider }`.
+1. **send-form** / automação `cmtbpgc9909ato701am40ffww` — dispara o WhatsApp Flow / formulário de dados (o que hoje é bot Formulario_Sum / 49815). Resposta: `{ ok, formSentAt, provider }`.
 2. **distribute-consultant** — move para fila humana / atribui `ownerId` / abre tarefa. Equivale bot 49777 / 49813 distribuição.
-3. Quando o lead **submete o form**, o CRM dispara webhook `deal.form_submitted` com snapshot: cpf, nome, email, dataNasc, curso, polo.
+3. Quando o lead **submete o form**, o CRM dispara webhook `deal.form_submitted` com snapshot: cpf, nome, email, dataNasc, curso, polo — e o agente continua o fluxo pós-form.
 
 Até o form nativo existir, o webhook pode só relayer o payload do Form Sumaré atual para o mesmo contrato.
 

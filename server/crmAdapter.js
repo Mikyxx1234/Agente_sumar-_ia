@@ -30,6 +30,7 @@ import {
   listConversationsByContactId,
   listConversationMessages,
   sendConversationText,
+  logConversationNote,
   resolveEduitEntitiesByPhone,
   resolveEduitStages,
   isEduitCuid,
@@ -38,6 +39,7 @@ import {
 import {
   fetchDadosClienteByTelefone,
   ensureDadosClienteRow,
+  getLeadIdByTelefone,
   isAtendimentoIaPaused,
 } from './dadosClienteStore.js'
 
@@ -51,9 +53,39 @@ export function isEduitBackend(env = process.env) {
 }
 
 /**
- * Normaliza id de lead/deal sem destruir CUID.
- * @returns {string|number|null}
+ * Resolve o id do CRM ativo a partir de hint + telefone.
+ * No EduIT nunca devolve número Kommo (isso reabria o funil antigo).
  */
+export async function resolveCrmLeadId(env, telefone, hint) {
+  if (isEduitBackend(env)) {
+    if (isEduitCuid(hint)) return String(hint).trim()
+    const fromDb = await getLeadIdByTelefone(env, telefone)
+    if (isEduitCuid(fromDb)) return String(fromDb).trim()
+    const lookup = await findLeadByPhone(env, telefone)
+    if (lookup.ok && lookup.lead?.id && isEduitCuid(lookup.lead.id)) {
+      const id = String(lookup.lead.id)
+      await persistEduitIds(env, telefone, {
+        dealId: lookup.lead.eduit_deal_id || id,
+        contactId: lookup.contactId || lookup.lead.eduit_contact_id,
+        conversationId: lookup.conversationId || lookup.lead.eduit_conversation_id,
+      }).catch(() => {})
+      return id
+    }
+    return null
+  }
+  const fromHint = normalizeCrmLeadId(hint, env)
+  if (fromHint) return fromHint
+  const fromDb = await getLeadIdByTelefone(env, telefone)
+  if (fromDb != null) return normalizeCrmLeadId(fromDb, env)
+  try {
+    const lookup = await findLeadByPhone(env, telefone)
+    if (lookup.ok && lookup.lead?.id) return normalizeCrmLeadId(lookup.lead.id, env)
+  } catch {
+    /* ignore */
+  }
+  return null
+}
+
 export function normalizeCrmLeadId(id, env = process.env) {
   if (id == null || id === '') return null
   const s = String(id).trim()
@@ -614,6 +646,29 @@ export async function sendEduitOutboundText(env, { telefone, text, conversationI
     await persistEduitIds(env, telefone, { conversationId: convId }).catch(() => {})
   }
   return sendConversationText(env, convId, text)
+}
+
+/**
+ * Espelha outbound enviado fora do EduIT (ex.: Flow via Meta Cloud API)
+ * na conversa, sem reenviar WhatsApp.
+ */
+export async function logEduitConversationNote(env, { telefone, conversationId, content } = {}) {
+  if (!isEduitBackend(env)) {
+    return { ok: false, skipped: true, reason: 'not_eduit_backend' }
+  }
+  let convId = conversationId ? String(conversationId).trim() : ''
+  if (!convId || !isEduitCuid(convId)) {
+    const ids = await resolveAndPersistEduitIds(env, telefone)
+    if (!ids.ok || !ids.conversationId) {
+      return {
+        ok: false,
+        code: 'EDUIT_CONVERSATION_MISSING',
+        error: ids.error || 'eduit_conversation_id não encontrado',
+      }
+    }
+    convId = ids.conversationId
+  }
+  return logConversationNote(env, convId, content)
 }
 
 // Re-export utilitários usados por testes / scripts

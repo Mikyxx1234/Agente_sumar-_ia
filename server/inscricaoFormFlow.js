@@ -32,7 +32,7 @@ import {
 import { fetchLeadFormSnapshot } from './inscricaoKommoFields.js'
 import { sendFormSumarTemplate } from './whatsappTemplateSender.js'
 import { runKommoSalesbot } from './kommoSalesbot.js'
-import { isEduitBackend } from './crmAdapter.js'
+import { isEduitBackend, resolveCrmLeadId } from './crmAdapter.js'
 import {
   addDealTag,
   createDealNote as createEduitDealNote,
@@ -42,11 +42,9 @@ import {
   updateDealStage,
 } from './eduitClient.js'
 import { tryHandlePoloPreFormFlow } from './inscricaoPoloFlow.js'
-import { findLeadByPhone } from './kommoClient.js'
 import {
   updateDadosCliente,
   ensureDadosClienteRow,
-  getLeadIdByTelefone,
   normalizeTelefone,
   fetchDadosClienteByTelefone,
   dadosClienteTelefoneOrFilter,
@@ -157,16 +155,7 @@ async function claimInscricaoFormStartExclusive(env, telefone, leadIdHint) {
 }
 
 async function resolveLeadId(env, telefone, leadIdHint) {
-  if (Number.isFinite(leadIdHint) && leadIdHint > 0) return leadIdHint
-  const fromDb = await getLeadIdByTelefone(env, telefone)
-  if (fromDb != null) return Number(fromDb) || fromDb
-  try {
-    const lookup = await findLeadByPhone(env, telefone)
-    if (lookup.ok && lookup.lead?.id) return Number(lookup.lead.id)
-  } catch {
-    /* ignore */
-  }
-  return null
+  return resolveCrmLeadId(env, telefone, leadIdHint)
 }
 
 function buildAgentReturn({ executionId, model, t0, reply, steps, toolCalls, ctxSnapshot, ok = true }) {

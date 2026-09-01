@@ -23,7 +23,13 @@ import {
   parseEduitMessageAt,
   runEduitAutomation,
   addDealTag,
+  logConversationNote,
 } from '../server/eduitClient.js'
+import {
+  buildFormularioFlowCrmNote,
+  resolveFormularioMetaFlowId,
+  DEFAULT_META_FLOW_FORMULARIO_ID,
+} from '../server/whatsappSender.js'
 import {
   getCrmBackend,
   isEduitBackend,
@@ -34,6 +40,7 @@ import {
   leadMatchesAgentFunnel,
   persistEduitIds,
   loadCrmRecentMessages,
+  resolveCrmLeadId,
 } from '../server/crmAdapter.js'
 import {
   mergeHistoriesDedupe,
@@ -84,6 +91,17 @@ expect(
   normalizeCrmLeadId('19884275', { CRM_BACKEND: 'kommo' }) === 19884275,
 )
 expect('normalize reject 0', normalizeCrmLeadId(0, { CRM_BACKEND: 'kommo' }) == null)
+{
+  const resolved = await resolveCrmLeadId(
+    { CRM_BACKEND: 'eduit' },
+    '5511944690752',
+    '23841399',
+  )
+  expect(
+    'resolveCrmLeadId ignora id Kommo no backend eduit',
+    resolved == null || /^c[a-z0-9]{8,}$/i.test(String(resolved)),
+  )
+}
 
 // --- pickPreferredDeal ---
 const stages = resolveEduitStages({})
@@ -226,6 +244,34 @@ expect(
 )
 expect('extractMessageId null', extractMessageId(null) == null)
 expect('extractMessageId {}', extractMessageId({}) == null)
+
+expect(
+  'meta flow id default',
+  resolveFormularioMetaFlowId({}) === DEFAULT_META_FLOW_FORMULARIO_ID,
+)
+expect(
+  'meta flow id env',
+  resolveFormularioMetaFlowId({ WHATSAPP_META_FLOW_FORMULARIO_ID: '123' }) === '123',
+)
+expect(
+  'crm note tem flow e wamid',
+  /Preencha o formulário: Candidato/.test(buildFormularioFlowCrmNote({ flowId: '1', messageId: 'wamid.x' })) &&
+    /flow_id=1/.test(buildFormularioFlowCrmNote({ flowId: '1', messageId: 'wamid.x' })) &&
+    /wamid=wamid.x/.test(buildFormularioFlowCrmNote({ flowId: '1', messageId: 'wamid.x' })),
+)
+expect(
+  'nota privada some do hist agente',
+  normalizeEduitConversationMessage({
+    id: 'cmtnote000000000000000001',
+    direction: 'out',
+    messageType: 'note',
+    isPrivate: true,
+    content: 'Preencha o formulário: Candidato',
+  }) == null,
+)
+
+const noteMissing = await logConversationNote({}, '', 'x')
+expect('logConversationNote sem conv', noteMissing.ok === false && noteMissing.code === 'MISSING_CONVERSATION_ID')
 
 // --- pickPreferredContact ---
 {

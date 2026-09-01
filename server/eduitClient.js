@@ -745,6 +745,35 @@ export async function sendConversationText(env, conversationId, content) {
 }
 
 /**
+ * Grava nota na conversa sem enviar WhatsApp.
+ * POST { messageType:'note', content } — homologado: 201, isPrivate, id CUID (não wamid).
+ * Qualquer type text/interactive dispara o canal de verdade.
+ */
+export async function logConversationNote(env, conversationId, content) {
+  const id = String(conversationId || '').trim()
+  if (!id || !isEduitCuid(id)) {
+    return { ok: false, code: 'MISSING_CONVERSATION_ID', error: 'conversationId CUID inválido' }
+  }
+  const text = String(content ?? '').trim()
+  if (!text) {
+    return { ok: false, code: 'EMPTY_BODY', error: 'nota vazia' }
+  }
+  const r = await eduitFetch(env, `/api/conversations/${encodeURIComponent(id)}/messages`, {
+    method: 'POST',
+    body: { messageType: 'note', content: text },
+  })
+  if (!r.ok) {
+    return { ok: false, code: r.code || 'EDUIT_ERROR', status: r.status, error: summarizeError(r), data: r.data }
+  }
+  return {
+    ok: true,
+    status: r.status,
+    data: r.data,
+    messageId: extractMessageId(r.data),
+  }
+}
+
+/**
  * Preferência de deal: Atendimento/Inscrição; senão o mais recente.
  * @returns {{ deal: object|null, reason: string }}
  */

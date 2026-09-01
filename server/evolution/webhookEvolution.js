@@ -516,6 +516,7 @@ async function pushInboundToBuffer(env, sessionId, clean, logCtx = '', mirrorOpt
     return false
   }
   recordBufferWrite(sessionId)
+  if (isEduitBackend(env)) return true
   mirrorEvolutionInboundToKommo(env, {
     sessionId,
     text: clean,
@@ -724,7 +725,11 @@ async function flushSessionInner(env, sessionId, opts = {}) {
       }
     }
 
-    const leadIdHint = normalizeCrmLeadId(opts.leadIdHint, env)
+    const rawLeadHint = normalizeCrmLeadId(opts.leadIdHint, env)
+    const leadIdHint =
+      isEduitBackend(env) && rawLeadHint && !/^c[a-z0-9]{8,}$/i.test(String(rawLeadHint))
+        ? null
+        : rawLeadHint
     if (!opts.skipFunnelGate) {
       const funnel = await assertLeadInAgentFunnel(env, {
         leadId: leadIdHint || undefined,
@@ -868,7 +873,12 @@ async function flushSessionInner(env, sessionId, opts = {}) {
         }
       }
       if (idLead == null) {
-        try { idLead = await getLeadIdByTelefone(env, telefone) } catch {}
+        try {
+          const fromDb = await getLeadIdByTelefone(env, telefone)
+          if (fromDb != null && (!isEduitBackend(env) || /^c[a-z0-9]{8,}$/i.test(String(fromDb)))) {
+            idLead = fromDb
+          }
+        } catch {}
       }
       if (isEduitBackend(env) && !eduitConversationId && telefone) {
         try {

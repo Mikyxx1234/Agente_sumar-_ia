@@ -16,7 +16,7 @@ import {
   detectCourseSwitchAgainstCrmState,
   normalizeCourseKey,
 } from '../../libShared/courseStateDrift.js'
-import { isEduitBackend, loadCrmRecentMessages, normalizeCrmLeadId } from '../crmAdapter.js'
+import { isEduitBackend, loadCrmRecentMessages, normalizeCrmLeadId, resolveCrmLeadId } from '../crmAdapter.js'
 import { fetchLeadFormSnapshot } from '../inscricaoKommoFields.js'
 import { generateExecutionId } from './executionTelemetry.js'
 import { resolveModel } from './modelRegistry.js'
@@ -595,7 +595,8 @@ export async function runAgent(env, input) {
     )
   }
   const executionId = input?.executionId || generateExecutionId()
-  const leadId = Number.isFinite(Number(input?.leadId)) && Number(input?.leadId) > 0 ? Number(input.leadId) : null
+  const resolvedLeadId = await resolveCrmLeadId(env, telefone, input?.leadId)
+  const leadId = resolvedLeadId || (isEduitBackend(env) ? null : normalizeCrmLeadId(input?.leadId, env))
   const model = resolveModel(env, 'orchestrator')
   const ctx = createExecutionContext()
   if (!userMessage) return { ok: false, error: 'Mensagem vazia', executionId, model, aiMeta: ctx.toAiMeta() }
@@ -1457,7 +1458,10 @@ export async function runAgent(env, input) {
   // OpenAI), causando MISSING_CRM_FIELDS e o fluxo nunca completava.
   const contextLines = []
   if (telefone) contextLines.push(`- Telefone do lead: ${telefone}`)
-  if (leadId) contextLines.push(`- id_lead (Kommo): ${leadId}`)
+  if (leadId) {
+    const crmNome = isEduitBackend(env) || /^c[a-z0-9]{8,}$/i.test(String(leadId)) ? 'EduIT' : 'Kommo'
+    contextLines.push(`- id_lead (${crmNome}): ${leadId}`)
+  }
   if (input?.pushName) contextLines.push(`- Nome (pushName): ${input.pushName}`)
 
   if (leadId) {
@@ -1465,7 +1469,7 @@ export async function runAgent(env, input) {
       const snapRes = await fetchLeadFormSnapshot(env, leadId)
       const snap = snapRes?.snapshot
       if (snap?.curso_inscricao) {
-        contextLines.push(`- Curso no card Kommo (sum_Curso): ${snap.curso_inscricao}`)
+        contextLines.push(`- Curso no card: ${snap.curso_inscricao}`)
       }
       if (snap?.modalidade) {
         contextLines.push(`- Modalidade no card: ${snap.modalidade}`)

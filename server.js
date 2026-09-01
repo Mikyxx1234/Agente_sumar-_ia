@@ -56,7 +56,6 @@ import { marcarClienteIA, updateDadosCliente, getLeadIdByTelefone } from './serv
 import { saveConversation } from './server/historyStore.js'
 import { withSessionLock } from './server/evolution/concurrency.js'
 import {
-  findLeadByPhone,
   createLeadNote,
   getLeadSummary,
   listLeadsByStatus,
@@ -64,6 +63,12 @@ import {
   extractContactPhone,
   extractLeadPhone,
 } from './server/kommoClient.js'
+import {
+  findLeadByPhone,
+  isEduitBackend,
+  normalizeCrmLeadId,
+  persistEduitIds,
+} from './server/crmAdapter.js'
 import { sendMessageWithNote, sendText, splitMessage } from './server/whatsappSender.js'
 import { generateExecutionId, saveExecution } from './server/ai/executionTelemetry.js'
 import { sendTyping } from './server/evolution/typingIndicator.js'
@@ -2922,20 +2927,29 @@ app.post('/api/test/inbound', async (req, res) => {
     const sessionId = phoneToWhatsAppSessionId(phoneDigits) || `${phoneDigits}@s.whatsapp.net`
     const suppressWhatsapp = send === false || send === 'false'
 
-    // Resolve leadId: body > Kommo por telefone. Sem leadId o agente ainda
-    // roda, mas tools de CRM (inscrição/distribuir) podem cair em MISSING_CRM.
-    let leadIdHint = Number(leadId)
-    if (!Number.isFinite(leadIdHint) || leadIdHint <= 0) {
+    // Resolve leadId pelo CRM ativo (EduIT = CUID; Kommo = número).
+    // Number() em CUID vira NaN e caía no lookup Kommo (ex.: #25 → 23841399).
+    let leadIdHint = normalizeCrmLeadId(leadId, process.env)
+    if (!leadIdHint) {
       try {
         const lookup = await findLeadByPhone(process.env, phoneDigits)
-        if (lookup.ok && lookup.lead) leadIdHint = Number(lookup.lead.id)
+        if (lookup.ok && lookup.lead) {
+          leadIdHint = normalizeCrmLeadId(lookup.lead.id, process.env)
+          if (isEduitBackend(process.env) && leadIdHint) {
+            await persistEduitIds(process.env, phoneDigits, {
+              dealId: lookup.lead.eduit_deal_id || leadIdHint,
+              contactId: lookup.contactId || lookup.lead.eduit_contact_id,
+              conversationId: lookup.conversationId || lookup.lead.eduit_conversation_id,
+            }).catch(() => {})
+          }
+        }
       } catch { /* segue sem leadId */ }
     }
 
     await pushMessage(process.env, sessionId, text, { skipDedupe: true, bypassAiSwitch: true })
 
     const out = await flushSession(process.env, sessionId, {
-      leadIdHint: Number.isFinite(leadIdHint) && leadIdHint > 0 ? leadIdHint : undefined,
+      leadIdHint: leadIdHint || undefined,
       test: true,
       skipFunnelGate: true,
       suppressWhatsapp,
@@ -2944,7 +2958,7 @@ app.post('/api/test/inbound', async (req, res) => {
     res.json({
       ok: Boolean(out?.ok ?? (out && !out.skipped)),
       sessionId,
-      leadId: Number.isFinite(leadIdHint) && leadIdHint > 0 ? leadIdHint : null,
+      leadId: leadIdHint || null,
       sent: !suppressWhatsapp,
       reply: out?.reply || null,
       skipped: out?.skipped || null,

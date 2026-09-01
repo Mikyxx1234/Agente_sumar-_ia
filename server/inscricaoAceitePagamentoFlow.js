@@ -23,9 +23,8 @@ import { conversationMentionsTransferencia } from './inscricaoTransferenciaFlow.
 import {
   fetchDadosClienteByTelefone,
   updateDadosCliente,
-  getLeadIdByTelefone,
 } from './dadosClienteStore.js'
-import { createLeadAuditNote, updateLeadPipelineStatus } from './kommoClient.js'
+import { resolveCrmLeadId, createLeadNote, updateLeadPipelineStatus } from './crmAdapter.js'
 import { fetchCandidatoStatus } from './matriculaCaptacaoPipeline.js'
 import {
   consultarStatusCandidato,
@@ -180,9 +179,7 @@ export async function tryHandleMatriculaAceitePagamentoFlow(env, input) {
     return null
   }
 
-  const idLead =
-    (Number.isFinite(Number(leadIdHint)) && Number(leadIdHint) > 0 ? Number(leadIdHint) : null) ||
-    (await getLeadIdByTelefone(env, telefone))
+  const idLead = await resolveCrmLeadId(env, telefone, leadIdHint)
 
   const sanitized = String(userMessage || '').trim()
   if (
@@ -316,7 +313,7 @@ export async function tryHandleMatriculaAceitePagamentoFlow(env, input) {
   const { pipelineId, statusId } = resolvePosMatriculaTarget(env)
 
   if (idLead) {
-    await createLeadAuditNote(
+    await createLeadNote(
       env,
       idLead,
       `Comprovante de pagamento recebido via WhatsApp (candidato ${candidatoId || 'n/a'}). ` +

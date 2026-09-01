@@ -237,6 +237,97 @@ export async function sendText(env, { to, text, conversationId } = {}) {
   }
 }
 
+export const DEFAULT_META_FLOW_FORMULARIO_ID = '2505237399980312'
+export const DEFAULT_META_FLOW_BODY = 'Preencha o formulário: Candidato'
+export const DEFAULT_META_FLOW_CTA = 'Abrir formulário'
+
+export function resolveFormularioMetaFlowId(env = process.env) {
+  return String(
+    env.WHATSAPP_META_FLOW_FORMULARIO_ID || env.EDUIT_META_FLOW_ID || DEFAULT_META_FLOW_FORMULARIO_ID,
+  ).trim()
+}
+
+export function buildFormularioFlowCrmNote({ flowId, messageId } = {}) {
+  const id = String(flowId || '').trim()
+  const wamid = String(messageId || '').trim()
+  const lines = [`${DEFAULT_META_FLOW_BODY}`, `[Flow: ${DEFAULT_META_FLOW_CTA}]`]
+  if (id) lines.push(`Meta flow_id=${id}`)
+  if (wamid) lines.push(`wamid=${wamid}`)
+  return lines.join('\n')
+}
+
+/**
+ * Envia WhatsApp Flow publicado pela Cloud API (não passa pelo EduIT).
+ * Depois o caller deve gravar nota na conversa EduIT (logEduitConversationNote).
+ */
+export async function sendWhatsappFlow(env, { to, flowId, bodyText, cta } = {}) {
+  const cfg = getConfig(env)
+  if (!cfg.phoneNumberId || !cfg.accessToken) {
+    return {
+      ok: false,
+      code: 'WHATSAPP_NOT_CONFIGURED',
+      error: 'Configure WHATSAPP_PHONE_NUMBER_ID e WHATSAPP_ACCESS_TOKEN.',
+    }
+  }
+  const recipient = digitsOnly(to)
+  if (!recipient) return { ok: false, code: 'MISSING_TO', error: 'destinatário vazio' }
+  const id = String(flowId || resolveFormularioMetaFlowId(env) || '').trim()
+  if (!id) return { ok: false, code: 'MISSING_FLOW_ID', error: 'flow_id Meta ausente' }
+
+  const url = `https://graph.facebook.com/${cfg.apiVersion}/${cfg.phoneNumberId}/messages`
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${cfg.accessToken}`,
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: recipient,
+        type: 'interactive',
+        interactive: {
+          type: 'flow',
+          body: { text: String(bodyText || DEFAULT_META_FLOW_BODY) },
+          action: {
+            name: 'flow',
+            parameters: {
+              flow_message_version: '3',
+              flow_id: id,
+              flow_cta: String(cta || DEFAULT_META_FLOW_CTA),
+            },
+          },
+        },
+      }),
+    })
+    const raw = await res.text()
+    let data = null
+    try {
+      data = raw ? JSON.parse(raw) : null
+    } catch {
+      data = raw
+    }
+    if (!res.ok) {
+      return {
+        ok: false,
+        code: 'WHATSAPP_FLOW_SEND_FAILED',
+        status: res.status,
+        error: typeof raw === 'string' ? raw.slice(0, 500) : 'unknown',
+      }
+    }
+    return {
+      ok: true,
+      status: res.status,
+      messageId: data?.messages?.[0]?.id || null,
+      flowId: id,
+      via: 'meta_flow',
+    }
+  } catch (e) {
+    return { ok: false, code: 'WHATSAPP_FETCH_FAILED', error: e.message }
+  }
+}
+
 /**
  * Orquestra split → envio → nota Kommo → espera por cada parte.
  *

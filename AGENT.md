@@ -12,6 +12,14 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-09-01 - Lookup por telefone no backend EduIT não pode cair no Kommo
+
+- **Modelo usado**: Cursor Grok 4.6
+- **Decisão**: Com `CRM_BACKEND=eduit`, o id do atendimento é o CUID do deal. `Number(id)` em CUID é proibido (vira `NaN` e o código ia no Kommo). Resolver sempre via `resolveCrmLeadId` (hint CUID → `eduit_deal_id` → lookup EduIT). Hint numérico Kommo é descartado. Snapshot/curso/polo e detecção pós-form leem o deal EduIT; inbound não espelha mais no Kommo.
+- **Contexto**: Teste no #25 (William) devolveu `leadId=23841399` (Kommo antigo) e o prompt dizia "id_lead (Kommo)". `dados_cliente_sum.id_lead` ainda pode ter o número velho se `eduit_deal_id` estiver vazio.
+- **Alternativas descartadas**: Manter o endpoint de teste no cliente Kommo (reproduz o bug a cada homologação); fallback silencioso para o número Kommo do Supabase.
+- **Impacto**: Card/snapshot e captação pós-form passam a usar o deal EduIT. Produção precisa do commit no EasyPanel. Handoff humano (`distribuir_humano`) e dashboard Kommo ficam de fora deste corte.
+
 ### 2026-09-01 - Inscrição no portal novo (matricula.sumare.edu.br / Softsy + educsy)
 
 - **Modelo usado**: Cursor Grok 4.6

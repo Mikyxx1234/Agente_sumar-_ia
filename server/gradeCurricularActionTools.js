@@ -1,8 +1,9 @@
 /**
  * Tool de ação: enviar grade curricular em PDF via WhatsApp.
  */
-import { fetchDadosClienteByTelefone, getLeadIdByTelefone } from './dadosClienteStore.js'
-import { findLeadByPhone, listLeadNotes } from './kommoClient.js'
+import { fetchDadosClienteByTelefone } from './dadosClienteStore.js'
+import { listLeadNotes } from './kommoClient.js'
+import { resolveCrmLeadId } from './crmAdapter.js'
 import { sendGradePdfToLead } from './evolution/evolutionSendMedia.js'
 import { extractDiscussedCourseFromHistory } from '../libShared/conversationContextHeuristics.js'
 import { extractCursoAreaFromText } from '../libShared/cursoConfirmation.js'
@@ -62,16 +63,7 @@ async function shouldSkipDuplicateGradePdf(env, leadId, fileName) {
 }
 
 async function resolveLeadId(env, telefone, hint) {
-  if (Number.isFinite(Number(hint)) && Number(hint) > 0) return Number(hint)
-  const fromDb = await getLeadIdByTelefone(env, telefone)
-  if (fromDb != null) return Number(fromDb) || fromDb
-  try {
-    const lookup = await findLeadByPhone(env, telefone)
-    if (lookup.ok && lookup.lead?.id) return Number(lookup.lead.id)
-  } catch {
-    /* ignore */
-  }
-  return null
+  return resolveCrmLeadId(env, telefone, hint)
 }
 
 function resolveCursoFromContext({ cursoArg, userMessage, historyMessages, kommoCurso }) {
