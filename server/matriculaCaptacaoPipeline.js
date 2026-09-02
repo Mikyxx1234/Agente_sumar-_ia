@@ -25,6 +25,7 @@ import {
   extractCandidatoStatusString,
 } from './sumareCaptacaoClient.js'
 import { analyzeCursoInscricaoSnapshot } from '../libShared/captacaoSnapshotSanitize.js'
+import { lookupRelatedCursoOfertas } from './inscricaoMatriculaConfirmFlow.js'
 
 const DEDUPE_MS = 6 * 60 * 60 * 1000
 const _linkSentMemory = new Map()
@@ -185,12 +186,26 @@ export async function runMatriculaCaptacaoAfterForm(env, ctx) {
     console.warn(
       `[matriculaCaptacao] lead=${leadId} curso inválido: ${cursoCheck.code} ${cursoCheck.reason}`,
     )
-    return {
+    const cursoPedido = String(snapshot?.curso_inscricao || '').trim()
+    const failure = {
       ok: false,
       code: cursoCheck.code,
       error: cursoCheck.reason,
       missing: cursoCheck.missing,
     }
+    // Curso presente mas não resolvido/inválido: sugere alternativas oficiais.
+    // CURSO_AUSENTE (vazio) NÃO busca alternativas — o lead ainda precisa informar o curso.
+    if (
+      cursoPedido &&
+      (cursoCheck.code === 'CURSO_NAO_RESOLVIDO' || cursoCheck.code === 'CURSO_INVALIDO_SNAPSHOT')
+    ) {
+      const alternativas = await lookupRelatedCursoOfertas(env, cursoPedido, { limit: 3 }).catch(
+        () => [],
+      )
+      failure.cursoPedido = cursoPedido
+      failure.alternativas = Array.isArray(alternativas) ? alternativas : []
+    }
+    return failure
   }
 
   let priorRow = await fetchDadosClienteByTelefone(

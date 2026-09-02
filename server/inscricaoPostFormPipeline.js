@@ -20,6 +20,8 @@ import {
   buildInscricaoFormCompleteReply,
   buildInscricaoFormFieldsIncompleteReply,
   buildAskCursoAfterFormReply,
+  buildCursoIndisponivelAlternativasReply,
+  buildCursoIndisponivelSemAlternativasReply,
   buildFormNotReceivedResendReply,
   matriculaPosFormAlreadyProcessed,
   inscricaoFormAlreadyFilled,
@@ -502,6 +504,8 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
   /** Evita gravar nota de auditoria duplicada quando a falha já foi notada
    * na branch de captação e depois cai no bloco distribuir_consultor. */
   let auditNoted = false
+  /** Step específico quando curso presente não resolve (com/sem alternativas). */
+  let aguardandoDistribuicaoStep = 'aguardando_curso'
 
   if (isSumareCaptacaoEnabled(env)) {
     const cap = await runMatriculaCaptacaoAfterForm(env, {
@@ -554,17 +558,51 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
       console.error(
         `[inscricaoPostForm] captação falhou lead=${idLead} code=${cap.code} missing=${missing} err=${String(cap.error || '').slice(0, 800)}`,
       )
-      const cursoRecoverable =
-        cap.code === 'CURSO_INVALIDO_SNAPSHOT' ||
-        cap.code === 'CURSO_NAO_RESOLVIDO' ||
-        cap.code === 'CURSO_AUSENTE'
       const missingArr = Array.isArray(cap.missing) ? cap.missing : []
-      // Curso ausente/não resolvido NÃO é falha terminal: o lead já preencheu
-      // o formulário (dados/polo ok) e só falta o nome do curso — mantemos o
-      // fluxo aberto e pedimos o curso, em vez de redirecionar para o
-      // atendimento da faculdade (regressão lead Aline #24120625).
-      if (cursoRecoverable || missingArr.includes('curso') || missing.includes('curso')) {
+      const alternativas = Array.isArray(cap.alternativas) ? cap.alternativas : []
+      const cursoPedido = String(cap.cursoPedido || '').trim()
+      const cursoPresentUnresolved =
+        cap.code === 'CURSO_NAO_RESOLVIDO' || cap.code === 'CURSO_INVALIDO_SNAPSHOT'
+      // Somente CURSO_AUSENTE: NÃO use !cursoPedido — MISSING_FIELDS (cpf/email/etc.)
+      // não propaga cursoPedido mesmo com curso já resolvido (regressão pós-Amanda).
+      const cursoReallyAbsent = cap.code === 'CURSO_AUSENTE'
+      // Curso ausente (snapshot vazio) → pede o nome (regressão Aline #24120625).
+      // Curso presente mas não resolvido → informa indisponibilidade (+ alternativas).
+      if (cursoPresentUnresolved) {
+        if (alternativas.length > 0) {
+          reply = buildCursoIndisponivelAlternativasReply({ pushName, cursoPedido, alternativas })
+          aguardandoDistribuicaoStep = 'curso_indisponivel_com_alternativas'
+          captacaoFailReason = 'curso_indisponivel_com_alternativas'
+          await noteAtendimentoNaoConcluido(env, {
+            leadId: idLead,
+            executionId,
+            code: cap.code,
+            reason: 'curso informado indisponível — apresentando alternativas',
+            replyKind: 'curso_indisponivel_com_alternativas',
+          })
+        } else {
+          reply = buildCursoIndisponivelSemAlternativasReply({ pushName, cursoPedido })
+          aguardandoDistribuicaoStep = 'curso_indisponivel_sem_alternativas'
+          captacaoFailReason = 'curso_indisponivel_sem_alternativas'
+          await noteAtendimentoNaoConcluido(env, {
+            leadId: idLead,
+            executionId,
+            code: cap.code,
+            reason: 'curso informado indisponível — sem alternativas',
+            replyKind: 'curso_indisponivel_sem_alternativas',
+          })
+        }
+        await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO).catch(() => {})
+        ctxForm = INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO
+        captacaoFailedTerminal = false
+        auditNoted = true
+      } else if (
+        cursoReallyAbsent ||
+        missingArr.includes('curso') ||
+        missing.includes('curso')
+      ) {
         reply = buildAskCursoAfterFormReply({ pushName })
+        aguardandoDistribuicaoStep = 'aguardando_curso'
         await setFormStatus(env, telefone, INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO).catch(() => {})
         ctxForm = INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO
         captacaoFailedTerminal = false
@@ -672,10 +710,9 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
       steps.unshift({ type: 'move_lead_inscricao', ...funnelMove })
     }
   } else if (ctxForm === INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO) {
-    // Curso pendente (pedimos o nome do curso ao lead) — NÃO é falha terminal.
-    // Mantém a IA ativa e o status aguardando_distribuicao para que a resposta
-    // do lead com o curso continue o fluxo normalmente (sem pausar/concluir).
-    steps.unshift({ type: 'aguardando_curso', ok: true, reason: captacaoFailReason })
+    // Curso pendente (ausente) OU curso informado indisponível (com/sem alternativas).
+    // Mantém a IA ativa e o status aguardando_distribuicao — NÃO executa captação/contrato.
+    steps.unshift({ type: aguardandoDistribuicaoStep, ok: true, reason: captacaoFailReason })
   } else if (captacaoFailedTerminal && !matriculaOk) {
     // Plano_Inscricao_CardKommo — captação falhou definitivamente e o salesbot
     // fallback também não rodou. Estado terminal evita o loop do scheduler

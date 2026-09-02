@@ -46,6 +46,8 @@ import {
   INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
   INSCRICAO_FORM_STATUS_CONCLUIDO,
   buildAskCursoAfterFormReply,
+  buildCursoIndisponivelAlternativasReply,
+  buildCursoIndisponivelSemAlternativasReply,
   buildInscricaoFormFieldsIncompleteReply,
 } from '../libShared/inscricaoFormHeuristics.js'
 import {
@@ -113,7 +115,13 @@ import {
 } from '../libShared/humanHandoffHeuristics.js'
 import { tryHandleSaidaCanalJaEncerrada } from '../server/humanHandoffFlow.js'
 import { buildHumanHandoffReply } from '../libShared/scopeHeuristics.js'
-import { messageAsksAcademicAffairsSupportInText } from '../libShared/academicAffairsHeuristics.js'
+import {
+  messageAsksAcademicAffairsSupportInText,
+  messageAsksInstitutionalAcademicPhone,
+  buildAcademicAffairsRedirectReply,
+  buildInstitutionalAcademicPhoneReply,
+  SUMARE_INSTITUTIONAL_PHONE,
+} from '../libShared/academicAffairsHeuristics.js'
 
 let passed = 0
 let failed = 0
@@ -1402,6 +1410,135 @@ section('24 — Academic affairs: não confundir "já sou formado" + curso')
   )
 }
 
+section('24b — Telefone institucional acadêmico (regressão Andrea #23913)')
+
+{
+  const { messageAsksRegionalFacultyLocation } = await import('../libShared/inboundMessageSanitize.js')
+  const { tryHandleAcademicAffairsInquiry } = await import('../server/academicAffairsFlow.js')
+  const redirectHist = [
+    { role: 'assistant', content: buildAcademicAffairsRedirectReply({}) },
+  ]
+
+  // a) pedido direto
+  assertEqual(
+    messageAsksInstitutionalAcademicPhone('Qual o telefone da Faculdade Sumaré?'),
+    true,
+    '24b.a heurística: telefone da Faculdade Sumaré',
+  )
+  const replyDireto = buildInstitutionalAcademicPhoneReply({})
+  assert(
+    replyDireto.includes(SUMARE_INSTITUTIONAL_PHONE),
+    '24b.a2 reply contém telefone canônico',
+  )
+  assertEqual(
+    SUMARE_INSTITUTIONAL_PHONE,
+    '(11) 3067-7999',
+    '24b.a3 canônico exatamente (11) 3067-7999',
+  )
+
+  // b/c) follow-up após redirect acadêmico
+  assertEqual(
+    messageAsksInstitutionalAcademicPhone('Preciso de telefone', redirectHist),
+    true,
+    '24b.b Andrea: Preciso de telefone após redirect',
+  )
+  assertEqual(
+    messageAsksInstitutionalAcademicPhone('qual o número?', redirectHist),
+    true,
+    '24b.c qual o número? após redirect',
+  )
+
+  // d) secretaria acadêmica
+  assertEqual(
+    messageAsksInstitutionalAcademicPhone('telefone para falar com a secretaria acadêmica'),
+    true,
+    '24b.d secretaria acadêmica',
+  )
+
+  // e) sem histórico
+  assertEqual(
+    messageAsksInstitutionalAcademicPhone('Preciso de telefone', []),
+    false,
+    '24b.e Preciso de telefone sem histórico',
+  )
+
+  // f) atualização do próprio contato
+  assertEqual(
+    messageAsksInstitutionalAcademicPhone('quero atualizar meu telefone'),
+    false,
+    '24b.f atualizar meu telefone',
+  )
+  assertEqual(
+    messageAsksInstitutionalAcademicPhone('meu whatsapp mudou'),
+    false,
+    '24b.f2 meu whatsapp mudou',
+  )
+
+  // g) polo / localização — fora da heurística acadêmica
+  assertEqual(
+    messageAsksInstitutionalAcademicPhone('telefone do polo Tatuapé'),
+    false,
+    '24b.g telefone do polo',
+  )
+  assertEqual(
+    messageAsksInstitutionalAcademicPhone('onde fica o polo'),
+    false,
+    '24b.g2 onde fica o polo',
+  )
+  assertEqual(
+    messageAsksInstitutionalAcademicPhone('qual o telefone da faculdade na zona leste'),
+    false,
+    '24b.g3 telefone zona leste',
+  )
+
+  // h) redirect acadêmico genérico sem telefone
+  const redirectReply = buildAcademicAffairsRedirectReply({})
+  assert(
+    !redirectReply.includes(SUMARE_INSTITUTIONAL_PHONE),
+    '24b.h redirect acadêmico NÃO inclui telefone institucional',
+  )
+  assert(
+    !redirectReply.includes('(11) 3067-7999'),
+    '24b.h2 redirect sem (11) 3067-7999',
+  )
+
+  // i) sanitize: "Preciso de telefone" não aciona localização/polos
+  assertEqual(
+    messageAsksRegionalFacultyLocation('Preciso de telefone', []),
+    false,
+    '24b.i regional location false para Preciso de telefone',
+  )
+  assertEqual(
+    messageAsksRegionalFacultyLocation('Preciso de telefone', redirectHist),
+    false,
+    '24b.i2 regional location false com histórico acadêmico',
+  )
+
+  // j) integração Andrea: step do telefone, sem texto de polos
+  const andrea = await tryHandleAcademicAffairsInquiry({}, {
+    userMessage: 'Preciso de telefone',
+    historyMessages: redirectHist,
+    executionId: 'test-andrea-23913',
+    model: 'test',
+    pushName: 'Andrea',
+    t0: Date.now(),
+  })
+  assert(andrea?.handled === true, '24b.j Andrea handled')
+  assertEqual(
+    andrea?.result?.orchestratorSteps?.[0]?.type,
+    'institutional_academic_phone',
+    '24b.j2 step=institutional_academic_phone',
+  )
+  assert(
+    String(andrea?.result?.reply || '').includes(SUMARE_INSTITUTIONAL_PHONE),
+    '24b.j3 reply com telefone canônico',
+  )
+  assert(
+    !/polo|Barra Funda|Tatuap[eé]|S[aã]o Miguel/i.test(String(andrea?.result?.reply || '')),
+    '24b.j4 reply NÃO lista polos',
+  )
+}
+
 section('25 — Form sem curso: pedir curso em vez de redirecionar (regressão Aline #24120625)')
 
 {
@@ -2075,6 +2212,599 @@ section('32 — polo nunca vira curso (regressão Jean #23912)')
       restoreFetch()
     }
   }
+}
+
+section('33 — Curso informado não resolvido: alternativas (regressão Amanda #23840)')
+
+{
+  const { lookupRelatedCursoOfertas, lookupCursoPrecoResumo } = await import(
+    '../server/inscricaoMatriculaConfirmFlow.js'
+  )
+  const { resolveCursoOfertaFromDb, invalidateCaptacaoCursoCache } = await import(
+    '../server/sumareCaptacaoCursoStore.js'
+  )
+  const { runMatriculaCaptacaoAfterForm } = await import('../server/matriculaCaptacaoPipeline.js')
+
+  const posPsicologiaRows = [
+    {
+      id: 1,
+      content:
+        'chave: Psicologia Organizacional e do Trabalho | nome_curso: Pós-Graduação em Psicologia Organizacional e do Trabalho | preco com desconto: 187 | duracao: 6 Meses | modalidade: EAD',
+      metadata: { modalidade: 'EAD', duracao: '6 Meses' },
+    },
+    {
+      id: 2,
+      content:
+        'chave: Psicologia, Neurociências e Comportamento | nome_curso: Pós-Graduação em Psicologia, Neurociências e Comportamento | preco com desconto: 191 | duracao: 6 Meses | modalidade: EAD',
+      metadata: { modalidade: 'EAD', duracao: '6 Meses' },
+    },
+    {
+      id: 3,
+      content:
+        'chave: Psicologia Positiva e Desenvolvimento do Capital Humano nas Organizações | nome_curso: Pós-Graduação em Psicologia Positiva e Desenvolvimento do Capital Humano nas Organizações | preco com desconto: 191 | duracao: 6 Meses | modalidade: EAD',
+      metadata: { modalidade: 'EAD', duracao: '6 Meses' },
+    },
+    {
+      id: 4,
+      content:
+        'chave: Biomedicina | nome_curso: Graduação - Biomedicina | preco com desconto: 299 | duracao: 8 semestres | modalidade: EAD',
+      metadata: { modalidade: 'EAD', duracao: '8 semestres' },
+    },
+  ]
+
+  const catalogoRows = [
+    {
+      codigo_original: 'BIOMED_EAD',
+      codigo_base: 'BIOMED',
+      curso_nome: 'Biomedicina',
+      modalidade: 'EAD',
+      ativo: true,
+    },
+    {
+      codigo_original: 'ADM_EAD',
+      codigo_base: 'ADM',
+      curso_nome: 'Administração',
+      modalidade: 'EAD',
+      ativo: true,
+    },
+    {
+      codigo_original: 'PSIORG_EAD',
+      codigo_base: 'PSIORG',
+      curso_nome: 'Psicologia Organizacional e do Trabalho',
+      modalidade: 'EAD',
+      ativo: true,
+    },
+  ]
+
+  function installAmandaPriceStub(extra = {}) {
+    invalidateCaptacaoCursoCache()
+    const base = defaultSupabaseStub({
+      dadosClienteRow: extra.dadosClienteRow || { id: 1, id_lead: 23840 },
+      notes: extra.notes || [],
+    })
+    installFetchStub((call) => {
+      if (call.url.includes('/rest/v1/pos_preco')) {
+        return { status: 200, body: posPsicologiaRows.slice(0, 3) }
+      }
+      if (call.url.includes('/rest/v1/grad_preco')) {
+        return { status: 200, body: [posPsicologiaRows[3]] }
+      }
+      if (call.url.includes('/rest/v1/sumare_captacao_curso')) {
+        return { status: 200, body: catalogoRows }
+      }
+      if (String(call.url).includes('mock-captacao') || /captacao|candidato|contrato|gerar/i.test(call.url)) {
+        return { status: 500, body: { error: 'captacao nao deve ser chamada' } }
+      }
+      return base(call)
+    })
+  }
+
+  // 33.1 lookupRelatedCursoOfertas('Psicologia') → 3 pós oficiais
+  installAmandaPriceStub()
+  try {
+    const envStub = { SUPABASE_URL: 'https://mock.supabase.co', SUPABASE_KEY: 'mock-key' }
+    const related = await lookupRelatedCursoOfertas(envStub, 'Psicologia', { limit: 3 })
+    assertEqual(related.length, 3, '33.1 retorna 3 alternativas para Psicologia')
+    assert(
+      related.every((r) => /p[oó]s/i.test(r.nivel)),
+      '33.1b todas alternativas são pós-graduação',
+    )
+    assert(
+      related.every((r) => /EAD/i.test(r.modalidade)),
+      '33.1c modalidade EAD presente',
+    )
+    assert(
+      related.every((r) => /6\s*Meses/i.test(r.duracao)),
+      '33.1d duração 6 Meses presente',
+    )
+    const mens = related.map((r) => r.mensalidade)
+    assert(mens.includes('R$ 187,00'), '33.1e mensalidade R$ 187,00')
+    assert(mens.includes('R$ 191,00'), '33.1f mensalidade R$ 191,00')
+    assert(
+      related.some((r) => /Organizacional/i.test(r.cursoNome)),
+      '33.1g inclui Psicologia Organizacional',
+    )
+    assert(
+      related.some((r) => /Neuroci[eê]ncias/i.test(r.cursoNome)),
+      '33.1h inclui Neurociências',
+    )
+    assert(
+      related.some((r) => /Positiva/i.test(r.cursoNome)),
+      '33.1i inclui Psicologia Positiva',
+    )
+    const resumoPsico = await lookupCursoPrecoResumo(envStub, 'Psicologia')
+    assertEqual(resumoPsico, null, '33.1j lookupCursoPrecoResumo(Psicologia) continua null')
+  } finally {
+    restoreFetch()
+    invalidateCaptacaoCursoCache()
+  }
+
+  // 33.2 builders
+  {
+    const alts = [
+      {
+        cursoNome: 'Psicologia Organizacional e do Trabalho',
+        nivel: 'pós-graduação',
+        modalidade: 'EAD',
+        duracao: '6 Meses',
+        mensalidade: 'R$ 187,00',
+      },
+      {
+        cursoNome: 'Psicologia, Neurociências e Comportamento',
+        nivel: 'pós-graduação',
+        modalidade: 'EAD',
+        duracao: '6 Meses',
+        mensalidade: 'R$ 191,00',
+      },
+      {
+        cursoNome: 'Psicologia Positiva e Desenvolvimento do Capital Humano nas Organizações',
+        nivel: 'pós-graduação',
+        modalidade: 'EAD',
+        duracao: '6 Meses',
+        mensalidade: 'R$ 191,00',
+      },
+    ]
+    const withAlts = buildCursoIndisponivelAlternativasReply({
+      pushName: 'Amanda',
+      cursoPedido: 'Psicologia',
+      alternativas: alts,
+    })
+    assert(/Psicologia/i.test(withAlts), '33.2 contém Psicologia')
+    assert(/p[oó]s-gradua[cç][aã]o/i.test(withAlts), '33.2b contém pós-graduação')
+    assert(/\bEAD\b/i.test(withAlts), '33.2c contém EAD')
+    assert(/6\s*Meses/i.test(withAlts), '33.2d contém 6 Meses')
+    assert(/R\$\s*187,00/.test(withAlts), '33.2e contém R$ 187,00')
+    assert(/R\$\s*191,00/.test(withAlts), '33.2f contém R$ 191,00')
+    assert(!/qual é o nome do curso/i.test(withAlts), '33.2g NÃO pede qual é o nome do curso')
+    assert(!/nome do curso/i.test(withAlts), '33.2h NÃO pede nome do curso novamente')
+
+    const semAlts = buildCursoIndisponivelSemAlternativasReply({
+      pushName: 'Amanda',
+      cursoPedido: 'Psicologia',
+    })
+    assert(/Psicologia/i.test(semAlts), '33.2i sem alternativas menciona o curso')
+    assert(!/qual é o nome do curso/i.test(semAlts), '33.2j sem alternativas NÃO pede nome do curso')
+    assert(!/n[aã]o oferece em nenhum n[ií]vel/i.test(semAlts), '33.2k NÃO afirma ausência em todos os níveis')
+  }
+
+  const envCaptacaoAmanda = {
+    ...env,
+    SUMARE_CAPTACAO_ENABLED: 'true',
+    SUMARE_CAPTACAO_BASE_URL: 'https://mock-captacao.sumare.edu.br',
+    SUMARE_CAPTACAO_TOKEN: 'mock-captacao-token',
+  }
+
+  // 33.3 Pipeline Amanda: curso presente + não resolvido + alternativas
+  installAmandaPriceStub({ dadosClienteRow: { id: 80, id_lead: 23840 } })
+  try {
+    const capOut = await executeCaptacaoAfterFormResolved(envCaptacaoAmanda, {
+      telefone: '55119990023840',
+      idLead: 23840,
+      executionId: 'EX-AMANDA-23840',
+      pushName: 'Amanda',
+      snapshotOverride: { curso_inscricao: 'Psicologia', polo_inscricao: 'Santana' },
+    })
+    assertEqual(
+      capOut.ctxForm,
+      INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
+      '33.3 ctxForm=aguardando_distribuicao_form',
+    )
+    assert(
+      (capOut.steps || []).some((s) => s.type === 'curso_indisponivel_com_alternativas'),
+      '33.3b step=curso_indisponivel_com_alternativas',
+    )
+    assert(/Psicologia/i.test(capOut.reply || ''), '33.3c reply menciona Psicologia')
+    assert(/p[oó]s/i.test(capOut.reply || ''), '33.3d reply menciona pós')
+    assert(!/qual é o nome do curso/i.test(capOut.reply || ''), '33.3e NÃO usa buildAskCursoAfterFormReply')
+    assert(
+      !fetchCalls.some((c) => /mock-captacao|\/gerar|\/candidato/i.test(c.url)),
+      '33.3f captação/contrato NÃO chamada',
+    )
+  } finally {
+    restoreFetch()
+    invalidateCaptacaoCursoCache()
+  }
+
+  // 33.4 Curso presente sem alternativas → curso_indisponivel_sem_alternativas
+  invalidateCaptacaoCursoCache()
+  {
+    const base = defaultSupabaseStub({ dadosClienteRow: { id: 81, id_lead: 23841 } })
+    installFetchStub((call) => {
+      if (call.url.includes('pos_preco') || call.url.includes('grad_preco')) {
+        return { status: 200, body: [] }
+      }
+      if (call.url.includes('sumare_captacao_curso')) return { status: 200, body: catalogoRows }
+      if (/mock-captacao|captacao|gerar/i.test(call.url)) {
+        return { status: 500, body: { error: 'nao chamar' } }
+      }
+      return base(call)
+    })
+  }
+  try {
+    const capOut = await executeCaptacaoAfterFormResolved(envCaptacaoAmanda, {
+      telefone: '55119990023841',
+      idLead: 23841,
+      executionId: 'EX-AMANDA-SEM-ALT',
+      pushName: 'Amanda',
+      snapshotOverride: { curso_inscricao: 'Psicologia Quântica Imaginária' },
+    })
+    assert(
+      (capOut.steps || []).some((s) => s.type === 'curso_indisponivel_sem_alternativas'),
+      '33.4 step=curso_indisponivel_sem_alternativas',
+    )
+    assertEqual(
+      capOut.ctxForm,
+      INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO,
+      '33.4b status aguardando_distribuicao_form',
+    )
+    assert(!/qual é o nome do curso/i.test(capOut.reply || ''), '33.4c NÃO usa askCurso')
+    const ask = buildAskCursoAfterFormReply({ pushName: 'Amanda' })
+    assert(capOut.reply !== ask, '33.4d reply distinta de buildAskCursoAfterFormReply')
+  } finally {
+    restoreFetch()
+    invalidateCaptacaoCursoCache()
+  }
+
+  // 33.5 Curso realmente vazio continua askCurso
+  installFetchStub(defaultSupabaseStub({ dadosClienteRow: { id: 82, id_lead: 23842 } }))
+  try {
+    const capOut = await executeCaptacaoAfterFormResolved(envCaptacaoAmanda, {
+      telefone: '55119990023842',
+      idLead: 23842,
+      executionId: 'EX-CURSO-VAZIO',
+      pushName: 'Aline',
+      snapshotOverride: { curso_inscricao: '' },
+    })
+    assert(/nome do curso/i.test(capOut.reply || ''), '33.5 curso vazio → buildAskCursoAfterFormReply')
+    assert(
+      (capOut.steps || []).some((s) => s.type === 'aguardando_curso'),
+      '33.5b step=aguardando_curso',
+    )
+  } finally {
+    restoreFetch()
+  }
+
+  // 33.6 resolveCursoOfertaFromDb: Psicologia NÃO resolve multi-token; Administração exato ok
+  invalidateCaptacaoCursoCache()
+  installFetchStub((call) => {
+    if (call.url.includes('/rest/v1/sumare_captacao_curso')) return { status: 200, body: catalogoRows }
+    if (call.url.includes('grad_preco') || call.url.includes('pos_preco')) return { status: 200, body: [] }
+    return { status: 200, body: [] }
+  })
+  try {
+    const psico = await resolveCursoOfertaFromDb('Psicologia', env)
+    assertEqual(psico, null, '33.6 Psicologia NÃO resolve Psicologia Organizacional')
+    const adm = await resolveCursoOfertaFromDb('Administração', env)
+    assertEqual(adm?.codigo, 'ADM_EAD', '33.6b Administração match exato continua')
+  } finally {
+    restoreFetch()
+    invalidateCaptacaoCursoCache()
+  }
+
+  // 33.7 Regressão Biomedicina disponível: resolve e NÃO cai em alternativas indevidas
+  installAmandaPriceStub({ dadosClienteRow: { id: 83, id_lead: 23843 } })
+  try {
+    const bio = await resolveCursoOfertaFromDb('Biomedicina', env)
+    assertEqual(bio?.codigo, 'BIOMED_EAD', '33.7 Biomedicina resolve no catálogo')
+
+    const capPipe = await runMatriculaCaptacaoAfterForm(envCaptacaoAmanda, {
+      telefone: '55119990023843',
+      leadId: 23843,
+      pushName: 'Bio',
+      executionId: 'EX-BIOMED',
+      snapshotOverride: {
+        curso_inscricao: 'Biomedicina',
+        nome: 'Bio Teste',
+        email: 'bio@test.com',
+        cpf: '12345678901',
+      },
+    })
+    assert(
+      capPipe.code !== 'CURSO_NAO_RESOLVIDO' && capPipe.code !== 'CURSO_AUSENTE',
+      '33.7b Biomedicina NÃO retorna CURSO_NAO_RESOLVIDO/AUSENTE',
+    )
+    assert(!Array.isArray(capPipe.alternativas), '33.7c sem alternativas indevidas no sucesso de resolução')
+  } finally {
+    restoreFetch()
+    invalidateCaptacaoCursoCache()
+  }
+
+  // 33.8 MISSING_FIELDS (cpf) com curso já resolvido e sem cap.cursoPedido
+  // NÃO deve cair em buildAskCursoAfterFormReply.
+  installAmandaPriceStub({ dadosClienteRow: { id: 84, id_lead: 23844 } })
+  try {
+    const capOut = await executeCaptacaoAfterFormResolved(envCaptacaoAmanda, {
+      telefone: '55119990023844',
+      idLead: 23844,
+      executionId: 'EX-MISSING-CPF',
+      pushName: 'Carla',
+      snapshotOverride: {
+        curso_inscricao: 'Biomedicina',
+        nome: 'Carla Teste',
+        email: 'carla@test.com',
+        // cpf ausente de propósito
+        data_nasc: '01/01/1990',
+        sexo: 'F',
+        polo_inscricao: 'Santana',
+      },
+    })
+    assertEqual(capOut?.code ?? capOut?.steps?.find((s) => s.type === 'sumare_captacao')?.code, 'MISSING_FIELDS', '33.8 code=MISSING_FIELDS')
+    const reply = String(capOut.reply || '')
+    assert(/cpf/i.test(reply), '33.8b reply pede campos incompletos (cpf)')
+    assert(!/qual é o nome do curso/i.test(reply), '33.8c NÃO usa buildAskCursoAfterFormReply')
+    assert(!/nome do curso/i.test(reply), '33.8d NÃO pede nome do curso')
+    assertEqual(
+      capOut.ctxForm,
+      INSCRICAO_FORM_STATUS_DISTRIBUIR_CONSULTOR,
+      '33.8e ctxForm=distribuir_consultor (falha terminal de campos)',
+    )
+    assert(
+      !(capOut.steps || []).some(
+        (s) =>
+          s.type === 'aguardando_curso' ||
+          s.type === 'curso_indisponivel_com_alternativas' ||
+          s.type === 'curso_indisponivel_sem_alternativas',
+      ),
+      '33.8f sem step de curso ausente/indisponível',
+    )
+  } finally {
+    restoreFetch()
+    invalidateCaptacaoCursoCache()
+  }
+}
+
+section('34 — Financeiro institucional / boleto → Regra 32 (regressão Pri #23910)')
+
+{
+  const { tryHandleAcademicAffairsInquiry } = await import('../server/academicAffairsFlow.js')
+
+  // Positivos
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('Quero falar com o financeiro'),
+    true,
+    '34.1 Quero falar com o financeiro',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('quero falar com o setor financeiro'),
+    true,
+    '34.2 falar com o setor financeiro',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('preciso do boleto'),
+    true,
+    '34.3 preciso do boleto',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('segunda via do boleto'),
+    true,
+    '34.4 segunda via do boleto',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('falar com a cobrança'),
+    true,
+    '34.5 falar com a cobrança',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('boleto vencido'),
+    true,
+    '34.5b boleto vencido',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('boleto atrasado'),
+    true,
+    '34.5c boleto atrasado',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('meu boleto está vencido'),
+    true,
+    '34.5d meu boleto está vencido',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('o boleto não chegou'),
+    true,
+    '34.5e o boleto não chegou',
+  )
+
+  // Integração: redirect Regra 32, sem lista de polos
+  const pri = await tryHandleAcademicAffairsInquiry(
+    {},
+    {
+      userMessage: 'Quero falar com o financeiro',
+      historyMessages: [],
+      executionId: 'test-pri-23910',
+      model: 'test',
+      pushName: 'Pri',
+      t0: Date.now(),
+    },
+  )
+  assert(pri?.handled === true, '34.6 Pri handled')
+  const priReply = String(pri?.result?.reply || '')
+  assert(/Portal do Aluno/i.test(priReply), '34.6b reply contém Portal do Aluno')
+  assert(
+    priReply.includes('https://sumare.edu.br/atendimento/'),
+    '34.6c reply contém URL atendimento',
+  )
+  assert(/ouvidoria/i.test(priReply), '34.6d reply contém ouvidoria')
+  assert(!/polo|Barra Funda/i.test(priReply), '34.6e reply NÃO lista polos')
+
+  // Negativos: forma de pagamento / comercial / financiamento
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('aceita boleto?'),
+    false,
+    '34.7 aceita boleto?',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('posso pagar no boleto?'),
+    false,
+    '34.8 posso pagar no boleto?',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('quais as formas de pagamento?'),
+    false,
+    '34.9 formas de pagamento',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('qual o valor da mensalidade?'),
+    false,
+    '34.10 valor da mensalidade',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('tem financiamento estudantil?'),
+    false,
+    '34.11 financiamento estudantil',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('quero saber sobre o FIES'),
+    false,
+    '34.12 FIES',
+  )
+}
+
+section('35 — Alteração/troca de polo → Regra 32 (regressão Silvia #23903)')
+
+{
+  const { tryHandleAcademicAffairsInquiry } = await import('../server/academicAffairsFlow.js')
+
+  // Positivos: alteração/movimentação de polo acadêmica
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('Como faço para mudar de polo'),
+    true,
+    '35.1 Como faço para mudar de polo',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('quero trocar de polo'),
+    true,
+    '35.2 quero trocar de polo',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('alteração de polo'),
+    true,
+    '35.3 alteração de polo',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('transferência de polo'),
+    true,
+    '35.4 transferência de polo',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('posso transferir minha matrícula para outro polo?'),
+    true,
+    '35.5 transferir matrícula para outro polo',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('quero migrar para o polo Tatuapé'),
+    true,
+    '35.6 migrar para o polo Tatuapé',
+  )
+
+  // Negativos: localização / lista / escolha comercial pré-inscrição
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('qual polo tem perto de mim?'),
+    false,
+    '35.7 qual polo tem perto de mim?',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('quais são os polos?'),
+    false,
+    '35.8 quais são os polos?',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('quero escolher o polo Tatuapé para minha inscrição'),
+    false,
+    '35.9 escolher polo para inscrição',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('meu polo é Santana'),
+    false,
+    '35.10 meu polo é Santana',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('onde fica o polo Tatuapé?'),
+    false,
+    '35.11 onde fica o polo Tatuapé?',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('não sei qual polo escolher'),
+    false,
+    '35.12 não sei qual polo escolher',
+  )
+
+  // Integração Silvia #23903: redirect Regra 32, sem lista de polos
+  const silvia = await tryHandleAcademicAffairsInquiry(
+    {},
+    {
+      userMessage: 'Como faço para mudar de polo',
+      historyMessages: [],
+      executionId: 'test-silvia-23903',
+      model: 'test',
+      pushName: 'Silvia',
+      t0: Date.now(),
+    },
+  )
+  assert(silvia?.handled === true, '35.13 Silvia handled')
+  assertEqual(
+    silvia?.result?.orchestratorSteps?.[0]?.type,
+    'academic_affairs_redirect',
+    '35.13b step academic_affairs_redirect',
+  )
+  const silviaReply = String(silvia?.result?.reply || '')
+  assert(/Portal do Aluno/i.test(silviaReply), '35.13c reply contém Portal do Aluno')
+  assert(
+    /sumare\.edu\.br\/atendimento/i.test(silviaReply),
+    '35.13d reply contém sumare.edu.br/atendimento',
+  )
+  assert(/ouvidoria/i.test(silviaReply), '35.13e reply contém ouvidoria')
+  assert(!/Barra Funda/i.test(silviaReply), '35.13f reply NÃO lista Barra Funda')
+  assert(!/\bpolos?\b/i.test(silviaReply), '35.13g reply NÃO lista polos')
+
+  // Regressão escolha inicial comercial
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('quero escolher o polo Tatuapé para minha inscrição'),
+    false,
+    '35.14 regressão escolha inicial de polo',
+  )
+
+  // Guard comercial: radicais inscri/formul com restante da palavra + plural polos
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('quero mudar para o polo Tatuapé antes do formulário'),
+    false,
+    '35.15 mudar polo antes do formulário',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('quero mudar de polo para minha inscrição'),
+    false,
+    '35.16 mudar polo para minha inscrição',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('quero trocar o polo antes de preencher o formulário'),
+    false,
+    '35.17 trocar polo antes de preencher o formulário',
+  )
+  assertEqual(
+    messageAsksAcademicAffairsSupportInText('transferência entre polos'),
+    true,
+    '35.18 transferência entre polos (plural)',
+  )
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */

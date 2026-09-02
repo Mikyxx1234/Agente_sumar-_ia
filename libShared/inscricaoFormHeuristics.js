@@ -590,6 +590,69 @@ export function buildAskCursoAfterFormReply(opts = {}) {
   )
 }
 
+function formatAlternativaOfertaLine(alt, index) {
+  const nome = String(alt?.cursoNome || '').trim() || 'Curso'
+  const nivel = String(alt?.nivel || '').trim()
+  const modalidade = String(alt?.modalidade || '').trim()
+  const duracao = String(alt?.duracao || '').trim()
+  const mensalidade = String(alt?.mensalidade || '').trim()
+  const detalhes = [nivel, modalidade, duracao, mensalidade].filter(Boolean).join(', ')
+  return `${index}. *${nome}*${detalhes ? ` — ${detalhes}` : ''}`
+}
+
+function cursoPedidoLooksPos(cursoPedido) {
+  return /\bp[oó]s(-|\s)?gradua|\bmba\b|\bespecializa/i.test(String(cursoPedido || ''))
+}
+
+function alternativasSaoSomentePos(alternativas) {
+  if (!Array.isArray(alternativas) || alternativas.length === 0) return false
+  return alternativas.every((a) => /p[oó]s/i.test(String(a?.nivel || '')))
+}
+
+/**
+ * Curso já informado, mas oferta exata não resolve no catálogo — com alternativas oficiais.
+ * NÃO pede de novo "qual é o nome do curso".
+ */
+export function buildCursoIndisponivelAlternativasReply(opts = {}) {
+  const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
+  const cursoPedido = String(opts.cursoPedido || '').trim() || 'informado'
+  const alternativas = (Array.isArray(opts.alternativas) ? opts.alternativas : []).slice(0, 3)
+  const linhas = alternativas.map((a, i) => formatAlternativaOfertaLine(a, i + 1))
+
+  if (alternativasSaoSomentePos(alternativas) && !cursoPedidoLooksPos(cursoPedido)) {
+    return (
+      `Obrigado${nameBit}! Recebemos o seu formulário. ` +
+      `A graduação em "${cursoPedido}" não está disponível em EAD no catálogo atual da Sumaré. ` +
+      `Encontrei estas opções de pós-graduação relacionadas:\n\n` +
+      `${linhas.join('\n')}\n\n` +
+      `A pós-graduação se destina a quem já concluiu uma graduação. ` +
+      `Você busca graduação em outra área ou alguma dessas pós?`
+    )
+  }
+
+  return (
+    `Obrigado${nameBit}! Recebemos o seu formulário. ` +
+    `Não localizei a oferta exata de "${cursoPedido}" no catálogo atual da Sumaré. ` +
+    `Encontrei estas opções relacionadas:\n\n` +
+    `${linhas.join('\n')}\n\n` +
+    `Alguma dessas opções atende o que você busca, ou prefere indicar outra área?`
+  )
+}
+
+/**
+ * Curso já informado, mas oferta exata não resolve e sem alternativas relacionadas.
+ * NÃO pede de novo "qual é o nome do curso" nem afirma ausência em todos os níveis.
+ */
+export function buildCursoIndisponivelSemAlternativasReply(opts = {}) {
+  const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
+  const cursoPedido = String(opts.cursoPedido || '').trim() || 'informado'
+  return (
+    `Obrigado${nameBit}! Recebemos o seu formulário. ` +
+    `Não localizei a oferta exata de "${cursoPedido}" no catálogo atual da Sumaré. ` +
+    `Pode me indicar outro curso ou área de interesse para eu verificar as opções disponíveis?`
+  )
+}
+
 export function buildInscricaoFormCompleteReply(opts = {}) {
   const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
   if (opts.ok) {

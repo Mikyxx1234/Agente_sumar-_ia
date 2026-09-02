@@ -54,11 +54,70 @@ function looksLikeCommercialEnrollment(t) {
   return false
 }
 
+/**
+ * Contato com setor financeiro/cobrança ou emissão/2ª via de boleto institucional.
+ * Negativos de forma de pagamento comercial têm precedência (conservador).
+ * NÃO usar prefixo `financ` — evita FIES/financiamento/financeiramente.
+ */
+function messageAsksFinanceiroInstitucional(t) {
+  // Negativos primeiro: boleto como forma de pagamento em captação comercial
+  if (/\b(aceita|aceitam)\s+(pagar\s+)?(no\s+|em\s+|por\s+)?boleto\b/i.test(t)) return false
+  if (/\bpode\s+ser\s+(no\s+|em\s+|por\s+)?boleto\b/i.test(t)) return false
+  if (/\bposso\s+pagar\s+(no\s+|em\s+|por\s+|via\s+)?boleto\b/i.test(t)) return false
+  if (/\bboleto\s+ou\s+cart[aã]o\b|\bcart[aã]o\s+ou\s+boleto\b/i.test(t)) return false
+  if (/\bformas?\s+de\s+pagamento\b/i.test(t)) return false
+
+  const contactIntent = /\b(falar\s+com|contato|setor|departamento|atendimento|secretaria)\b/i.test(t)
+
+  // Setor financeiro / cobrança
+  if (/\bfinanceiro\b/i.test(t) && contactIntent) return true
+  if (/\bcobran[cç]a\b/i.test(t) && contactIntent) return true
+
+  // Emissão / envio / 2ª via / regularização de boleto já gerado
+  if (/\bboleto\b/i.test(t)) {
+    if (/\b(preciso|me\s+manda|manda(?:r)?|envie|enviar|emitir|emiss[aã]o)\b/i.test(t)) return true
+    if (/\b(segunda\s+via|2[aª]\s+via)\b/i.test(t)) return true
+    if (/\bn[aã]o\s+chegou\b|\bvencid|\batrasad/i.test(t)) return true
+    if (/\bquero\s+pagar\s+(o\s+)?boleto\b/i.test(t)) return true
+  }
+
+  return false
+}
+
+/**
+ * Alteração/troca/transferência de polo de matrícula ativa (pós-matrícula).
+ * Não cobre escolha comercial de polo pré-inscrição nem "polo" isolado.
+ * `t` já vem normalizado (sem acentos).
+ */
+function messageAsksAcademicPoloChange(t) {
+  if (!t || t.length < 4) return false
+  // Escolha comercial pré-formulário / inscrição — não é assunto acadêmico.
+  // Radicais truncados usam \w* (boundary direita após o restante da palavra).
+  if (
+    /\b(para\s+minha\s+inscri\w*|antes\s+do\s+formul\w*|antes\s+de\s+preencher\s+o\s+formul\w*|quero\s+me\s+inscrever|escolher\s+o\s+polo)\b/i.test(
+      t,
+    )
+  ) {
+    return false
+  }
+  if (!/\bpolos?\b/i.test(t)) return false
+  // Intenção de alteração/movimentação (radicais + flexões comuns pós-normalize)
+  if (
+    /\b(mudar|mudei|mudanca|mudando|trocar|troca|troquei|trocando|alterar|alteracao|alterando|transferir|transferencia|transferindo|migrar|migracao|migrando)\b/i.test(
+      t,
+    )
+  ) {
+    return true
+  }
+  return false
+}
+
 /** Padrões de assunto acadêmico na mensagem isolada. */
 export function messageAsksAcademicAffairsSupportInText(text) {
   const t = normalize(text)
   if (!t || t.length < 4) return false
-  if (looksLikeCommercialEnrollment(t)) return false
+  // Comercial primeiro; exceção: "transferência de polo" não é transferência de curso
+  if (looksLikeCommercialEnrollment(t) && !messageAsksAcademicPoloChange(t)) return false
 
   if (/\b(trancar|trancamento|trancar\s+(o\s+)?curso|trancar\s+(a\s+)?matr[ií]cula)\b/i.test(t)) return true
   if (/\b(cancelar|cancelamento)\s+(a\s+)?(matr[ií]cula|curso|inscri[cç][aã]o)\b/i.test(t)) return true
@@ -82,6 +141,8 @@ export function messageAsksAcademicAffairsSupportInText(text) {
   if (/\bemitir\s+(o\s+)?diploma\b/i.test(t) || /\b(retirada\s+do\s+diploma)\b/i.test(t)) return true
   if (/\bdiploma\b/i.test(t)) return true
   if (/\bsolicita[cç][aã]o\s+de\s+diploma\b/i.test(t)) return true
+  if (messageAsksFinanceiroInstitucional(t)) return true
+  if (messageAsksAcademicPoloChange(t)) return true
 
   return false
 }
@@ -139,6 +200,115 @@ function firstName(nome) {
   const first = raw.split(/\s+/)[0]
   if (!first || /\d/.test(first) || first.length < 2) return ''
   return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase()
+}
+
+/** Telefone geral / unidade Pinheiros — único número institucional canônico. */
+export const SUMARE_INSTITUTIONAL_PHONE = '(11) 3067-7999'
+
+/** Assistant recentemente orientou canais acadêmicos oficiais (redirect). */
+function looksLikeAcademicAffairsRedirect(text) {
+  const t = normalize(text)
+  if (!t || t.length < 40) return false
+  if (/\batendimento\s+academico\b/i.test(t) && /\bportal\s+do\s+aluno\b/i.test(t)) return true
+  if (/sumare\.edu\.br\/atendimento/i.test(t) && /ouvidoria/i.test(t)) return true
+  return false
+}
+
+function recentAssistantGaveAcademicRedirect(historyMessages = [], limit = 12) {
+  if (!Array.isArray(historyMessages)) return false
+  return historyMessages
+    .slice(-limit)
+    .some((m) => {
+      const role = String(m?.role || '').toLowerCase()
+      if (role !== 'assistant' && role !== 'assistente') return false
+      return looksLikeAcademicAffairsRedirect(m?.content)
+    })
+}
+
+/** Atualização/correção do telefone do próprio lead — fora do domínio institucional. */
+function messageUpdatesOwnContactPhone(t) {
+  if (/\b(meu\s+telefone|meu\s+whatsapp|meu\s+contato)\b/i.test(t)) return true
+  if (/\b(atualizar|corrigir|trocar|alterar|mudar)\b[\s\S]{0,30}\b(telefone|whatsapp|contato)\b/i.test(t)) {
+    return true
+  }
+  if (/\b(telefone|whatsapp|contato)\b[\s\S]{0,30}\b(mudou|errado|desatualiz)\b/i.test(t)) return true
+  if (/\b(cadastro|dados\s+pessoais|dados\s+cadastrais)\b/i.test(t) && /\b(telefone|whatsapp|contato)\b/i.test(t)) {
+    return true
+  }
+  return false
+}
+
+/** Telefone/contato de polo, localização ou região — não é o telefone institucional. */
+function messageAsksPoloOrRegionalPhone(t) {
+  if (/\b(polo|unidade|campus|endere[cç]o|localiza|onde\s+fica|zona|regi[aã]o|bairro|pr[oó]xim)\b/i.test(t)) {
+    return true
+  }
+  return false
+}
+
+/** Pedido explícito de número/telefone neste turno (não “vai ligar?” de consultor). */
+function messageAsksPhoneContactIntent(t) {
+  if (!t || t.length < 4) return false
+  if (/\b(telefone|telefones)\b/i.test(t)) return true
+  if (/\b(n[uú]mero|numeros)\b/i.test(t) && !/\b(matricula|inscri|protocolo|cpf|rg)\b/i.test(t)) return true
+  if (/\b(me\s+passa|passa\s+(o|esse)|manda\s+o|envie\s+o)\b[\s\S]{0,20}\b(telefone|n[uú]mero|contato)\b/i.test(t)) {
+    return true
+  }
+  if (/\b(para\s+ligar|ligar\s+para|ligar\s+no|ligar\s+na|ligar\s+pro|ligar\s+pra)\b/i.test(t)) return true
+  return false
+}
+
+/** Instituição / secretaria acadêmica explícitas no mesmo turno. */
+function hasExplicitInstitutionalAcademicPhoneContext(t) {
+  if (/\b(faculdade\s+sumar[eé]|sumar[eé])\b/i.test(t)) return true
+  if (/\b(secretaria\s+academica|atendimento\s+academico|contato\s+institucional|institucional)\b/i.test(t)) {
+    return true
+  }
+  if (/\bacademic[ao]\b/i.test(t) && /\b(telefone|n[uú]mero|ligar|contato|secretaria)\b/i.test(t)) return true
+  return false
+}
+
+/** Follow-up curto pedindo telefone após redirect acadêmico recente. */
+function isShortInstitutionalPhoneFollowUp(t) {
+  if (!t || t.length > 72) return false
+  if (!messageAsksPhoneContactIntent(t)) return false
+  if (messageUpdatesOwnContactPhone(t)) return false
+  if (messageAsksPoloOrRegionalPhone(t)) return false
+  if (messageRequestsHuman(t) || messageStrongHumanEscalation(t)) return false
+  return true
+}
+
+/**
+ * Lead pede explicitamente o telefone institucional/acadêmico da Faculdade Sumaré,
+ * ou faz follow-up curto após redirect acadêmico recente (ex.: "Preciso de telefone").
+ */
+export function messageAsksInstitutionalAcademicPhone(text, historyMessages = []) {
+  const t = normalize(text)
+  if (!t || t.length < 4) return false
+  if (messageUpdatesOwnContactPhone(t)) return false
+  if (messageAsksPoloOrRegionalPhone(t)) return false
+  if (messageRequestsHuman(t) || messageStrongHumanEscalation(t)) return false
+  // WhatsApp de inscrição / comercial — não é contato acadêmico.
+  if (/\bwhatsapp\b/i.test(t) && /\b(inscri|matricul|consultor)\b/i.test(t)) return false
+
+  if (messageAsksPhoneContactIntent(t) && hasExplicitInstitutionalAcademicPhoneContext(t)) {
+    return true
+  }
+
+  if (!isShortInstitutionalPhoneFollowUp(t)) return false
+  if (recentAssistantGaveAcademicRedirect(historyMessages)) return true
+  if (historyHasAcademicAffairsTopic(historyMessages)) return true
+  return false
+}
+
+/** Resposta curta com o telefone geral / unidade Pinheiros. */
+export function buildInstitutionalAcademicPhoneReply(opts = {}) {
+  const name = firstName(opts.pushName)
+  const ola = name ? `Olá, ${name}!` : 'Olá!'
+  return (
+    `${ola} Para contato acadêmico/institucional da Faculdade Sumaré, ` +
+    `o telefone geral (unidade Pinheiros) é *${SUMARE_INSTITUTIONAL_PHONE}*.`
+  )
 }
 
 /** Mensagem canônica de direcionamento acadêmico. */

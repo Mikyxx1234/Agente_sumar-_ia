@@ -68,6 +68,9 @@ const STOPWORDS = new Set([
   'mba', 'especializacao', 'pos-graduacao',
 ])
 
+/** Stopwords extras só para sugestão de alternativas relacionadas (não afetam o resumo). */
+const RELATED_LOOKUP_STOPWORDS = new Set([...STOPWORDS, 'gestao'])
+
 function normalizeForMatch(s) {
   return String(s || '')
     .normalize('NFD')
@@ -82,6 +85,21 @@ function meaningfulTokens(s) {
   return normalizeForMatch(s)
     .split(' ')
     .filter((t) => t.length >= 3 && !STOPWORDS.has(t))
+}
+
+function meaningfulTokensRelated(s) {
+  return normalizeForMatch(s)
+    .split(' ')
+    .filter((t) => t.length >= 3 && !RELATED_LOOKUP_STOPWORDS.has(t))
+}
+
+function extractOfertaNomeFromPrecoMap(map, fallback = '') {
+  return (
+    map['nome_curso']?.replace(/^Gradua[cç][aã]o\s*[-–]\s*/i, '').trim() ||
+    map['curso']?.replace(/^P[oó]s-?Gradua[cç][aã]o\s+(em\s+)?/i, '').trim() ||
+    map['chave'] ||
+    String(fallback || '').trim()
+  )
 }
 
 /** Parseia o `content` "k: v | k: v | ..." das tabelas de preço. */
@@ -160,11 +178,7 @@ export async function lookupCursoPrecoResumo(env, cursoNome) {
   const { row, map } = best
   const mensalidade = formatMensalidade(map['preco com desconto'])
   if (!mensalidade) return null
-  const nomeCurso =
-    map['nome_curso']?.replace(/^Gradua[cç][aã]o\s*[-–]\s*/i, '').trim() ||
-    map['curso']?.replace(/^P[oó]s-?Gradua[cç][aã]o\s+(em\s+)?/i, '').trim() ||
-    map['chave'] ||
-    String(cursoNome).trim()
+  const nomeCurso = extractOfertaNomeFromPrecoMap(map, cursoNome)
   const duracao = String(map['duracao'] || row.metadata?.duracao || '').trim()
   return {
     cursoNome: nomeCurso,
@@ -173,6 +187,78 @@ export async function lookupCursoPrecoResumo(env, cursoNome) {
     duracao,
     modalidade: map['modalidade'] || row.metadata?.modalidade || '',
   }
+}
+
+/**
+ * Sugere ofertas oficiais relacionadas quando o curso pedido não resolve no catálogo.
+ * Usa interseção de tokens (sem Jaccard mínimo do resumo) — até `limit` itens únicos.
+ * @returns {Promise<Array<{ cursoNome, nivel, modalidade, duracao, mensalidade }>>}
+ */
+export async function lookupRelatedCursoOfertas(env, cursoNome, { limit = 3 } = {}) {
+  const max = Math.max(1, Math.min(Number(limit) || 3, 3))
+  const targetTokens = meaningfulTokensRelated(cursoNome)
+  if (targetTokens.length === 0) return []
+  const targetSet = new Set(targetTokens)
+
+  const exactResumo = await lookupCursoPrecoResumo(env, cursoNome)
+  const excludeKey = exactResumo ? normalizeForMatch(exactResumo.cursoNome) : ''
+
+  const rows = await fetchPrecoRows(env)
+  /** @type {Array<{ cursoNome: string, nivel: string, modalidade: string, duracao: string, mensalidade: string, inter: number, proximity: number }>} */
+  const scored = []
+  for (const row of rows) {
+    const map = parsePrecoContent(row.content)
+    const cand = map['chave'] || map['nome_curso'] || map['curso'] || ''
+    const candTokens = meaningfulTokensRelated(cand)
+    if (candTokens.length === 0) continue
+    const candSet = new Set(candTokens)
+    let inter = 0
+    for (const t of targetSet) if (candSet.has(t)) inter += 1
+    if (inter < 1) continue
+
+    const mensalidade = formatMensalidade(map['preco com desconto'])
+    if (!mensalidade) continue
+    const nomeCurso = extractOfertaNomeFromPrecoMap(map)
+    if (!nomeCurso) continue
+    const nomeKey = normalizeForMatch(nomeCurso)
+    if (excludeKey && nomeKey === excludeKey) continue
+
+    const union = new Set([...targetSet, ...candSet]).size
+    const proximity = union > 0 ? inter / union : 0
+    const duracao = String(map['duracao'] || row.metadata?.duracao || '').trim()
+    scored.push({
+      cursoNome: nomeCurso,
+      nivel: row.nivel,
+      modalidade: map['modalidade'] || row.metadata?.modalidade || '',
+      duracao,
+      mensalidade,
+      inter,
+      proximity,
+    })
+  }
+
+  scored.sort((a, b) => {
+    if (b.inter !== a.inter) return b.inter - a.inter
+    if (b.proximity !== a.proximity) return b.proximity - a.proximity
+    return String(a.cursoNome).localeCompare(String(b.cursoNome), 'pt-BR')
+  })
+
+  const out = []
+  const seen = new Set()
+  for (const item of scored) {
+    const k = normalizeForMatch(item.cursoNome)
+    if (!k || seen.has(k)) continue
+    seen.add(k)
+    out.push({
+      cursoNome: item.cursoNome,
+      nivel: item.nivel,
+      modalidade: item.modalidade,
+      duracao: item.duracao,
+      mensalidade: item.mensalidade,
+    })
+    if (out.length >= max) break
+  }
+  return out
 }
 
 export function buildMatriculaResumoReply({ cursoNome, duracao, mensalidade, pushName }) {

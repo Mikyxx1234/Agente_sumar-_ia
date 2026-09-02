@@ -35,6 +35,19 @@ function normalizeCursoKey(name) {
     .trim()
 }
 
+/** Tokens genéricos ignorados ao contar "tokens significativos" no partial match. */
+const PARTIAL_MATCH_STOPWORDS = new Set([
+  'de', 'do', 'da', 'dos', 'das', 'e', 'em', 'a', 'o', 'as', 'os', 'com', 'para',
+  'curso', 'cursos', 'graduacao', 'pos', 'ead', 'presencial', 'semipresencial', 'gestao',
+  'bacharelado', 'licenciatura', 'tecnologo', 'tecnologico', 'superior', 'mba', 'especializacao',
+])
+
+function significantCursoTokens(key) {
+  return String(key || '')
+    .split(' ')
+    .filter((t) => t.length >= 3 && !PARTIAL_MATCH_STOPWORDS.has(t))
+}
+
 /**
  * Match parcial por tokens (palavras completas), não por substring dentro de
  * uma palavra. Evita que "psicopedagogia" case com "pedagogia" só porque uma
@@ -49,6 +62,24 @@ function cursoKeysPartialMatch(a, b) {
   if (!shorter.length) return false
   const longerSet = new Set(longer)
   return shorter.every((t) => longerSet.has(t))
+}
+
+/**
+ * Partial match seguro para resolução de oferta:
+ * - query com 1 token significativo NÃO casa silenciosamente com oferta multi-token
+ * - query com >=2 tokens: exige >=2 tokens significativos compartilhados
+ */
+function cursoKeysSafePartialMatch(queryKey, candidateKey) {
+  if (!queryKey || !candidateKey || queryKey === candidateKey) return false
+  const qSig = significantCursoTokens(queryKey)
+  const cSig = significantCursoTokens(candidateKey)
+  if (qSig.length === 0 || cSig.length === 0) return false
+  // Consulta mono-token: só match exato (já tratado fora); nunca partial multi-token.
+  if (qSig.length === 1) return false
+  const cSet = new Set(cSig)
+  let shared = 0
+  for (const t of qSig) if (cSet.has(t)) shared += 1
+  return shared >= 2
 }
 
 function modalidadeRank(mod) {
@@ -104,8 +135,10 @@ export async function resolveCursoCodigoFromDb(cursoInscricao, env = process.env
 
   const matches = rows.filter((r) => normalizeCursoKey(r.curso_nome) === key)
   if (!matches.length) {
-    const partial = rows.filter((r) => cursoKeysPartialMatch(normalizeCursoKey(r.curso_nome), key))
+    const partial = rows.filter((r) => cursoKeysSafePartialMatch(key, normalizeCursoKey(r.curso_nome)))
     if (!partial.length) return ''
+    const uniqueNames = new Set(partial.map((r) => normalizeCursoKey(r.curso_nome)).filter(Boolean))
+    if (uniqueNames.size !== 1) return ''
     partial.sort((a, b) => modalidadeRank(a.modalidade) - modalidadeRank(b.modalidade))
     return String(partial[0].codigo_original || '').trim().toUpperCase()
   }
@@ -202,10 +235,13 @@ export async function resolveCursoOfertaFromDb(cursoInscricao, env = process.env
 
   let candidatos = rows.filter((r) => normalizeCursoKey(r.curso_nome) === key)
   if (!candidatos.length) {
-    candidatos = rows.filter((r) => {
+    const partial = rows.filter((r) => {
       const nk = normalizeCursoKey(r.curso_nome)
-      return nk && cursoKeysPartialMatch(nk, key)
+      return nk && cursoKeysSafePartialMatch(key, nk)
     })
+    const uniqueNames = new Set(partial.map((r) => normalizeCursoKey(r.curso_nome)).filter(Boolean))
+    // Resultado inequívoco: um único nome de curso (modalidades diferentes ok).
+    if (uniqueNames.size === 1) candidatos = partial
   }
   if (!candidatos.length) return null
 

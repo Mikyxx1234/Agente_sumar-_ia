@@ -266,13 +266,23 @@ export function messageAsksPoloAttendimentoList(text) {
 
 /**
  * Lead pergunta contato/endereço do campus, central ou unidade presencial.
+ * Telefone/ligar isolados NÃO acionam localização/polos — só campus/unidade/central,
+ * ou telefone junto de polo/local/região.
  */
 export function messageAsksCampusOrPhoneContact(text) {
   const t = normalizeMessageForScope(text).toLowerCase()
   if (!t || t.length < 4) return false
-  return /\b(campus|zcampis|unidade|central|telefone|whatsapp|falar\s+(no|com|na)|contato\s+(do|da|com|no)|ligar\s+(no|para|na))\b/i.test(
-    t,
-  )
+  if (/\b(campus|zcampis|unidade|central)\b/i.test(t)) return true
+  if (
+    /\b(telefone|whatsapp|falar\s+(no|com|na)|contato\s+(do|da|com|no)|ligar\s+(no|para|na)|ligar)\b/i.test(
+      t,
+    )
+  ) {
+    return /\b(polo|unidade|campus|central|endere[cç]o|localiza|onde\s+fica|zona|regi[aã]o|bairro|pinheiros|pr[oó]xim)\b/i.test(
+      t,
+    )
+  }
+  return false
 }
 
 /**
