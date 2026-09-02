@@ -48,6 +48,13 @@ import {
   mergeCrmAndSupabaseHistories,
 } from '../libShared/historyMerge.js'
 import {
+  extractCadastroFieldsFromInbound,
+  extractCpfFromText,
+  extractEmailFromText,
+  extractDataNascFromText,
+  isValidCpfDigits,
+} from '../libShared/cadastroInboundExtract.js'
+import {
   AGENT_FUNNEL_PIPELINE_ID,
   leadMatchesAgentFunnel as kommoLeadMatches,
 } from '../server/kommoAgentFunnelGate.js'
@@ -1100,6 +1107,33 @@ expect('logConversationNote sem conv', noteMissing.ok === false && noteMissing.c
   } finally {
     globalThis.fetch = origFetch
   }
+}
+
+{
+  expect('cpf checksum rejeita repetido', isValidCpfDigits('11111111111') === false)
+  expect(
+    'cpf extraido com rotulo',
+    extractCpfFromText('CPF 36880225802') === '36880225802' ||
+      extractCpfFromText('CPF 368.802.258-02').length === 11,
+  )
+  expect(
+    'telefone 11 digitos nao vira cpf',
+    extractCpfFromText('meu whats 11921216686', { phoneDigits: '5511921216686' }) === '',
+  )
+  expect(
+    'email inbound',
+    extractEmailFromText('leidy.santana19@hotmail.com') === 'leidy.santana19@hotmail.com',
+  )
+  expect('nasc br', extractDataNascFromText('19/06/1987') === '1987-06-19')
+  const leidy = extractCadastroFieldsFromInbound('Sim', [
+    { role: 'assistant', content: 'faltam informações no cadastro: cpf, email, dataNasc' },
+    { role: 'user', content: 'CPF 36880225802' },
+    { role: 'user', content: 'leidy.santana19@hotmail.com' },
+    { role: 'user', content: '19/06/1987' },
+  ], { phoneDigits: '5511921216686' })
+  expect('leidy email', leidy.email === 'leidy.santana19@hotmail.com')
+  expect('leidy nasc', leidy.dataNasc === '1987-06-19')
+  expect('leidy cpf 11', leidy.cpf === '36880225802' || isValidCpfDigits(leidy.cpf))
 }
 
 console.log(`\n${stats.passed}/${stats.total} passed`)

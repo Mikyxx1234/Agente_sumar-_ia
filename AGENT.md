@@ -12,6 +12,13 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-09-02 - CPF, e-mail e nascimento do chat vão para o card EduIT
+- **Modelo usado**: Grok 4.6
+- **Decisão**: Em cada turno, `persistCadastroFieldsFromInbound` lê a mensagem atual e as últimas falas do lead, extrai só CPF válido, e-mail e data de nascimento, e grava no card EduIT (`cpf`, `email`, `dtnascimento`) se o campo ainda estiver vazio/inválido. Espelha `kommo_cpf` / `kommo_email` / `kommo_data_nasc` no Supabase. Não sobrescreve valor bom; não usa o LLM.
+- **Contexto**: Leidy #23889 — o agente pediu cpf/email/dataNasc, ela mandou no WhatsApp, o card ficou em "+ Adicionar". Curso/polo já tinham writer; esses três não.
+- **Alternativas descartadas**: Pedir de novo no prompt (o modelo já pediu e não gravou); depender só do Flow (neste caso veio incompleto).
+- **Impacto**: Próximos turnos preenchem o card. Cards já vazios precisam de um turno novo (ou backfill pontual).
+
 ### 2026-09-01 - Curso confirmado na conversa grava no campo EduIT antes do formulário
 
 - **Modelo usado**: Cursor Grok 4.6

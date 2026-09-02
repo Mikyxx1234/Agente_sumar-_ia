@@ -36,6 +36,7 @@ import {
   messageIsBareCourseSelection,
 } from '../../libShared/cursoConfirmation.js'
 import { setSumCursoOnLead, setSumPoloOnLead } from '../sumareLeadFields.js'
+import { persistCadastroFieldsFromInbound } from '../cadastroCardSync.js'
 import { tryHandleUnsupportedCourseLevelInquiry } from '../courseLevelInquiry.js'
 import {
   tryHandleInscricaoFormComplete,
@@ -850,6 +851,21 @@ export async function runAgent(env, input) {
       }
     } catch (err) {
       console.warn(`[${executionId}] SUM_POLO_UPDATE erro: ${err.message}`)
+    }
+    try {
+      const cadastro = await persistCadastroFieldsFromInbound(env, {
+        leadId,
+        telefone,
+        userMessage,
+        historyMessages,
+      })
+      if (!cadastro.skipped || cadastro.written?.length) {
+        console.log(
+          `[${executionId}] CADASTRO_CARD_SYNC written=${(cadastro.written || []).join(',') || 'none'} ok=${cadastro.ok} code=${cadastro.code || 'n/a'}`,
+        )
+      }
+    } catch (err) {
+      console.warn(`[${executionId}] CADASTRO_CARD_SYNC erro: ${err.message}`)
     }
   }
 
