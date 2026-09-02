@@ -4,7 +4,10 @@
  */
 
 import { normalizeMessageForScope } from '../libShared/scopeHeuristics.js'
-import { extractCursoAreaFromText } from '../libShared/cursoConfirmation.js'
+import {
+  extractCursoAreaFromText,
+  isPastOrCurrentFormationWithoutDestination,
+} from '../libShared/cursoConfirmation.js'
 import { lastAssistantText } from '../libShared/inscricaoFormHeuristics.js'
 import { runRegistrarTransferencia } from './inscricaoActionTools.js'
 import { maybeAuditActionToolFailure } from './inscricaoFailureAudit.js'
@@ -144,12 +147,26 @@ function extractDestinoFromMatriculaAssistant(text) {
   return null
 }
 
+/** Lista ambígua de várias formações (ex.: "Cursei A, B e estou cursando C"). */
+export function isAmbiguousMultiFormationList(text) {
+  const raw = String(text || '').trim()
+  if (!raw) return false
+  const verbHits = (raw.match(/\b(cursei|cursava|estudei|fiz|(?:estou|estava)\s+cursando|cursando)\b/gi) || [])
+    .length
+  if (verbHits >= 2) return true
+  // Um verbo + enumeração com vírgula e "e"
+  if (verbHits >= 1 && /,\s*.+\be\b/i.test(raw)) return true
+  return false
+}
+
 function extractOrigemFromTransferUserText(text) {
   const raw = String(text || '').trim()
   if (!raw) return null
   if (/matricular|como\s+fa[çc]o|gostaria\s+me/i.test(raw) && !TRANSFERENCIA_USER_SIGNAL_RX.test(raw)) {
     return null
   }
+  // Várias formações citadas → não inventar uma origem única
+  if (isAmbiguousMultiFormationList(raw)) return null
 
   let m = raw.match(
     /(?:comecei|cursei|cursava|cursando|estava\s+cursando|estudei)\s+(?:a\s+)?(?:o\s+)?(?:curso\s+de\s+)?(.+?)\s+em\s+outra/i,
@@ -166,6 +183,11 @@ function extractOrigemFromTransferUserText(text) {
 
   const area = extractCursoAreaFromText(raw)
   if (area && isValidTransferenciaCursoLabel(area) && TRANSFERENCIA_USER_SIGNAL_RX.test(raw)) {
+    // "Quero fazer X ... outra faculdade" → X é destino, não origem
+    const hasDestinoIntent = /\b(quero|gostaria|pretendo|desejo)\b/i.test(raw)
+    const hasOrigemVerb =
+      /\b(cursei|cursava|estudei|comecei|tranquei|parei|terminei|cursando)\b/i.test(raw)
+    if (hasDestinoIntent && !hasOrigemVerb) return null
     return cleanCursoLabel(area)
   }
   return null
@@ -278,7 +300,7 @@ export function extractOrigemSemestreFromUserText(text) {
   }
 
   let origem = extractOrigemFromTransferUserText(raw)
-  if (!origem) {
+  if (!origem && !isAmbiguousMultiFormationList(raw)) {
     const origemPatterns = [
       /(?:^|[.;]\s*)(?:licenciatura|bacharelado|tecn[oó]logo)\s+em\s+(.+?)(?:\s*\.|\s*,|\s*último|$)/i,
       /(?:cursava|cursando|estudei|fiz)\s+(?:licenciatura|bacharelado|tecn[oó]logo)?\s*(?:em\s+)?(.+?)(?:\s*\.|\s*,|\s*último|$)/i,
@@ -315,13 +337,14 @@ export function extractTransferenciaConfirmacaoFromAssistant(text) {
 export function extractTransferenciaDestinoFromAssistant(text) {
   const t = String(text || '')
   const patterns = [
+    /que\s+no\s+seu\s+caso\s+[ée]\s+([^.,;)\n]+)/i,
     /orientar\s+melhor\s+para\s+o\s+(.+?)(?:\s+na\s+Sumar[eé]|,|\.|\?|$)/i,
     /ingressar\s+no\s+(.+?)(?:\s+da\s+Faculdade|\s+na\s+Sumar[eé]|\s+da\s+Sumar[eé]|,|\.|\?|$)/i,
     /curso\s+de\s+(?:gradua[cç][aã]o\s+em\s+)?(.+?)\s+na\s+Sumar[eé]/i,
   ]
   for (const rx of patterns) {
     const m = t.match(rx)
-    if (m?.[1]) return cleanCursoLabel(m[1])
+    if (m?.[1] && isValidTransferenciaCursoLabel(m[1])) return cleanCursoLabel(m[1])
   }
   return null
 }
@@ -399,22 +422,12 @@ export function extractTransferenciaContext(historyMessages = []) {
     if (messageRestatesSameCourseAsDestino(m.content, destino) && destino && !origem) {
       origem = destino
     }
-    const area = extractCursoAreaFromText(m.content)
-    if (
-      area &&
-      isValidTransferenciaCursoLabel(area) &&
-      destino &&
-      normalizeCursoKey(area) === normalizeCursoKey(destino) &&
-      !origem
-    ) {
-      origem = destino
-    }
+    // Não auto-atribuir origem=destino só porque a área citada coincide —
+    // listas de formação anterior/atual não afirmam origem única (Lidi usa restate).
   }
 
-  if (destino && semestre && !origem && conversationMentionsTransferencia(historyMessages)) {
-    origem = destino
-  }
-
+  // Canonicaliza casing quando origem e destino já são o mesmo curso (evidência prévia).
+  // Não fabricar origem ausente.
   if (
     origem &&
     destino &&
@@ -424,8 +437,8 @@ export function extractTransferenciaContext(historyMessages = []) {
   }
 
   if (!destino || !isValidTransferenciaCursoLabel(destino)) return null
-  if (!origem || !isValidTransferenciaCursoLabel(origem)) origem = destino
-  return { origem, destino, semestre }
+  if (origem && !isValidTransferenciaCursoLabel(origem)) origem = null
+  return { origem: origem || null, destino, semestre: semestre || null }
 }
 
 async function runTransferenciaComplete(env, ctx, payload, stepType) {
@@ -455,11 +468,30 @@ async function runTransferenciaComplete(env, ctx, payload, stepType) {
   }
 }
 
+function buildTransferenciaDadosIncompletosReply({ destino, missingOrigem, missingSemestre }) {
+  const destinoLabel = destino || 'o curso desejado'
+  const parts = [
+    `Entendi — os cursos que você citou são formações anteriores ou atuais e não alteram o destino (${destinoLabel}).`,
+  ]
+  if (missingOrigem && missingSemestre) {
+    parts.push(
+      'Para o aproveitamento, me diga apenas: (1) qual formação devemos usar como curso de origem da transferência e (2) qual foi o último semestre concluído nela.',
+    )
+  } else if (missingOrigem) {
+    parts.push(
+      'Para o aproveitamento, me diga qual formação devemos usar como curso de origem da transferência.',
+    )
+  } else if (missingSemestre) {
+    parts.push('Para o aproveitamento, me diga qual foi o último semestre concluído no curso de origem.')
+  }
+  return parts.join(' ')
+}
+
 /**
  * Lead respondeu dados de transferência após o agente pedir origem/semestre.
  */
 export async function tryHandleTransferenciaDadosPendentes(env, ctx = {}) {
-  const { telefone, userMessage, historyMessages = [], executionId } = ctx
+  const { telefone, userMessage, historyMessages = [], executionId, model, t0 } = ctx
   if (!telefone || !userMessage) return null
 
   const lastAssist = lastAssistantText(historyMessages)
@@ -474,6 +506,45 @@ export async function tryHandleTransferenciaDadosPendentes(env, ctx = {}) {
     ...historyMessages,
     { role: 'user', content: userMessage },
   ])
+
+  const missingOrigem = !context?.origem
+  const missingSemestre = !context?.semestre
+  const hasDestino = Boolean(context?.destino)
+
+  // Guarda determinística: só listou formações anteriores/atuais, sem completar campos.
+  // Short-circuit antes do LLM e sem acesso externo.
+  if (
+    (missingOrigem || missingSemestre) &&
+    (isPastOrCurrentFormationWithoutDestination(userMessage) ||
+      isAmbiguousMultiFormationList(userMessage))
+  ) {
+    const reply = buildTransferenciaDadosIncompletosReply({
+      destino: hasDestino ? context.destino : null,
+      missingOrigem,
+      missingSemestre,
+    })
+    console.log(
+      `[${executionId}] TRANSFERENCIA_DADOS_INCOMPLETOS destino="${context?.destino || ''}" missingOrigem=${missingOrigem} missingSemestre=${missingSemestre}`,
+    )
+    return {
+      handled: true,
+      result: buildAgentReturn({
+        executionId,
+        model,
+        t0: t0 || Date.now(),
+        reply,
+        steps: [{ type: 'transferencia_dados_incompletos', ok: true }],
+        toolCalls: [],
+        ctxSnapshot: {
+          replySource: 'transferencia_dados_incompletos',
+          transferenciaDestinoRetido: context?.destino || null,
+          missingOrigem,
+          missingSemestre,
+        },
+      }),
+    }
+  }
+
   if (!context?.origem || !context?.destino || !context?.semestre) return null
 
   console.log(

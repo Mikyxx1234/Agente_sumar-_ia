@@ -38,13 +38,13 @@ const CURSO_PATTERNS = [
   /\b(marketing(?:\s+digital)?)\b/i,
   /\b(publicidade(?:\s+e\s+propaganda)?)\b/i,
   /\b(jornalismo)\b/i,
+  /\b(servi[cç]o\s+social)\b/i,
+  /\b(educa[cç][aã]o\s+f[ií]sica)\b/i,
   /\b(letras|hist[oó]ria|geografia|filosofia|sociologia|matem[aá]tica|f[ií]sica|qu[ií]mica|biologia)\b/i,
   /\b(rh|recursos\s+humanos|gest[aã]o\s+de\s+pessoas)\b/i,
   /\b(log[ií]stica|gest[aã]o\s+comercial|gest[aã]o\s+financeira|com[eé]rcio\s+exterior)\b/i,
   /\b(an[aá]lise\s+e?\s+desenvolvimento\s+de\s+sistemas|ads)\b/i,
   /\b(redes\s+de\s+computadores|seguran[cç]a\s+da\s+informa[cç][aã]o)\b/i,
-  /\b(servi[cç]o\s+social)\b/i,
-  /\b(educa[cç][aã]o\s+f[ií]sica)\b/i,
   /\b(est[eé]tica(?:\s+e\s+cosm[eé]tica)?)\b/i,
 ]
 
@@ -117,6 +117,45 @@ function userExpressesInterest(text) {
     /\b(me\s+inscrev|matricul|inscri[cç][aã]o)\b/i.test(t) ||
     /\b(esse|essa|isso)\s+curso\b/i.test(t)
   )
+}
+
+/**
+ * Narrativa inequívoca de formação anterior/atual (cursei, estou cursando…),
+ * sem verbo explícito de destino/interesse. Não deve confirmar curso desejado.
+ * "Cursei Pedagogia e quero Administração" NÃO é só formação passada.
+ */
+export function isPastOrCurrentFormationWithoutDestination(text) {
+  const t = normalizeMessageForScope(text).toLowerCase()
+  if (!t) return false
+  const hasPastCurrent =
+    /\b(cursei|cursava|estudei|(?:j[aá]\s+)?fiz|(?:estou|estava)\s+cursando|cursando)\b/i.test(t)
+  if (!hasPastCurrent) return false
+  // Qualquer intenção explícita de destino/interesse isenta a guarda
+  if (userExpressesInterest(text)) return false
+  if (/\b(desejo|pretendo)\b/i.test(t)) return false
+  return true
+}
+
+/**
+ * Curso citado após verbo de destino/interesse (ex.: "… e quero Administração").
+ * Evita confirmar o primeiro curso de uma lista de formação anterior.
+ */
+export function extractCursoAfterDestinationIntent(text) {
+  const raw = String(text || '').trim()
+  if (!raw) return ''
+  const patterns = [
+    /\b(?:quero|desejo|pretendo)\s+(?:fazer|cursar|estudar|continuar(?:\s+com)?|mudar\s+para)?\s*(?:o|a|um|uma)?\s*(?:curso\s+(?:de|em)\s+)?(.+)$/i,
+    /\b(?:gostaria\s+de)\s+(?:fazer|cursar|estudar)?\s*(?:o|a|um|uma)?\s*(?:curso\s+(?:de|em)\s+)?(.+)$/i,
+    /\b(?:gostei\s+(?:de|do|da))\s+(?:curso\s+(?:de|em)\s+)?(.+)$/i,
+    /\b(?:vou\s+fazer|tenho\s+interesse\s+(?:em|no|na))\s+(?:curso\s+(?:de|em)\s+)?(.+)$/i,
+  ]
+  for (const rx of patterns) {
+    const m = raw.match(rx)
+    if (!m?.[1]) continue
+    const area = extractCursoAreaFromText(m[1])
+    if (area) return area
+  }
+  return ''
 }
 
 function userConfirmsShortReply(text) {
@@ -195,6 +234,13 @@ export function detectCursoConfirmadoPeloLead(userMessage, historyMessages) {
   const fromList = matchCursoFromNumberedAssistantList(userMessage, historyMessages)
   if (fromList) return fromList
 
+  // Formação anterior/atual sem destino explícito ≠ confirmação do curso desejado
+  if (isPastOrCurrentFormationWithoutDestination(userMessage)) return ''
+
+  // Preferir curso após verbo de destino (não o primeiro de uma lista de formações)
+  const afterDest = extractCursoAfterDestinationIntent(userMessage)
+  if (afterDest) return sanitizeCursoName(afterDest)
+
   const direct = extractCursoFromText(userMessage)
   if (direct && userExpressesInterest(userMessage)) return sanitizeCursoName(direct)
   if (direct && lastAssistantMentionedCurso(historyMessages)) return sanitizeCursoName(direct)
@@ -209,4 +255,11 @@ export function detectCursoConfirmadoPeloLead(userMessage, historyMessages) {
   return ''
 }
 
-export const __test = { extractCursoFromText, userExpressesInterest, titleCase, sanitizeCursoName }
+export const __test = {
+  extractCursoFromText,
+  userExpressesInterest,
+  titleCase,
+  sanitizeCursoName,
+  isPastOrCurrentFormationWithoutDestination,
+  extractCursoAfterDestinationIntent,
+}

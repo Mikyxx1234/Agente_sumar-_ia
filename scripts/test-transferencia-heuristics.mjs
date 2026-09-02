@@ -1,13 +1,21 @@
 /**
- * Heurísticas de transferência externa — cenário Lidi (#24016559).
+ * Heurísticas de transferência externa — cenário Lidi (#24016559) + Leidy (#23889).
  * node scripts/test-transferencia-heuristics.mjs
  */
 import {
   extractTransferenciaContext,
+  extractTransferenciaDestinoFromAssistant,
   messageRestatesSameCourseAsDestino,
   parseSemestreFromUserMessage,
   isValidTransferenciaCursoLabel,
+  isAmbiguousMultiFormationList,
+  tryHandleTransferenciaDadosPendentes,
+  assistantAskedTransferenciaDadosPendentes,
 } from '../server/inscricaoTransferenciaFlow.js'
+import {
+  detectCursoConfirmadoPeloLead,
+  isPastOrCurrentFormationWithoutDestination,
+} from '../libShared/cursoConfirmation.js'
 import { resolveTransferenciaCursoCodigo } from '../server/sumareCaptacaoClient.js'
 
 const lidiHistory = [
@@ -48,6 +56,93 @@ const checks = [
   ['same course restate', messageRestatesSameCourseAsDestino('Só a pedagogia mesmo', 'Pedagogia')],
   ['semestre quarto', parseSemestreFromUserMessage('Como falei parei no quarto semestre') === '4'],
 ]
+
+// --- Destino explícito após formação passada ---
+const mixedMsg = 'Cursei Pedagogia e quero Administração'
+const mixedConfirmado = detectCursoConfirmadoPeloLead(mixedMsg, [])
+checks.push(
+  [
+    'mixed não é só formação passada',
+    isPastOrCurrentFormationWithoutDestination(mixedMsg) === false,
+  ],
+  [
+    'mixed confirma Administração (não Pedagogia)',
+    /administra/i.test(mixedConfirmado) && !/pedagogia/i.test(mixedConfirmado),
+  ],
+)
+
+// --- Regressão Leidy #23889 (texto real do assistente) ---
+const leidyUserMsg =
+  'Cursei pedagogia, letras e estou cursando educação física licenciatura'
+
+const leidyAssistPedido =
+  'Entendo sua dúvida sobre redução de tempo por já ter outras formações. Para analisar aproveitamento de disciplinas e possível redução na duração do curso de Educação Física Bacharelado, é necessário um processo específico de transferência ou aproveitamento de matérias.\n\nPosso ajudar você a iniciar esse processo. Você já cursou ou está cursando outra graduação? Se sim, me informe o nome do curso, o último semestre concluído e o curso que deseja fazer na Sumaré (que no seu caso é Educação Física Bacharelado). Assim, posso orientar os próximos passos. Quer seguir com isso?'
+
+const leidyHistory = [
+  { role: 'user', content: 'Quero só o bacharel' },
+  {
+    role: 'assistant',
+    content: leidyAssistPedido,
+  },
+]
+
+const leidyCtx = extractTransferenciaContext([
+  ...leidyHistory,
+  { role: 'user', content: leidyUserMsg },
+])
+console.log('leidy context', leidyCtx)
+
+const destinoFromAssist = extractTransferenciaDestinoFromAssistant(leidyAssistPedido)
+const confirmado = detectCursoConfirmadoPeloLead(leidyUserMsg, leidyHistory)
+
+const leidyPending = await tryHandleTransferenciaDadosPendentes(
+  {},
+  {
+    telefone: '5511999999999',
+    userMessage: leidyUserMsg,
+    historyMessages: leidyHistory,
+    executionId: 'test-leidy',
+    model: 'test',
+    t0: Date.now(),
+  },
+)
+
+const pendingReply = String(leidyPending?.result?.reply || '')
+const pendingHandled = Boolean(leidyPending?.handled)
+
+checks.push(
+  [
+    'leidy destino assistente Bacharelado',
+    /educa[cç][aã]o\s+f[ií]sica\s+bacharelado/i.test(destinoFromAssist || ''),
+  ],
+  [
+    'leidy contexto destino Bacharelado',
+    /educa[cç][aã]o\s+f[ií]sica\s+bacharelado/i.test(leidyCtx?.destino || ''),
+  ],
+  ['leidy origem não inventada', !leidyCtx?.origem],
+  ['leidy semestre ausente', !leidyCtx?.semestre],
+  ['leidy multi formation ambígua', isAmbiguousMultiFormationList(leidyUserMsg)],
+  ['leidy detectCurso não confirma', confirmado === ''],
+  [
+    'leidy destino ≠ licenciatura',
+    !/licenciatura/i.test(leidyCtx?.destino || '') && confirmado === '',
+  ],
+  ['leidy pedido pendente reconhecido', assistantAskedTransferenciaDadosPendentes(leidyAssistPedido)],
+  ['leidy pending handled', pendingHandled],
+  [
+    'leidy pending mantém Bacharelado',
+    /bacharelado/i.test(pendingReply) && !/licenciatura/i.test(pendingReply),
+  ],
+  [
+    'leidy pending pede origem/semestre',
+    /origem/i.test(pendingReply) && /semestre/i.test(pendingReply),
+  ],
+  [
+    'leidy pending sem preço/matrícula',
+    !/pre[cç]o|mensalidade|formul[aá]rio|matricular/i.test(pendingReply) &&
+      !/\bdura[cç][aã]o\b/i.test(pendingReply),
+  ],
+)
 
 let fail = 0
 for (const [name, ok] of checks) {

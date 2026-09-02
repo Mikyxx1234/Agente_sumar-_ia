@@ -12,6 +12,13 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-09-02 - Formação anterior/atual não vira curso desejado (transferência)
+- **Modelo usado**: Claude Opus 4.6 (não confirmado)
+- **Decisão**: Narrativas inequívocas de formação anterior/atual (`cursei`, `cursava`, `estudei`, `fiz`, `estou cursando`, etc.) sem verbo explícito de destino/interesse não confirmam curso desejado (`detectCursoConfirmadoPeloLead`). Em transferência, `tryHandleTransferenciaDadosPendentes` short-circuita (sem LLM/API) quando o lead só lista formações cursadas/em andamento sem semestre e/ou origem única; retém destino já explícito no histórico (ex.: `que no seu caso é Educação Física Bacharelado`) e pede só origem + semestre. Removidos fallbacks genéricos que fabricavam `origem=destino` sem evidência; preservado o restate explícito do cenário Lidi.
+- **Contexto**: Leidy #23889 — agente sabia Educação Física Bacharelado, pediu dados de transferência; ela respondeu "Cursei pedagogia, letras e estou cursando educação física licenciatura" e o sistema gerou resumo de matrícula para Licenciatura; depois, ao corrigir "Eu quero o bacharel", pediu só autorização de novo.
+- **Alternativas descartadas**: Corrigir só via prompt/LLM (não determinístico); tratar qualquer menção a curso como destino; inventar origem=destino quando faltam campos.
+- **Impacto**: Próximos turnos de transferência com lista de formações pedem origem/semestre sem trocar o destino. Conversas já contaminadas precisam de um turno novo.
+
 ### 2026-09-02 - CPF, e-mail e nascimento do chat vão para o card EduIT
 - **Modelo usado**: Grok 4.6
 - **Decisão**: Em cada turno, `persistCadastroFieldsFromInbound` lê a mensagem atual e as últimas falas do lead, extrai só CPF válido, e-mail e data de nascimento, e grava no card EduIT (`cpf`, `email`, `dtnascimento`) se o campo ainda estiver vazio/inválido. Espelha `kommo_cpf` / `kommo_email` / `kommo_data_nasc` no Supabase. Não sobrescreve valor bom; não usa o LLM.
