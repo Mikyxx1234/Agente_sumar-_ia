@@ -8,6 +8,7 @@ import {
   INSCRICAO_FORM_STATUS_AGUARDANDO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_POLO,
   INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM,
+  INSCRICAO_FORM_STATUS_AGUARDANDO_CURSO_PRE_FORM,
   INSCRICAO_FORM_STATUS_MATRICULA_AUTORIZADA,
   INSCRICAO_FORM_STATUS_AGUARDANDO_AUTORIZACAO,
   buildInscricaoFormSentReply,
@@ -19,12 +20,15 @@ import {
   resolvePoloUnidadeCode,
   buildPoloConfirmacaoInvalidaReply,
   buildPoloEscolhidoAckReply,
+  buildPoloOkCursoPendenteReply,
   buildPoloOutroLocalidadeReply,
   messageMentionsUnlistedPoloLocation,
   assistantAskedPoloPreFormChoice,
   extractPoloFromConversationHistory,
 } from '../libShared/sumarePoloCatalog.js'
 import { messageAsksDeferredPaymentEnrollment } from '../libShared/deferredPaymentEnrollmentHeuristics.js'
+import { messageAsksSemipresencialCentral } from '../libShared/inboundMessageSanitize.js'
+import { isPoloNameLike } from '../libShared/cursoConfirmation.js'
 import { lastAssistantText } from '../libShared/inscricaoFormHeuristics.js'
 import { filterHistoryMessagesForAgent } from '../libShared/historySanitize.js'
 import { fetchLeadFormSnapshot } from './inscricaoKommoFields.js'
@@ -37,7 +41,10 @@ import {
 import { DADOS_CLIENTE_INSCRICAO_SELECT } from './dadosClienteInscricaoFields.js'
 import { executeCaptacaoAfterFormResolved } from './inscricaoPostFormPipeline.js'
 import { deliverInscricaoForm } from './inscricaoFormFlow.js'
-import { gateMatriculaConfirmacaoBeforeForm } from './inscricaoMatriculaConfirmFlow.js'
+import {
+  gateMatriculaConfirmacaoBeforeForm,
+  resolveCursoNomeForResumo,
+} from './inscricaoMatriculaConfirmFlow.js'
 import { listLeadNotes } from './kommoClient.js'
 import { resolveTransferenciaCursoCodigo } from './sumareCaptacaoClient.js'
 import { syncSumPoloOnLeadQuiet } from './sumareLeadFields.js'
@@ -144,11 +151,27 @@ export async function tryHandlePoloPreFormFlow(env, input) {
   if (
     !matchPoloFromUserMessage(userMessage, historyMessages) &&
     (persistedPoloNome || historyPolo) &&
-    status !== INSCRICAO_FORM_STATUS_AGUARDANDO
+    status !== INSCRICAO_FORM_STATUS_AGUARDANDO &&
+    status !== INSCRICAO_FORM_STATUS_AGUARDANDO_CURSO_PRE_FORM
   ) {
     const polo = historyPolo || matchPoloFromUserMessage(persistedPoloNome)
     if (polo) {
       const unidade = persistedUnidade || resolvePoloUnidadeCode(polo.id, env)
+      // Curso obrigatório antes do form — senão o atalho anula o F3c
+      const cursoHintEarly = await resolveTransferenciaCursoHint(env, telefone)
+      let cursoEarly = await resolveCursoNomeForResumo(env, {
+        userMessage,
+        historyMessages,
+        leadId: idLeadEarly,
+        cursoHint: cursoHintEarly,
+      })
+      if (cursoEarly && isPoloNameLike(cursoEarly)) cursoEarly = ''
+      if (!cursoEarly) {
+        console.log(
+          `[inscricaoPolo] lead=${idLeadEarly ?? 'n/a'} telefone=${telefone} atalho polo persistido abortado — sem curso`,
+        )
+        return null
+      }
       await ensureDadosClienteRow(env, {
         telefone,
         idLead: idLeadEarly,
@@ -214,6 +237,8 @@ export async function tryHandlePoloPreFormFlow(env, input) {
   const polo = matchPoloFromUserMessage(userMessage, historyMessages)
 
   if (!polo) {
+    // Semipresencial/Central: deixa fluxo institucional/LLM explicar (não "polo inválido")
+    if (messageAsksSemipresencialCentral(userMessage)) return null
     const reply = messageMentionsUnlistedPoloLocation(userMessage)
       ? buildPoloOutroLocalidadeReply()
       : buildPoloConfirmacaoInvalidaReply()
@@ -249,6 +274,37 @@ export async function tryHandlePoloPreFormFlow(env, input) {
   await syncSumPoloOnLeadQuiet(env, { leadId: idLead, telefone, poloNome: polo.nome })
 
   const cursoHint = await resolveTransferenciaCursoHint(env, telefone)
+  let curso = await resolveCursoNomeForResumo(env, {
+    userMessage,
+    historyMessages,
+    leadId: idLead,
+    cursoHint,
+  })
+  // Cards contaminados pelo bug antigo podem ter nome de polo no campo Curso
+  if (curso && isPoloNameLike(curso)) curso = ''
+  if (!curso) {
+    await updateDadosCliente(env, {
+      telefone,
+      fields: { [FORM_STATUS_FIELD]: INSCRICAO_FORM_STATUS_AGUARDANDO_CURSO_PRE_FORM },
+    }).catch(() => {})
+    return {
+      handled: true,
+      result: buildAgentReturn({
+        executionId,
+        model,
+        t0,
+        reply: buildPoloOkCursoPendenteReply(polo, { pushName }),
+        steps: [{ type: 'polo_pre_form_curso_pendente', ok: true }],
+        ctxSnapshot: {
+          inscricaoForm: INSCRICAO_FORM_STATUS_AGUARDANDO_CURSO_PRE_FORM,
+          poloId: polo.id,
+          poloNome: polo.nome,
+          unidade,
+        },
+      }),
+    }
+  }
+
   const matriculaGate = await gateMatriculaConfirmacaoBeforeForm(env, {
     telefone,
     userMessage,

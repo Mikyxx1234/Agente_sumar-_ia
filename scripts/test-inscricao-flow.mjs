@@ -1927,6 +1927,156 @@ section('31 — Saída de canal já encerrada: reabertura + anti-repetição')
   }
 }
 
+section('32 — polo nunca vira curso (regressão Jean #23912)')
+{
+  const {
+    matchCursoFromNumberedAssistantList,
+    detectCursoConfirmadoPeloLead,
+    isPoloNameLike,
+  } = await import('../libShared/cursoConfirmation.js')
+  const {
+    buildPoloConfirmacaoInvalidaReply,
+    buildPoloEadAndCentralInfoReply,
+    assistantAskedPoloPreFormChoice,
+  } = await import('../libShared/sumarePoloCatalog.js')
+
+  const histInvalida = [{ role: 'assistant', content: buildPoloConfirmacaoInvalidaReply() }]
+  const histInstitucional = [{ role: 'assistant', content: buildPoloEadAndCentralInfoReply({}) }]
+
+  assertEqual(
+    matchCursoFromNumberedAssistantList('2', histInvalida),
+    '',
+    '32.1 "2" após lista de polos inválida ≠ curso',
+  )
+  assertEqual(
+    detectCursoConfirmadoPeloLead('2', histInvalida),
+    '',
+    '32.2 detectCurso "2" após polos inválidos ≠ curso',
+  )
+  assertEqual(
+    detectCursoConfirmadoPeloLead('2', histInstitucional),
+    '',
+    '32.3 detectCurso "2" após reply institucional ≠ curso',
+  )
+  assert(isPoloNameLike('Santana') === true, '32.4a isPoloNameLike(Santana)')
+  assert(isPoloNameLike('Tatuapé') === true, '32.4b isPoloNameLike(Tatuapé)')
+  assert(isPoloNameLike('Pinheiros') === true, '32.4c isPoloNameLike(Pinheiros)')
+  assert(isPoloNameLike('Biomedicina') === false, '32.4d isPoloNameLike(Biomedicina)=false')
+  assert(isPoloNameLike('Pedagogia') === false, '32.4e isPoloNameLike(Pedagogia)=false')
+  assert(
+    assistantAskedPoloPreFormChoice(buildPoloEadAndCentralInfoReply({})) === false,
+    '32.5 reply institucional NÃO é escolha de polo',
+  )
+  assert(
+    assistantAskedPoloPreFormChoice(buildPoloConfirmacaoInvalidaReply()) === true,
+    '32.6 confirmacao inválida AINDA é escolha de polo',
+  )
+  assertEqual(
+    matchCursoFromNumberedAssistantList('2', [
+      { role: 'assistant', content: '1. Pedagogia\n2. Biomedicina\n3. Administração' },
+    ]),
+    'Biomedicina',
+    '32.7 lista real de cursos ainda resolve "2"=Biomedicina',
+  )
+
+  // F4 — atalho "polo já informado" não dispara form sem curso
+  {
+    const { tryHandlePoloPreFormFlow } = await import('../server/inscricaoPoloFlow.js')
+    const { INSCRICAO_FORM_STATUS_AGUARDANDO_CURSO_PRE_FORM } = await import(
+      '../libShared/inscricaoFormHeuristics.js'
+    )
+
+    const baseRow = {
+      id: 9001,
+      id_lead: 23845769,
+      polo_inscricao_escolhido: 'Tatuapé',
+      captacao_unidade: 'ED_SP_P7',
+    }
+    const poloInput = {
+      telefone: ctx.telefone,
+      executionId: 'EX-TEST-F4',
+      model: 'gpt-4.1-mini',
+      pushName: 'Jean',
+      t0: Date.now(),
+      leadId: 23845769,
+    }
+
+    // 32.8 polo persistido + status aguardando_curso_pre_form → atalho nem entra; null sem salesbot
+    installFetchStub(
+      defaultSupabaseStub({
+        dadosClienteRow: {
+          ...baseRow,
+          inscricao_form_status: INSCRICAO_FORM_STATUS_AGUARDANDO_CURSO_PRE_FORM,
+        },
+      }),
+    )
+    try {
+      const r = await tryHandlePoloPreFormFlow(env, {
+        ...poloInput,
+        userMessage: 'quanto custa?',
+        historyMessages: [],
+      })
+      assertEqual(r, null, '32.8 aguardando_curso_pre_form + sem curso → null')
+      assert(
+        !fetchCalls.some((c) => c.url.includes('/api/v2/salesbot/run')),
+        '32.8b salesbot NÃO chamado (status curso pendente)',
+      )
+    } finally {
+      restoreFetch()
+    }
+
+    // 32.9 polo persistido + status null + sem curso → atalho aborta com null (antes de autorizar/form)
+    installFetchStub(defaultSupabaseStub({ dadosClienteRow: { ...baseRow, inscricao_form_status: null } }))
+    try {
+      const r = await tryHandlePoloPreFormFlow(env, {
+        ...poloInput,
+        userMessage: 'quanto custa?',
+        historyMessages: [],
+      })
+      assertEqual(r, null, '32.9 polo persistido sem curso → null')
+      assert(
+        !fetchCalls.some((c) => c.url.includes('/api/v2/salesbot/run')),
+        '32.9b salesbot NÃO chamado (atalho abortado)',
+      )
+      assert(
+        !fetchCalls.some(
+          (c) =>
+            c.url.includes('/rest/v1/dados_cliente_sum') &&
+            (c.method === 'PATCH' || c.method === 'POST') &&
+            String(c.body || '').includes('matricula_autorizada'),
+        ),
+        '32.9c status NÃO gravado como matricula_autorizada sem curso',
+      )
+    } finally {
+      restoreFetch()
+    }
+
+    // 32.10 polo persistido + curso na mensagem → form segue (salesbot)
+    // leadId distinto evita dedupe in-memory do salesbot de seções anteriores
+    installFetchStub(defaultSupabaseStub({ dadosClienteRow: { ...baseRow, id_lead: 23912010, inscricao_form_status: null } }))
+    try {
+      const r = await tryHandlePoloPreFormFlow(env, {
+        ...poloInput,
+        leadId: 23912010,
+        userMessage: 'quero fazer Biomedicina',
+        historyMessages: [],
+      })
+      assert(r?.handled === true, '32.10 com curso → handled')
+      assertEqual(
+        r?.result?.orchestratorSteps?.[0]?.type,
+        'polo_pre_form_persistido',
+        '32.10b step=polo_pre_form_persistido',
+      )
+      assert(
+        fetchCalls.some((c) => c.url.includes('/api/v2/salesbot/run')),
+        '32.10c salesbot chamado quando há curso',
+      )
+    } finally {
+      restoreFetch()
+    }
+  }
+}
+
 /* ────────────────────────────────────────────────────────────────────────── */
 /* Resumo                                                                     */
 /* ────────────────────────────────────────────────────────────────────────── */

@@ -9,6 +9,45 @@ import {
   extractDiscussedCourseFromHistory,
   lastAssistantText,
 } from './conversationContextHeuristics.js'
+import { SUMARE_POLOS_EAD } from './sumarePoloCatalog.js'
+
+function normalizePoloCompare(text) {
+  return String(text || '')
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .trim()
+}
+
+/** Nome de polo EAD/Central — nunca deve ser gravado como curso. */
+export function isPoloNameLike(text) {
+  const n = normalizePoloCompare(text)
+  if (!n) return false
+  if (n === 'pinheiros' || n === 'central' || n === 'barra funda') return true
+  for (const p of SUMARE_POLOS_EAD) {
+    if (normalizePoloCompare(p.nome) === n) return true
+    for (const alias of p.aliases || []) {
+      if (normalizePoloCompare(alias) === n) return true
+    }
+  }
+  return false
+}
+
+function assistantTextLooksLikePoloList(assist) {
+  const a = String(assist || '')
+  if (/n[aã]o consegui identificar o polo/i.test(a)) return true
+  if (/\bpolos?\s+de\s+apoio\s+presencial/i.test(a)) return true
+  if (/\bpolo\b/i.test(a)) {
+    const norm = normalizePoloCompare(a)
+    let hits = 0
+    for (const p of SUMARE_POLOS_EAD) {
+      const nome = normalizePoloCompare(p.nome)
+      if (nome && norm.includes(nome)) hits += 1
+    }
+    if (hits >= 2) return true
+  }
+  return false
+}
 
 const STOP_WORDS = new Set([
   'esse', 'essa', 'isso', 'sim', 'nao', 'não', 'ok', 'okay', 'matricula',
@@ -194,14 +233,19 @@ export function matchCursoFromNumberedAssistantList(userMessage, historyMessages
   const idx = Number(numMatch[1]) - 1
   const assist = lastAssistantText(historyMessages)
   if (!assist) return ''
+  // Lista de polos numerada ≠ lista de cursos (regressão Jean #23912)
+  if (assistantTextLooksLikePoloList(assist)) return ''
   const courses = []
-  const re = /(?:^|\n)\s*(\d{1,2})[\.\)]\s*[*_]*([^*\n(]+?)[*_]*(?:\s*\(|$|\n)/gi
+  // /m + ^ por linha: evita consumir \n e pular o próximo item (ex.: "2. Biomedicina")
+  const re = /^\s*(\d{1,2})[\.\)]\s*[*_]*([^*\n(]+?)[*_]*(?:\s*\(|$)/gim
   let m
   while ((m = re.exec(assist)) !== null) {
     const name = sanitizeCursoName(m[2].trim())
     if (name) courses.push(name)
   }
-  return courses[idx] || ''
+  const picked = courses[idx] || ''
+  if (picked && isPoloNameLike(picked)) return ''
+  return picked
 }
 
 /**
@@ -231,28 +275,32 @@ export function messageIsBareCourseSelection(userMessage, historyMessages = []) 
  */
 export function detectCursoConfirmadoPeloLead(userMessage, historyMessages) {
   if (!userMessage) return ''
+  let result = ''
   const fromList = matchCursoFromNumberedAssistantList(userMessage, historyMessages)
-  if (fromList) return fromList
-
-  // Formação anterior/atual sem destino explícito ≠ confirmação do curso desejado
-  if (isPastOrCurrentFormationWithoutDestination(userMessage)) return ''
-
-  // Preferir curso após verbo de destino (não o primeiro de uma lista de formações)
-  const afterDest = extractCursoAfterDestinationIntent(userMessage)
-  if (afterDest) return sanitizeCursoName(afterDest)
-
-  const direct = extractCursoFromText(userMessage)
-  if (direct && userExpressesInterest(userMessage)) return sanitizeCursoName(direct)
-  if (direct && lastAssistantMentionedCurso(historyMessages)) return sanitizeCursoName(direct)
-  if (direct && messageIsBareCourseSelection(userMessage, historyMessages)) {
-    return sanitizeCursoName(direct)
+  if (fromList) {
+    result = fromList
+  } else if (isPastOrCurrentFormationWithoutDestination(userMessage)) {
+    result = ''
+  } else {
+    // Preferir curso após verbo de destino (não o primeiro de uma lista de formações)
+    const afterDest = extractCursoAfterDestinationIntent(userMessage)
+    if (afterDest) {
+      result = sanitizeCursoName(afterDest)
+    } else {
+      const direct = extractCursoFromText(userMessage)
+      if (direct && userExpressesInterest(userMessage)) result = sanitizeCursoName(direct)
+      else if (direct && lastAssistantMentionedCurso(historyMessages)) result = sanitizeCursoName(direct)
+      else if (direct && messageIsBareCourseSelection(userMessage, historyMessages)) {
+        result = sanitizeCursoName(direct)
+      } else if (userExpressesInterest(userMessage) || userConfirmsShortReply(userMessage)) {
+        const fromHist = extractDiscussedCourseFromHistory(historyMessages)
+        if (fromHist) result = sanitizeCursoName(fromHist)
+      }
+    }
   }
-
-  if (userExpressesInterest(userMessage) || userConfirmsShortReply(userMessage)) {
-    const fromHist = extractDiscussedCourseFromHistory(historyMessages)
-    if (fromHist) return sanitizeCursoName(fromHist)
-  }
-  return ''
+  // Guarda: nome de polo nunca vira curso
+  if (result && isPoloNameLike(result)) return ''
+  return result
 }
 
 export const __test = {
@@ -262,4 +310,5 @@ export const __test = {
   sanitizeCursoName,
   isPastOrCurrentFormationWithoutDestination,
   extractCursoAfterDestinationIntent,
+  isPoloNameLike,
 }

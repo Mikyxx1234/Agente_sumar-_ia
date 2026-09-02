@@ -4,6 +4,7 @@
  */
 
 import { messageAsksRegionalFacultyLocation } from '../libShared/inboundMessageSanitize.js'
+import { extractCursoAreaFromText } from '../libShared/cursoConfirmation.js'
 import { buildPoloEadAndCentralInfoReply } from '../libShared/sumarePoloCatalog.js'
 
 function buildAgentReturn({ executionId, model, t0, reply, pushName }) {
@@ -28,6 +29,8 @@ export async function tryHandlePoloLocationInfoFlow(env, input) {
   const { userMessage, executionId, model, pushName, t0, historyMessages = [] } = input || {}
   if (!String(userMessage || '').trim()) return null
   if (!messageAsksRegionalFacultyLocation(userMessage, historyMessages)) return null
+  // Curso reconhecível → deixa o fluxo normal persistir o curso (não descartar)
+  if (extractCursoAreaFromText(userMessage)) return null
 
   const reply = buildPoloEadAndCentralInfoReply({ pushName })
   console.log(

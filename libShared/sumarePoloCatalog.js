@@ -207,6 +207,9 @@ export function assistantAskedPoloPreFormChoice(text) {
     .replace(/\s-\s+EX-\d{6}-\d{4}-\d{3}(-[a-f0-9]+)?\s*$/i, '')
     .toLowerCase()
   if (!a) return false
+  // Resposta institucional (EAD + Central) ≠ pedido de escolha de polo pré-form
+  if (/cursos presenciais ou semipresenciais/i.test(a)) return false
+  if (/central em pinheiros/i.test(a)) return false
   if (/\b(em qual|qual)\b[\s\S]{0,50}\bpolo\b/i.test(a)) return true
   if (/\bsomente\b[\s\S]{0,40}\bestes polos\b/i.test(a)) return true
   if (/\bresponda com o\b[\s\S]{0,30}\b(n[uú]mero|nome do polo)\b/i.test(a)) return true
@@ -298,5 +301,15 @@ export function buildPoloEscolhidoAckReply(polo, opts = {}) {
   return (
     `Perfeito${nameBit}! Polo *${polo.nome}* (${polo.endereco}) registrado. ` +
     `Acabei de enviar o formulário de dados básicos aqui no WhatsApp — preencha e envie para continuarmos sua inscrição.`
+  )
+}
+
+/** Polo ok, mas ainda falta o curso antes de disparar o formulário. */
+export function buildPoloOkCursoPendenteReply(polo, opts = {}) {
+  const nameBit = opts.pushName ? `, ${String(opts.pushName).split(/\s+/)[0]}` : ''
+  const enderecoBit = polo?.endereco ? ` (${polo.endereco})` : ''
+  return (
+    `Perfeito${nameBit}! Polo *${polo.nome}*${enderecoBit} registrado. ` +
+    `Antes de enviar o formulário, me confirma: *qual curso* você quer fazer?`
   )
 }

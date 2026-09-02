@@ -207,7 +207,7 @@ function buildAgentReturn({ executionId, model, t0, reply, steps, ctxSnapshot })
   }
 }
 
-async function resolveCursoNomeForResumo(env, { userMessage, historyMessages, leadId, cursoHint }) {
+export async function resolveCursoNomeForResumo(env, { userMessage, historyMessages, leadId, cursoHint }) {
   let cursoNome = String(cursoHint || '').trim()
   if (!cursoNome) {
     cursoNome =

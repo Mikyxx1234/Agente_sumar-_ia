@@ -20,6 +20,8 @@ export const INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO = 'aguardando_distrib
 export const INSCRICAO_FORM_STATUS_CONCLUIDO = 'form_sumar_concluido'
 /** Antes do Form Sumar: aguardando o lead escolher o polo de inscrição. */
 export const INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM = 'aguardando_escolha_polo_pre_form'
+/** Polo pré-form ok — aguardando o lead informar o curso antes do formulário. */
+export const INSCRICAO_FORM_STATUS_AGUARDANDO_CURSO_PRE_FORM = 'aguardando_curso_pre_form'
 /** Formulário recebido — aguardando o lead escolher o polo (legado pós-form). */
 export const INSCRICAO_FORM_STATUS_AGUARDANDO_POLO = 'aguardando_escolha_polo'
 /** Inscrição na API Sumaré feita; aguardando aceite do contrato no portal. */
