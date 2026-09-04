@@ -63,10 +63,10 @@ export function resolveEduitStages(env = process.env) {
   }
 }
 
-/** Stages em que a IA atende (sem Api Sumaré / pagamento nesta fatia). */
+/** Stages em que a IA atende (inclui Aguardando pagamento para comprovante/reenvio). */
 export function eduitAgentStageIds(env = process.env) {
   const s = resolveEduitStages(env)
-  return [s.atendimento, s.inscricao].filter(Boolean)
+  return [s.atendimento, s.inscricao, s.aguardandoPagamento].filter(Boolean)
 }
 
 export function isEduitCuid(value) {

@@ -16,6 +16,7 @@ import {
   updateDadosCliente,
 } from './dadosClienteStore.js'
 import { resolveCrmLeadId } from './crmAdapter.js'
+import { moveLeadToAguardandoPagamentoIfNeeded } from './kommoFunnelMoves.js'
 import { fetchLeadFormSnapshot } from './inscricaoKommoFields.js'
 import {
   consultarStatusCandidato,
@@ -163,6 +164,11 @@ export async function tryHandleCaptacaoInscricaoExistenteFlow(env, input) {
       },
     })
     await sendMessageWithNote(env, { telefone, text: reply, leadId, executionId })
+    if (leadId) {
+      await moveLeadToAguardandoPagamentoIfNeeded(env, leadId, {
+        reason: 'mantem_inscricao_existente',
+      }).catch(() => {})
+    }
     return {
       handled: true,
       result: buildAgentReturn({

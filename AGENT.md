@@ -12,6 +12,13 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-09-04 - Link de pagamento move o card para Aguardando pagamento
+- **Modelo usado**: Cursor Grok 4.6
+- **Decisão**: Assim que o agente encaminha o link de pagamento da matrícula (`matricula.sumare.edu.br/Vestibular/pagamento`), o deal EduIT sai de Inscrição (`cmt38aydx01q7rw01w0of9px5`) e vai para Aguardando pagamento (`cmt38aydx01q8rw010d91vy1t`). A fila de pagamento entra no funil da IA no EduIT para o agente ainda reenviar o link e receber o comprovante. Snapshot incompleto ou formulário sem link permanece em Inscrição.
+- **Contexto**: Cards com boleto já enviado ficavam na coluna Inscrição. A regra antiga (Kommo) só movia após o comprovante.
+- **Alternativas descartadas**: Mover e tirar a IA da fila (quebraria comprovante); mover só no comprovante (não atende o funil comercial pedido).
+- **Impacto**: `moveLeadToAguardandoPagamentoIfNeeded` roda no envio do link (captação / inscrição existente). Aguardando pagamento não é mais estágio fora do agente no EduIT.
+
 ### 2026-09-04 - Flow EduIT conta como formulário recebido (não reenviar)
 - **Modelo usado**: Cursor Grok 4.6
 - **Decisão**: O retorno do WhatsApp Flow no EduIT (`📋 *Resposta do formulário*`, `FORMULÁRIO flow`, `*Label* ↳ valor`) passa a ser reconhecido como formulário preenchido. No card EduIT, nome+CPF (ou CPF+e-mail) basta para `detectFormSumarRecebidoNoKommo`. Snapshot incompleto (falta e-mail ou curso) pede o campo que falta; nunca diz "ainda não recebemos" nem reenvia o Flow. O parser também grava nome/CPF/e-mail/nascimento no card se ainda estiverem vazios.

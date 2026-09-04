@@ -16,7 +16,7 @@ import { fetchLeadFormSnapshot } from './inscricaoKommoFields.js'
 import { updateDadosCliente, normalizeTelefone, fetchDadosClienteByTelefone } from './dadosClienteStore.js'
 import { sendMessageWithNote } from './whatsappSender.js'
 import { createLeadAuditNote } from './kommoClient.js'
-import { moveLeadToInscricaoIfNeeded } from './kommoFunnelMoves.js'
+import { moveLeadToAguardandoPagamentoIfNeeded } from './kommoFunnelMoves.js'
 import {
   isSumareCaptacaoEnabled,
   runCaptacaoContratoWorkflow,
@@ -315,9 +315,11 @@ export async function runMatriculaCaptacaoAfterForm(env, ctx) {
       ? `Inscrição Sumaré (candidato ${candidatoId}) — link contrato enviado por WhatsApp: ${contractUrl}`
       : `Inscrição Sumaré (candidato ${candidatoId}) — link contrato gerado (pendente envio WhatsApp): ${contractUrl}`
     await createLeadAuditNote(env, leadId, noteLine).catch(() => {})
-    await moveLeadToInscricaoIfNeeded(env, leadId, {
-      reason: whatsappOk ? 'captacao_link_enviado' : 'captacao_link_gerado',
-    }).catch(() => {})
+    if (whatsappOk) {
+      await moveLeadToAguardandoPagamentoIfNeeded(env, leadId, {
+        reason: 'captacao_link_enviado',
+      }).catch(() => {})
+    }
   }
 
   console.log(
@@ -370,9 +372,11 @@ export async function finalizeCaptacaoForCandidato(env, ctx) {
 
   const sendRes = await sendMessageWithNote(env, { telefone, text: reply, leadId, executionId })
   if (leadId) {
-    await moveLeadToInscricaoIfNeeded(env, leadId, {
-      reason: 'captacao_finalize_nova_inscricao',
-    }).catch(() => {})
+    if (sendRes?.ok && (sendRes.sent || 0) > 0) {
+      await moveLeadToAguardandoPagamentoIfNeeded(env, leadId, {
+        reason: 'captacao_finalize_nova_inscricao',
+      }).catch(() => {})
+    }
   }
   return { ok: true, reply, contractUrl: portal.url, whatsappOk: Boolean(sendRes?.ok && (sendRes.sent || 0) > 0) }
 }

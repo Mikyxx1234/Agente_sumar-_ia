@@ -144,9 +144,10 @@ expect('fallback most recent', onlyOther.deal?.id === 'cmtother00000000000000001
 
 // --- gate EduIT ---
 const agentStages = eduitAgentStageIds({})
-expect('agent stages = 2', agentStages.length === 2)
+expect('agent stages = 3', agentStages.length === 3)
 expect('agent includes atendimento', agentStages.includes(stages.atendimento))
 expect('agent includes inscricao', agentStages.includes(stages.inscricao))
+expect('agent includes aguardando pagamento', agentStages.includes(stages.aguardandoPagamento))
 
 const leadAtend = dealToAgentLead({ id: 'cmtleadatend0000000000001', stageId: stages.atendimento }, {})
 expect('leadMatches atendimento', leadMatchesEduitAgentFunnel(leadAtend, {}))
@@ -1141,6 +1142,29 @@ expect('logConversationNote sem conv', noteMissing.ok === false && noteMissing.c
   expect('flow eliane email', flowEliane.email === 'limaia36@gmail.com')
   expect('flow eliane cpf', flowEliane.cpf === '09189590805')
   expect('flow eliane nome', flowEliane.nome === 'Eliane Ferreira Maia')
+}
+
+{
+  const { looksLikeMatriculaPagamentoUrl, rowHasPagamentoLinkEnviado } = await import(
+    '../libShared/matriculaPagamentoLink.js'
+  )
+  expect(
+    'pagamento url portal',
+    looksLikeMatriculaPagamentoUrl(
+      'https://matricula.sumare.edu.br/Vestibular/pagamento?cpf=09189590805',
+    ),
+  )
+  expect('pagamento url lixo', !looksLikeMatriculaPagamentoUrl('oi tudo bem'))
+  expect(
+    'row link enviado',
+    rowHasPagamentoLinkEnviado({
+      captacao_contrato_link: 'https://matricula.sumare.edu.br/Vestibular/pagamento?cpf=1',
+    }),
+  )
+  expect(
+    'row sem link',
+    !rowHasPagamentoLinkEnviado({ captacao_candidato_id: 'abc' }),
+  )
 }
 
 console.log(`\n${stats.passed}/${stats.total} passed`)

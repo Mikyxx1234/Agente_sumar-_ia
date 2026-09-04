@@ -46,7 +46,7 @@ import { runKommoSalesbot } from './kommoSalesbot.js'
 import { listLeadNotes, listLeadEvents, createLeadAuditNote } from './kommoClient.js'
 import { isEduitBackend, resolveCrmLeadId } from './crmAdapter.js'
 import { isEduitCuid } from './eduitClient.js'
-import { moveLeadToInscricaoIfNeeded } from './kommoFunnelMoves.js'
+import { moveLeadToAguardandoPagamentoIfNeeded } from './kommoFunnelMoves.js'
 import {
   updateDadosCliente,
   marcarClienteIA,
@@ -715,10 +715,10 @@ export async function executeCaptacaoAfterFormResolved(env, ctx) {
     const pauseRes = await pauseAtendimentoIa(env, telefone)
     steps.unshift({ type: 'ia_paused', ok: pauseRes.ok, reason: 'aguardando_aceite_contrato' })
     if (idLead) {
-      const funnelMove = await moveLeadToInscricaoIfNeeded(env, idLead, {
+      const funnelMove = await moveLeadToAguardandoPagamentoIfNeeded(env, idLead, {
         reason: 'pos_captacao_aguardando_aceite',
       }).catch(() => ({ ok: false }))
-      steps.unshift({ type: 'move_lead_inscricao', ...funnelMove })
+      steps.unshift({ type: 'move_lead_aguardando_pagamento', ...funnelMove })
     }
   } else if (ctxForm === INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO) {
     // Curso pendente (ausente) OU curso informado indisponível (com/sem alternativas).
