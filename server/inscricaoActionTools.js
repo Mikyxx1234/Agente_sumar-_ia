@@ -33,6 +33,10 @@ import {
   inscricaoFormAlreadyFilled,
 } from '../libShared/inscricaoFormHeuristics.js'
 import {
+  messageLooksLikeEduitFlowFormReply,
+  historyHasEduitFlowFormReply,
+} from '../libShared/eduitFlowFormParse.js'
+import {
   SUMARE_POLOS_EAD,
   resolvePoloUnidadeCode,
   buildPoloEscolhaPreFormMessage,
@@ -876,7 +880,10 @@ export async function runConfirmarRecebimentoFormulario(env, args = {}, ctx = {}
     status === INSCRICAO_FORM_STATUS_AGUARDANDO || status === INSCRICAO_FORM_STATUS_AGUARDANDO_DISTRIBUICAO
   if (waitingForForm && !inscricaoFormAlreadyFilled(row)) {
     const detect = await detectFormSumarRecebidoNoKommo(env, leadId).catch(() => ({ detected: false }))
-    if (!detect.detected) {
+    const inboundLooksLikeFlow =
+      messageLooksLikeEduitFlowFormReply(ctx.userMessage) ||
+      historyHasEduitFlowFormReply(ctx.historyMessages || [])
+    if (!detect.detected && !inboundLooksLikeFlow) {
       console.log(
         `[inscricaoAction] lead=${leadId} confirmar_recebimento claim_sem_confirmacao_kommo status=${status} — reenviando Formulario_Sum`,
       )

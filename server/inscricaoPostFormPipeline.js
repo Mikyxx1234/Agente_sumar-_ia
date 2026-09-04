@@ -32,6 +32,7 @@ import { findLastFormularioSumSentMs, noteBlob, noteCreatedMs } from '../libShar
 import { sendMessageWithNote } from './whatsappSender.js'
 import { deliverInscricaoForm } from './inscricaoFormFlow.js'
 import { fetchLeadFormSnapshot, validateFormSnapshot } from './inscricaoKommoFields.js'
+import { messageLooksLikeEduitFlowFormReply, snapshotHasFormIdentity } from '../libShared/eduitFlowFormParse.js'
 import {
   resolvePoloFromKommoSnapshot,
   matchPoloFromUserMessage,
@@ -310,6 +311,16 @@ export async function detectFormSumarRecebidoNoKommo(env, leadId, options = {}) 
       return {
         detected: true,
         source: 'eduit_snapshot',
+        sample: String(snapRes.snapshot.cpf || snapRes.snapshot.nome || '').slice(0, 120),
+      }
+    }
+    // Identity do Flow (nome+CPF ou CPF+e-mail) conta como formulário recebido.
+    // Campos faltantes (e-mail, curso) pedem-se depois — nunca "não recebemos".
+    if (snapshotHasFormIdentity(snapRes.snapshot)) {
+      return {
+        detected: true,
+        source: 'eduit_form_identity',
+        missing: snap.missingFields,
         sample: String(snapRes.snapshot.cpf || snapRes.snapshot.nome || '').slice(0, 120),
       }
     }
@@ -994,7 +1005,9 @@ export async function tryProcessInscricaoPostFormPipeline(env, input) {
   // conclusão real do Flow (mesmo que o snapshot ainda esteja frágil), e o
   // scheduler nunca reenvia por claim vazio (só avança com kommoFormDone).
   const isFlowCompletionSignal =
-    messageIsFlowResponsesReceived(userMessage) || messageIsFormularioSumarPreenchidoMarker(userMessage)
+    messageIsFlowResponsesReceived(userMessage) ||
+    messageIsFormularioSumarPreenchidoMarker(userMessage) ||
+    messageLooksLikeEduitFlowFormReply(userMessage)
 
   if (
     !isFlowCompletionSignal &&

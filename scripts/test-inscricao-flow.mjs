@@ -34,11 +34,18 @@ import {
   executeCaptacaoAfterFormResolved,
 } from '../server/inscricaoPostFormPipeline.js'
 import {
+  parseEduitFlowFormReply,
+  messageLooksLikeEduitFlowFormReply,
+  snapshotHasFormIdentity,
+} from '../libShared/eduitFlowFormParse.js'
+import { extractCadastroFieldsFromInbound } from '../libShared/cadastroInboundExtract.js'
+import {
   FORM_SUMAR_FLOW_COMPLETED_MARKER,
   messageIsFlowResponsesReceived,
   messageSignalsFormSubmissionAck,
   inboundTextForFormFlowCompletion,
   historyIndicatesFormSumarCompleted,
+  messageLooksLikeFormSumarResponse,
   INSCRICAO_FORM_STATUS_AGUARDANDO_POLO_PRE_FORM,
   INSCRICAO_FORM_STATUS_AGUARDANDO_POLO,
   INSCRICAO_FORM_STATUS_AGUARDANDO,
@@ -461,6 +468,54 @@ section('7. Flow responses received (WhatsApp Flow / Kommo)')
   assert(
     !historyIndicatesFormSumarCompleted([{ role: 'user', content: 'oi' }]),
     '7.6 saudação isolada não indica form',
+  )
+}
+
+section('7b. Flow EduIT (Resposta do formulário / FORMULÁRIO flow)')
+
+{
+  const josina =
+    '📋 *Resposta do formulário* — _flow_ *Nome* ↳ Josina Alves da Silva *CPF* ↳ 36880225802 *Data de Nascimento* ↳ 19/06/1987'
+  const eliane =
+    'FORMULÁRIO flow 6 campos\nNome: Eliane Ferreira Maia\nCPF: 09189590805\nData de Nascimento: 13/12/1969\nEmail: limaia36@gmail.com\nSexo: feminino\nTelefone: 11981671407'
+
+  const pJosina = parseEduitFlowFormReply(josina)
+  assert(messageLooksLikeEduitFlowFormReply(josina), '7b.1 detecta Resposta do formulário')
+  assert(messageLooksLikeFormSumarResponse(josina), '7b.2 heurística geral reconhece Flow EduIT')
+  assertEqual(pJosina?.nome, 'Josina Alves da Silva', '7b.3 parse nome Josina')
+  assertEqual(pJosina?.cpf, '36880225802', '7b.4 parse cpf Josina')
+  assert(
+    historyIndicatesFormSumarCompleted([{ role: 'user', content: josina }]),
+    '7b.5 histórico com Flow EduIT indica form concluído',
+  )
+
+  const pEliane = parseEduitFlowFormReply(eliane)
+  assert(messageLooksLikeEduitFlowFormReply(eliane), '7b.6 detecta FORMULÁRIO flow')
+  assertEqual(pEliane?.email, 'limaia36@gmail.com', '7b.7 parse email Eliane')
+  assertEqual(pEliane?.cpf, '09189590805', '7b.8 parse cpf Eliane')
+
+  const extracted = extractCadastroFieldsFromInbound('já enviei', [
+    { role: 'user', content: eliane },
+  ])
+  assertEqual(extracted.email, 'limaia36@gmail.com', '7b.9 extract inbound puxa e-mail do Flow')
+  assertEqual(extracted.cpf, '09189590805', '7b.10 extract inbound puxa CPF do Flow')
+  assertEqual(extracted.nome, 'Eliane Ferreira Maia', '7b.11 extract inbound puxa nome do Flow')
+
+  assert(
+    snapshotHasFormIdentity({ nome: 'Eliane Ferreira Maia', cpf: '09189590805' }),
+    '7b.12 identidade nome+CPF = form recebido',
+  )
+  assert(
+    snapshotHasFormIdentity({ nome: 'Negócio limaia', cpf: '09189590805', email: 'limaia36@gmail.com' }),
+    '7b.13 título Negócio + e-mail + CPF = form recebido',
+  )
+  assert(
+    !snapshotHasFormIdentity({ nome: 'Negócio limaia', cpf: '09189590805' }),
+    '7b.14 título Negócio + CPF sem e-mail NÃO é identidade',
+  )
+  assert(
+    !snapshotHasFormIdentity({ nome: 'Eliane Ferreira Maia', cpf: '' }),
+    '7b.15 nome sem CPF NÃO é identidade',
   )
 }
 

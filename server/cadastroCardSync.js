@@ -1,6 +1,6 @@
 /**
  * Grava no card EduIT só os dados de cadastro que o lead informou e que ainda
- * estão vazios: cpf, email, dtnascimento. Espelha kommo_* no Supabase.
+ * estão vazios: nome, cpf, email, dtnascimento. Espelha kommo_* no Supabase.
  */
 
 import { extractCadastroFieldsFromInbound, formatDataNascBr } from '../libShared/cadastroInboundExtract.js'
@@ -10,6 +10,7 @@ import { isEduitCuid, updateDealCustomFields } from './eduitClient.js'
 import { updateDadosCliente } from './dadosClienteStore.js'
 import { normalizeCpf } from './sumareCaptacaoClient.js'
 
+export const EDUIT_FIELD_NOME = 'cmt4cvq7pgbviow01xqouo7ar'
 export const EDUIT_FIELD_CPF = 'cmt4cw06hgbvsow011daujg7b'
 export const EDUIT_FIELD_EMAIL = 'cmt4cxi5agbxqow01gvcdyory'
 export const EDUIT_FIELD_DTNASCIMENTO = 'cmt4cwdhkgbvwow01vy7axvfp'
@@ -38,6 +39,14 @@ function snapshotNeedsDataNasc(snapshot) {
   return isBlank(snapshot?.data_nasc)
 }
 
+function snapshotNeedsNome(snapshot) {
+  const raw = String(snapshot?.nome || '').trim()
+  if (isBlank(raw)) return true
+  if (/^neg[oó]cio\b/i.test(raw)) return true
+  if (!/\s/.test(raw)) return true
+  return false
+}
+
 /**
  * @returns {Promise<{ ok: boolean, skipped?: boolean, written?: string[], code?: string }>}
  */
@@ -48,7 +57,7 @@ export async function persistCadastroFieldsFromInbound(env, input = {}) {
   const extracted = extractCadastroFieldsFromInbound(userMessage, historyMessages, {
     phoneDigits: telefone,
   })
-  if (!extracted.cpf && !extracted.email && !extracted.dataNasc) {
+  if (!extracted.cpf && !extracted.email && !extracted.dataNasc && !extracted.nome) {
     return { ok: true, skipped: true, written: [], code: 'NOTHING_EXTRACTED' }
   }
 
@@ -62,6 +71,11 @@ export async function persistCadastroFieldsFromInbound(env, input = {}) {
   const supabase = {}
   const written = []
 
+  if (extracted.nome && snapshotNeedsNome(snapshot)) {
+    values.push({ fieldId: EDUIT_FIELD_NOME, name: 'nome', value: extracted.nome })
+    supabase.kommo_nome = extracted.nome
+    written.push('nome')
+  }
   if (extracted.cpf && snapshotNeedsCpf(snapshot)) {
     values.push({ fieldId: EDUIT_FIELD_CPF, name: 'cpf', value: extracted.cpf })
     supabase.kommo_cpf = extracted.cpf

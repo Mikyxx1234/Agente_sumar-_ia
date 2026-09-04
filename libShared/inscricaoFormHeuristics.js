@@ -13,6 +13,7 @@ import {
   userMessageLooksLikePoloChoice,
 } from './sumarePoloCatalog.js'
 import { buildFacultyContactRedirectReply } from './humanHandoffHeuristics.js'
+import { messageLooksLikeEduitFlowFormReply } from './eduitFlowFormParse.js'
 
 export const INSCRICAO_FORM_STATUS_AGUARDANDO = 'aguardando_form_sumar'
 /** Formulário recebido — salesbot de distribuição em andamento. */
@@ -525,6 +526,7 @@ export function messageLooksLikeFormSumarResponse(text) {
   if (messageIsFlowResponsesReceived(raw)) return true
   const t = raw.toLowerCase()
 
+  if (messageLooksLikeEduitFlowFormReply(raw)) return true
   if (/\[formulario\s+sumar\]/i.test(raw)) return true
   if (/\brespostas\s+recebidas\s+no\s+flow\b/i.test(t)) return true
   if (/\bflow\b/i.test(t) && /\b(respondid|recebid|preenchid|enviad)\b/i.test(t)) return true

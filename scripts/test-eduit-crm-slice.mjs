@@ -1134,6 +1134,13 @@ expect('logConversationNote sem conv', noteMissing.ok === false && noteMissing.c
   expect('leidy email', leidy.email === 'leidy.santana19@hotmail.com')
   expect('leidy nasc', leidy.dataNasc === '1987-06-19')
   expect('leidy cpf 11', leidy.cpf === '36880225802' || isValidCpfDigits(leidy.cpf))
+  const flowEliane = extractCadastroFieldsFromInbound(
+    'FORMULÁRIO flow 6 campos\nNome: Eliane Ferreira Maia\nCPF: 09189590805\nEmail: limaia36@gmail.com\nData de Nascimento: 13/12/1969',
+    [],
+  )
+  expect('flow eliane email', flowEliane.email === 'limaia36@gmail.com')
+  expect('flow eliane cpf', flowEliane.cpf === '09189590805')
+  expect('flow eliane nome', flowEliane.nome === 'Eliane Ferreira Maia')
 }
 
 console.log(`\n${stats.passed}/${stats.total} passed`)

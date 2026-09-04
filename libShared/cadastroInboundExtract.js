@@ -3,6 +3,8 @@
  * Só devolve valor válido — o write no card decide se o campo ainda está vazio.
  */
 
+import { parseEduitFlowFormReply } from './eduitFlowFormParse.js'
+
 const EMAIL_RX = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/
 const DATE_BR_RX = /\b(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})\b/
 const DATE_ISO_RX = /\b((?:19|20)\d{2})-(\d{2})-(\d{2})\b/
@@ -75,7 +77,8 @@ export function extractCpfFromText(text, { phoneDigits = '' } = {}) {
 
 /**
  * Junta a mensagem atual com falas recentes do lead (não usa o assistente).
- * @returns {{ cpf: string, email: string, dataNasc: string }}
+ * Também lê o bloco do Flow EduIT (`*Label* ↳ valor`).
+ * @returns {{ cpf: string, email: string, dataNasc: string, nome: string }}
  */
 export function extractCadastroFieldsFromInbound(userMessage, historyMessages = [], opts = {}) {
   const maxTurns = Number.isFinite(opts.maxUserTurns) ? opts.maxUserTurns : 8
@@ -89,10 +92,24 @@ export function extractCadastroFieldsFromInbound(userMessage, historyMessages = 
   const current = String(userMessage || '').trim()
   if (current && !parts.includes(current)) parts.push(current)
   const blob = parts.join('\n')
+
+  let flow = parseEduitFlowFormReply(current)
+  if (!flow) {
+    for (let i = parts.length - 1; i >= 0; i -= 1) {
+      flow = parseEduitFlowFormReply(parts[i])
+      if (flow) break
+    }
+  }
+
+  const dataNascFromFlow = flow?.data_nasc ? extractDataNascFromText(flow.data_nasc) : ''
+  const nomeFlow = String(flow?.nome || '').trim()
+  const nomeOk = nomeFlow.length >= 3 && !/^neg[oó]cio\b/i.test(nomeFlow)
   return {
-    cpf: extractCpfFromText(blob, { phoneDigits: opts.phoneDigits }),
-    email: extractEmailFromText(blob),
-    dataNasc: extractDataNascFromText(blob),
+    cpf: (flow?.cpf && isValidCpfDigits(flow.cpf) ? flow.cpf : '') ||
+      extractCpfFromText(blob, { phoneDigits: opts.phoneDigits }),
+    email: extractEmailFromText(flow?.email || '') || extractEmailFromText(blob),
+    dataNasc: dataNascFromFlow || extractDataNascFromText(blob),
+    nome: nomeOk ? nomeFlow : '',
   }
 }
 

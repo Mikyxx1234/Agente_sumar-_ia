@@ -12,6 +12,13 @@ Histórico das decisões estruturais do agente. Formato por entrada:
 
 ---
 
+### 2026-09-04 - Flow EduIT conta como formulário recebido (não reenviar)
+- **Modelo usado**: Cursor Grok 4.6
+- **Decisão**: O retorno do WhatsApp Flow no EduIT (`📋 *Resposta do formulário*`, `FORMULÁRIO flow`, `*Label* ↳ valor`) passa a ser reconhecido como formulário preenchido. No card EduIT, nome+CPF (ou CPF+e-mail) basta para `detectFormSumarRecebidoNoKommo`. Snapshot incompleto (falta e-mail ou curso) pede o campo que falta; nunca diz "ainda não recebemos" nem reenvia o Flow. O parser também grava nome/CPF/e-mail/nascimento no card se ainda estiverem vazios.
+- **Contexto**: limaia #23961 (Eliane) e Josialves #23947 (Josina) — o Flow já estava no chat e a tag Formulario aplicada, mas o detector só aceitava "Flow responses received" / `Nome:` e exigia snapshot completo (`nome,email,cpf,curso`). O bloco EduIT usava `↳` e o e-mail/curso às vezes não iam ao card; o ramo `claim_sem_confirmacao` reenviava o formulário no mesmo minuto da tag.
+- **Alternativas descartadas**: Exigir snapshot completo para detectar (causa o falso "não recebemos"); tratar "já enviei"/"pronto" isolado como Flow (quebraria o reenvio legítimo 5b); inventar e-mail.
+- **Impacto**: Próximos Flows EduIT avançam para captação ou pedido de campo faltante. "Pronto" sem Flow e sem identidade no card continua reenviando. Cards antigos precisam de um turno novo (ou o inbound do Flow no histórico).
+
 ### 2026-09-02 - Troca de polo de matrícula entra na Regra 32
 - **Modelo usado**: Claude Opus 4.6 (não confirmado)
 - **Decisão**: Pedido de alteração, troca, transferência ou migração de polo é assunto acadêmico institucional e recebe `buildAcademicAffairsRedirectReply` (Portal do Aluno, atendimento oficial e ouvidoria). A heurística exige `polo`/`polos` junto de verbo inequívoco de movimentação. Escolha inicial de polo permanece no fluxo comercial quando a mensagem menciona inscrição, formulário ou escolha de polo.
